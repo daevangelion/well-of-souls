@@ -431,8 +431,22 @@ int map_load(Map *map, int id)
     }
     if(loaded.image_x4.w!=loaded.image.w*4 || loaded.image_x4.h!=loaded.image.h*4) goto fail;
     snprintf(rel,sizeof(rel),"maps/%s.ter",loaded.def->root);
-    if(!world_path(path,sizeof(path),rel) || image_load(&loaded.terrain,path) || !loaded.terrain.indices ||
-       loaded.terrain.bpp!=8 || loaded.terrain.w!=(loaded.image.w+3)/4 || loaded.terrain.h!=(loaded.image.h+3)/4) goto fail;
+    if(!world_path(path,sizeof(path),rel)) goto fail;
+    if(image_load(&loaded.terrain,path)) {
+        FILE *existing=plat_fopen(path,"rb");
+        Image *ter=&loaded.terrain;
+        size_t cells;
+        if(existing) { fclose(existing); goto fail; }
+        /* FUN_0041e421 creates a cleared terrain DIB before its optional load.
+         * Retail Springwell has no .ter; the cleared cells mean terrain 0. */
+        ter->w=(loaded.image.w+3)/4; ter->h=(loaded.image.h+3)/4;
+        ter->bpp=8; ter->palette_size=256;
+        cells=(size_t)ter->w*ter->h;
+        ter->indices=calloc(cells,1); ter->pixels=calloc(cells,sizeof(*ter->pixels));
+        if(!ter->indices || !ter->pixels) goto fail;
+    }
+    if(!loaded.terrain.indices || loaded.terrain.bpp!=8 ||
+       loaded.terrain.w!=(loaded.image.w+3)/4 || loaded.terrain.h!=(loaded.image.h+3)/4) goto fail;
     snprintf(rel,sizeof(rel),"maps/%s.obl",loaded.def->root);
     if(!world_path(path,sizeof(path),rel) || load_records(&loaded,path,0)) goto fail;
     snprintf(rel,sizeof(rel),"maps/%s.mon",loaded.def->root);

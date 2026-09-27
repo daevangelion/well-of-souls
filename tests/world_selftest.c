@@ -116,6 +116,16 @@ int main(int argc, char **argv)
     }
     check_sheet("adventurer",1); check_sheet(g_world.monsters[1].skin,0);
     check_sheet("not-a-retail-monster",0);
+    /* Rune Ruins has no X4; Springwell also omits its optional terrain file. */
+    assert(map_load(&map,1)==0);
+    for(i=0;i<map.image_x4.w*map.image_x4.h;++i) {
+        int x=i%map.image_x4.w, y=i/map.image_x4.w;
+        assert(map.image_x4.pixels[i]==map.image.pixels[(size_t)(y/4)*map.image.w+x/4]);
+    }
+    printf("map 1 synthesized X4=%dx%d nearest-neighbor=OK\n",map.image_x4.w,map.image_x4.h);
+    assert(map_load(&map,13)==0);
+    for(i=0;i<map.terrain.w*map.terrain.h;++i) assert(map.terrain.indices[i]==0);
+    printf("map 13 missing terrain=%dx%d clear=OK\n",map.terrain.w,map.terrain.h);
     map_free(&map); world_free();
     puts("world_selftest: PASS");
     return 0;

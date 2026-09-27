@@ -4,6 +4,7 @@
 #include "game.h"
 #include "hero.h"
 #include "battle.h"
+#include "../game_main.h"
 #include "../engine/screen.h"
 #include "../engine/font.h"
 #include "../engine/text.h"
@@ -40,7 +41,7 @@ static struct {
     Link link;
     Image background;
     Sheet hero;
-    Actor actors[ACTORS];
+    Actor actors[ACTORS], host;
     char title[128], dialog[DIALOG], speaker[64], reply[128];
     void *theme;
     size_t theme_size;
@@ -88,15 +89,14 @@ static int inventory_count(int id)
 }
 static void cookie_path(char *out, size_t cap)
 {
-    char rel[512], safe[HERO_NAME_MAX];
     size_t i;
-    for(i=0;g_hero.name[i] && i+1<sizeof safe;i++) {
-        unsigned char c=(unsigned char)g_hero.name[i];
-        safe[i]=isalnum(c)||c=='-'||c=='_' ? (char)c : '_';
-    }
-    safe[i]=0;
-    snprintf(rel,sizeof rel,"Save/%s/savedHeroes/%s.cookies",g_world.name,safe);
-    world_data_path(out,(int)cap,rel);
+    int n;
+    out[0]=0;
+    if(!*g_hero.name||!*g_world.name||strpbrk(g_world.name,"/\\")) return;
+    for(i=0;g_hero.name[i];i++)
+        if((unsigned char)g_hero.name[i]<32||strchr("/\\:",g_hero.name[i])) return;
+    n=snprintf(out,cap,"%s/%s/savedHeroes/%s.cookies",game_save_path(),g_world.name,g_hero.name);
+    if(n<0||(size_t)n>=cap) out[0]=0;
 }
 static void cookies_load(void)
 {
@@ -118,14 +118,14 @@ static void cookies_load(void)
 }
 static void cookies_save(void)
 {
-    char path[640], rel[512];
+    char path[640];
     FILE *f;
-    if(!g_hero.valid) return;
-    world_data_path(path,sizeof path,"Save"); plat_mkdir(path);
-    snprintf(rel,sizeof rel,"Save/%s",g_world.name);
-    world_data_path(path,sizeof path,rel); plat_mkdir(path);
-    snprintf(rel,sizeof rel,"Save/%s/savedHeroes",g_world.name);
-    world_data_path(path,sizeof path,rel); plat_mkdir(path);
+    if(!g_hero.valid||!*cookie_owner) return;
+    plat_mkdir(game_save_path());
+    snprintf(path,sizeof path,"%s/%s",game_save_path(),g_world.name);
+    plat_mkdir(path);
+    snprintf(path,sizeof path,"%s/%s/savedHeroes",game_save_path(),g_world.name);
+    plat_mkdir(path);
     f=plat_fopen(cookie_owner,"wb");
     if(!f) { wos_log_event("scene_error","op=SET reason=cookie_save"); return; }
     if(fwrite(cookies,sizeof cookies[0],(size_t)cookie_count,f)!=(size_t)cookie_count)
@@ -455,7 +455,7 @@ static void step(void)
         a->frame=0;a->age=0;return;
     }
     if(eq(t[0],"MOVE")&&n>=4) {
-        Actor *a=&vm.actors[number(t[1])&63];int mode=n>4?number(t[4]):0;
+        Actor *a=eq(t[1],"H")?&vm.host:&vm.actors[number(t[1])&63];int mode=n>4?number(t[4]):0;
         int x=number(t[2]),y=number(t[3]);
         if(x>INT_MAX/1024||x<INT_MIN/1024||y>INT_MAX/1024||y<INT_MIN/1024) {
             wos_log_event("scene_error","op=MOVE reason=coordinate_range");return;
@@ -533,8 +533,8 @@ static Rect button_rect(int i) { Rect r={415+i*51,8,48,48};return r; }
 static void actors_update(void)
 {
     int i;
-    for(i=0;i<ACTORS;i++) {
-        Actor *a=&vm.actors[i];int d;
+    for(i=0;i<=ACTORS;i++) {
+        Actor *a=i==ACTORS?&vm.host:&vm.actors[i];int d;
         if(!a->used)continue;
         d=a->tx-a->x;if(d>a->speed)d=a->speed;if(d< -a->speed)d= -a->speed;a->x+=d;
         d=a->ty-a->y;if(d>a->speed)d=a->speed;if(d< -a->speed)d= -a->speed;a->y+=d;
@@ -611,7 +611,7 @@ static void scene_render(Framebuffer *fb)
     scaled(fb,&vm.background,(Rect){0,0,vm.background.w,vm.background.h},(Rect){0,0,364,416},-1);
     if(vm.suspended==FIGHTING)battle_render(fb,(Rect){0,0,364,416});
     else {
-        if(!vm.hide_hero&&g_hero.valid)draw_actor(fb,&vm.hero,1,75,360);
+        if(!vm.hide_hero&&g_hero.valid)draw_actor(fb,&vm.hero,1,(int)((int64_t)vm.host.x*364/25600),(int)((int64_t)vm.host.y*416/25600));
         for(i=0;i<ACTORS;i++)if(vm.actors[i].used) {
             Actor *a=&vm.actors[i];
             draw_actor(fb,&a->sheet,a->pose[a->frame],(int)((int64_t)a->x*364/25600),(int)((int64_t)a->y*416/25600));
@@ -650,8 +650,10 @@ static void scene_render(Framebuffer *fb)
     fb_fill(fb,(Rect){8,424,g_hero.max_hp>0?(int)((int64_t)176*g_hero.hp/g_hero.max_hp):0,12},0xb02e2e);
     fb_fill(fb,(Rect){194,424,176,12},0x101050);
     fb_fill(fb,(Rect){194,424,g_hero.max_mp>0?(int)((int64_t)176*g_hero.mp/g_hero.max_mp):0,12},0x3059b0);
-    snprintf(buf,sizeof buf,"HP %d/%d   MP %d/%d",g_hero.hp,g_hero.max_hp,g_hero.mp,g_hero.max_mp);
+    snprintf(buf,sizeof buf,"HP %d/%d",g_hero.hp,g_hero.max_hp);
     font_draw(fb,14,426,buf,0xffffff);
+    snprintf(buf,sizeof buf,"MP %d/%d",g_hero.mp,g_hero.max_mp);
+    font_draw(fb,200,426,buf,0xffffff);
     font_wrap(fb,(Rect){8,444,624,28},vm.suspended==FIGHTING?"Fight: choose an action, or Escape to flee.":"Click / Space / Enter: advance dialog. Escape: leave scene.",0xd5dce8);
 }
 static void scene_leave(void)
@@ -668,6 +670,8 @@ void game_enter_scene(int scene_no,const Link *link)
     memset(&saved,0,sizeof saved);if(link)saved=*link;
     screen_set(NULL);memset(&vm,0,sizeof vm);
     vm.number=scene_no;vm.link=saved;
+    vm.host.used=1;vm.host.speed=128;
+    vm.host.x=vm.host.tx=20*256;vm.host.y=vm.host.ty=87*256;
     vm.flags=g_hero.map>=0&&g_hero.map<WORLD_MAX_MAPS?g_world.maps[g_hero.map].flags:0;
     if(scene_no<0||scene_no>=WORLD_MAX_SCENES||!g_world.scenes[scene_no].used) {
         wos_log_event("scene_error","scene=%d reason=missing",scene_no);finish();return;
