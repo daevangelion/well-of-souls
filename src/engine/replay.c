@@ -51,6 +51,9 @@ int replay_parse(Replay *rp,char *text,size_t *error_line)
             while(*args==' ' || *args=='\t') ++args;
             if(strlen(args)>1023) goto fail;
             c.op=RP_TEXT; c.text=args;
+        } else if(!strcmp(cmd,"shot")) {
+            c.op=RP_SHOT; c.text=text_trim(args);
+            if(!*c.text || strlen(c.text)>=4096) goto fail;
         } else {
             if(!strcmp(cmd,"wait")) {
                 c.op=RP_WAIT; if(number(token(&args),0,&n)) goto fail; c.frames=(uint32_t)n;
@@ -85,9 +88,10 @@ fail:
     if(error_line) *error_line=line_no;
     rp->count=0; return -1;
 }
-int replay_step(Replay *rp,PlatEvent events[REPLAY_EVENTS_MAX],size_t *count,uint64_t serial,ReplaySeen seen,void *user)
+int replay_step(Replay *rp,PlatEvent events[REPLAY_EVENTS_MAX],size_t *count,ReplaySeen seen,void *user)
 {
     *count=0;
+    rp->shot_path=NULL;
     if(rp->remaining) { --rp->remaining; return 0; }
     if(rp->pending.type!=PLAT_EV_NONE) {
         events[(*count)++]=rp->pending; memset(&rp->pending,0,sizeof(rp->pending)); return 0;
@@ -95,7 +99,8 @@ int replay_step(Replay *rp,PlatEvent events[REPLAY_EVENTS_MAX],size_t *count,uin
     while(rp->pc<rp->count) {
         ReplayCommand *c=&rp->commands[rp->pc]; PlatEvent ev={0};
         if(c->op==RP_EXPECT) {
-            if(seen && seen(c->text,rp->observed,user)) { rp->observed=serial; rp->expect_elapsed=0; ++rp->pc; continue; }
+            uint64_t hit=seen?seen(c->text,rp->observed,user):0;
+            if(hit) { rp->observed=hit; rp->expect_elapsed=0; ++rp->pc; continue; }
             if(rp->expect_elapsed>=c->frames) { rp->failed_event=c->text; return 2; }
             ++rp->expect_elapsed; return 0;
         }
@@ -105,6 +110,7 @@ int replay_step(Replay *rp,PlatEvent events[REPLAY_EVENTS_MAX],size_t *count,uin
             if(!c->frames) continue;
             rp->remaining=c->frames-1; return 0;
         case RP_QUIT: return 1;
+        case RP_SHOT: rp->shot_path=c->text; return 0;
         case RP_KEY: case RP_DOWN: case RP_UP: case RP_HOLD:
             ev.type=c->op==RP_UP?PLAT_EV_KEY_UP:PLAT_EV_KEY_DOWN; ev.key=c->key;
             events[(*count)++]=ev;

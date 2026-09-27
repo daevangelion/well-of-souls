@@ -39,12 +39,12 @@ void wos_log_event(const char *name, const char *fmt, ...)
     }
     events[i].serial = ++serial;
 }
-int wos_log_seen(const char *name) { return wos_log_seen_since(name, 0); }
+int wos_log_seen(const char *name) { return wos_log_seen_since(name, 0) != 0; }
 uint64_t wos_log_serial(void) { return serial; }
-int wos_log_seen_since(const char *name, uint64_t since)
+uint64_t wos_log_seen_since(const char *name, uint64_t since)
 {
     size_t i;
     for (i = 0; i < count; ++i)
-        if (!strcmp(events[i].name, name)) return events[i].serial > since;
+        if (!strcmp(events[i].name, name)) return events[i].serial > since ? events[i].serial : 0;
     return 0;
 }

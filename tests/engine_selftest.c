@@ -8,36 +8,45 @@
 #include <stdlib.h>
 #include <string.h>
 static Replay rp;
-static int observed(const char *name,uint64_t since,void *user)
-{ return !strcmp(name,"ready") && *(uint64_t *)user>since; }
+static uint64_t observed(const char *name,uint64_t since,void *user)
+{ return (!strcmp(name,"ready") && *(uint64_t *)user>since) ? *(uint64_t *)user : 0; }
 static void test_replay(void)
 {
     char script[]="# comment\nexpect ready 2\nkey RETURN\nhold LEFT 3\nclick 12 34 3\ntext Hero Name\nwait 2\nquit\n";
     char timeout[]="expect ready 1\nexpect ready 1\n";
     char bad[]="wait -1\n",hash[]="key #\n";
+    char shot[]="shot /tmp/with space.bmp\nwait 1\nshot final.bmp\n",bad_shot[]="shot \n";
     size_t line,n; PlatEvent ev[REPLAY_EVENTS_MAX]; uint64_t serial=1;
     assert(!replay_parse(&rp,script,&line));
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial));
+    assert(!replay_step(&rp,ev,&n,observed,&serial));
     assert(n==1 && ev[0].type==PLAT_EV_KEY_DOWN && ev[0].key==PLAT_KEY_RETURN);
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial)); assert(n==1 && ev[0].type==PLAT_EV_KEY_UP);
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial)); assert(n==1 && ev[0].key==PLAT_KEY_LEFT);
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial)); assert(n==0);
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial)); assert(n==0);
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial)); assert(n==1 && ev[0].type==PLAT_EV_KEY_UP);
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial));
+    assert(!replay_step(&rp,ev,&n,observed,&serial)); assert(n==1 && ev[0].type==PLAT_EV_KEY_UP);
+    assert(!replay_step(&rp,ev,&n,observed,&serial)); assert(n==1 && ev[0].key==PLAT_KEY_LEFT);
+    assert(!replay_step(&rp,ev,&n,observed,&serial)); assert(n==0);
+    assert(!replay_step(&rp,ev,&n,observed,&serial)); assert(n==0);
+    assert(!replay_step(&rp,ev,&n,observed,&serial)); assert(n==1 && ev[0].type==PLAT_EV_KEY_UP);
+    assert(!replay_step(&rp,ev,&n,observed,&serial));
     assert(n==2 && ev[0].type==PLAT_EV_MOUSE_MOVE && ev[1].button==3 && ev[1].x==12 && ev[1].y==34);
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial)); assert(n==1 && ev[0].type==PLAT_EV_MOUSE_UP);
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial)); assert(n==1 && !strcmp(ev[0].text,"Hero Name"));
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial)); assert(n==0);
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial)); assert(n==0);
-    assert(replay_step(&rp,ev,&n,serial,observed,&serial)==1);
+    assert(!replay_step(&rp,ev,&n,observed,&serial)); assert(n==1 && ev[0].type==PLAT_EV_MOUSE_UP);
+    assert(!replay_step(&rp,ev,&n,observed,&serial)); assert(n==1 && !strcmp(ev[0].text,"Hero Name"));
+    assert(!replay_step(&rp,ev,&n,observed,&serial)); assert(n==0);
+    assert(!replay_step(&rp,ev,&n,observed,&serial)); assert(n==0);
+    assert(replay_step(&rp,ev,&n,observed,&serial)==1);
     assert(!replay_parse(&rp,timeout,&line));
-    assert(!replay_step(&rp,ev,&n,serial,observed,&serial));
-    assert(replay_step(&rp,ev,&n,serial,observed,&serial)==2);
+    assert(!replay_step(&rp,ev,&n,observed,&serial));
+    assert(replay_step(&rp,ev,&n,observed,&serial)==2);
     assert(!strcmp(rp.failed_event,"ready"));
     assert(replay_parse(&rp,bad,&line)==-1 && line==1);
     assert(!replay_parse(&rp,hash,&line)); assert(rp.commands[0].key=='#');
     assert(replay_key("F12")==PLAT_KEY_F12 && replay_key("F13")==-1);
+    assert(!replay_parse(&rp,shot,&line));
+    assert(!replay_step(&rp,ev,&n,observed,&serial));
+    assert(n==0 && !strcmp(rp.shot_path,"/tmp/with space.bmp"));
+    assert(!replay_step(&rp,ev,&n,observed,&serial)); assert(!rp.shot_path);
+    assert(!replay_step(&rp,ev,&n,observed,&serial)); assert(!strcmp(rp.shot_path,"final.bmp"));
+    assert(replay_step(&rp,ev,&n,observed,&serial)==1 && !rp.shot_path);
+    assert(replay_parse(&rp,bad_shot,&line)==-1 && line==1);
+    puts("PASS replay shot: spaced paths, end-of-frame request, one-shot reset, final command, missing path");
     puts("PASS replay: frame edges, waits, holds, click, text, expect consumption/timeout, invalid input");
 }
 static void test_ini(void)

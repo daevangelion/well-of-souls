@@ -33,6 +33,13 @@ The detailed findings for each subsystem are in `docs/re/*.md`:
 
 ### Port Fixes
 
+## Corrections to docs/re/*.md (verified against the decomp)
+- maps.md 8a: all.c:70909-70911 suppresses the difficulty-0 `.mon` encounters when the hero is ON the nearest link (`onLink == nearest`), not when it is off it. (MapView)
+- maps.md 8c: the proximity tiers use the .rdata doubles at VA 0x4cd548 = 0.5 and VA 0x4cd578 = 0.25 (file offsets 0xcc748/0xcc778), i.e. radius/2 and radius/4. (MapView)
+- battle.md: FUN_0049b70f is an encrypted-stat getter, not rand(). Assembly 0x4805b8..0x480604 maps +660 defense, +698 offense and +628 level. Physical power = ((level+100)*(str+65)*(offense*B/100+5))/6500; the denominator is (targetLevel+40)*(targetSta+200); the second scale is 200/(targetDefense+200). Monster per-action output scales by min(elapsed/480 frames, 1). The XP base uses HP*40/100, stamina+300, offense+200, defense+300 and level+70; the reward XP is not randomized. The HP algorithm multiplier is 1162/100 (11.62), not 1.162. (Battle)
+- XP curve: the Ghidra output drops a multiplier. At 0x4846ee the code calls pow, and at 0x4846f3 it does fmull with the double at 0x4d0228 = 450000; 0x4d0220 = 0.01. Step = min(step*150/100, trunc(pow(L*0.01, 2.5)*450000)+10). Cumulative XP: level 1 = 0, level 2 = 14, level 3 = 35. (FrontHero)
+- boot_flow.md 3d: the punctuation test at 0x460805 rejects names where letters+4 < non-letters. The prose states the comparison reversed. (FrontHero)
+
 ## Port Progress
 | Subsystem | Status | Files |
 |-----------|--------|-------|

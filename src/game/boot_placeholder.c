@@ -1,4 +1,5 @@
 /* Temporary engine boot screen. The game-flow module will replace this file. */
+#ifdef WOS_BOOT_PLACEHOLDER
 #include "../game_main.h"
 #include "../engine/screen.h"
 #include "../engine/font.h"
@@ -24,3 +25,4 @@ int game_boot(void)
     }
     screen_set(&boot); return 0;
 }
+#endif

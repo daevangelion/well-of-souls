@@ -22,7 +22,7 @@
 #define OBL_RECORD_SIZE     800
 #define MON_RECORDS         1000  /* .mon = 1000 x 276 bytes */
 #define MON_RECORD_SIZE     276
-#define OBR_RECORDS         1000  /* objects.obr = 1000 x 48 bytes */
+#define OBR_RECORDS         1000  /* maximum 48-byte rows; Evergreen ships 256 */
 #define OBR_RECORD_SIZE     48
 
 typedef struct {
@@ -53,6 +53,7 @@ typedef struct {
     int attack_path;
     int spells[16];
     int spell_count;
+    char ai[256];    /* arg20 optional AI command, FUN_004809a3 */
 } MonsterDef;
 
 typedef struct {
@@ -79,7 +80,9 @@ typedef struct {
     char default_skin[4][64];   /* per gender 0..3 */
     int start_items[8];
     int start_item_count;
-    LevelDef levels[WORLD_MAX_LEVELS + 1]; /* index = level 1..99 */
+    int hidden;
+    int max_wallet;             /* -1 = no class-specific gold cap */
+    LevelDef levels[WORLD_MAX_LEVELS + 1]; /* sparse 1..99; [0] holds class starting HP/MP */
 } ClassDef;
 
 typedef struct {
@@ -90,6 +93,7 @@ typedef struct {
     int gp;
     int level;
     int element, defense, attack, hp, mp;
+    int movement;    /* arg6 dotted bootEffect; maps.md section 3 */
 } ItemDef;
 
 typedef struct {
@@ -117,6 +121,8 @@ typedef struct {
     int dest_map;     /* +0x194 */
     int required_item;/* +0x1a4 */
     char name[64];
+    char background[80]; /* +0x70, inherited by SCENE (FUN_0047a1bc) */
+    int fx, weather;     /* +0x19c, +0x198 */
 } Link;
 
 typedef struct {
@@ -148,7 +154,7 @@ typedef struct {
     Image image;
     int cell;         /* cell side in pixels (= image height, or forced 48) */
     int count;        /* width / cell */
-    int64_t key;      /* transparent color (0x00RRGGBB) from pixel (0, h-1), FUN_0048dad9 */
+    int64_t key;      /* RGB key: original bottom-up DIB (0,h-1), normalized Image (0,0) */
 } Sheet;
 
 typedef struct {
@@ -173,6 +179,8 @@ extern World g_world;
 /* Load <data>/worlds/<name>: quest.txt (+#include), all tables, config.ini. 0 on success. */
 int world_load(const char *data_dir, const char *name);
 void world_free(void);
+/* Comma/whitespace lexer with quotes and comments; -1 on token/count overflow. */
+int world_tokenize(const char *line, char tokens[][256], int max);
 
 /* Load map id (jpg, X4 jpg, .ter, .obl, .mon, objects). 0 on success. Caller owns Map. */
 int map_load(Map *map, int id);
