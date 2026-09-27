@@ -25,6 +25,13 @@ current `Screen.update`, calls `Screen.render` into a 640x480 0x00RRGGBB framebu
 logic counts steps and never reads the wall clock. As a result, `--replay` runs are deterministic and can run faster
 than real time.
 
+## Android
+- `tools/fetch_android.sh` installs into /mnt/build: SDK API 34 and build-tools 34 (android-sdk/), NDK 26.3.11579264, CMake 3.22.1 and SDL2 2.32.10 (android-deps/). The wrapper pins Gradle 8.9 and AGP 8.7.3 on JDK 21, with `GRADLE_USER_HOME=/mnt/build/gradle`.
+- `cd android && ./gradlew assembleDebug` bootstraps the missing SDK/SDL, extracts the installer and builds `app/build/outputs/apk/debug/app-debug.apk` (arm64-v8a, minSdk 23, targetSdk 34). The native library is built from the same source list as desktop (`cmake/wos_sources.cmake`).
+- The game data is packaged as APK assets with a sorted SHA-256/size manifest. `src/platform/sdl2/assets_android.c` copies them into SDL internal storage `data/` on first launch or when the manifest changes, writing `.part` files, renaming them, and writing the commit marker last. Saves go to internal storage `saves/`. On Android, `main_sdl2.c` supplies `--data`/`--save` itself.
+- The logical 640x480 presentation is letterboxed on every platform, and mouse/touch coordinates are remapped. Android runs landscape fullscreen; Back = Escape; a focused text field opens the soft keyboard (`plat_text_input`).
+- WAV effects are mixed through SDL audio. MIDI music is unavailable on Android because SDL2_mixer is not built there, so `game_music` logs the request and plays nothing.
+
 ## Mapping from the original to the port
 | Original (Souls.exe) | Port |
 |----------------------|------|
