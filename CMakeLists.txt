@@ -42,3 +42,46 @@ if(WIN32)
             "$<TARGET_FILE:SDL2::SDL2>" "$<TARGET_FILE_DIR:wos>")
     endif()
 endif()
+
+# --- Self-tests -------------------------------------------------------------
+# Each self-test owns its own main() and links only the modules it exercises, so it
+# excludes the SDL entry point (main_sdl2.c) and the front-end/hero modules that pull in
+# game_main()'s globals. The engine, platform and third-party code is the same the game
+# runs, so a self-test exercises the exact shipping engine.
+option(WOS_BUILD_TESTS "Build the self-test executables" ON)
+set(WOS_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extracted" CACHE PATH
+    "Extracted retail data root (from tools/extract_installer.sh); self-tests read it")
+
+if(WOS_BUILD_TESTS)
+    set(WOS_SELFTEST_PLATFORM ${WOS_PLATFORM_SOURCES})
+    list(FILTER WOS_SELFTEST_PLATFORM EXCLUDE REGEX "main_sdl2\\.c$")
+    set(WOS_SELFTEST_COMMON ${WOS_ENGINE_SOURCES} ${WOS_SELFTEST_PLATFORM} ${WOS_THIRD_PARTY})
+    add_executable(engine_selftest tests/engine_selftest.c ${WOS_SELFTEST_COMMON})
+    add_executable(world_selftest tests/world_selftest.c
+        ${WOS_ROOT}/src/game/world.c ${WOS_SELFTEST_COMMON})
+    foreach(selftest engine_selftest world_selftest)
+        target_include_directories(${selftest} PRIVATE src)
+        # The self-tests are assert-driven: every check is an assert(). Release build
+        # types define NDEBUG, which would compile the checks out and let a failed
+        # invariant surface later as a NULL dereference instead of a clear failure.
+        # -UNDEBUG keeps assert() live in the test translation unit in every config.
+        set_property(SOURCE tests/${selftest}.c APPEND PROPERTY COMPILE_OPTIONS -Wall -Wextra -UNDEBUG)
+        if(WOS_WERROR)
+            set_property(SOURCE tests/${selftest}.c APPEND PROPERTY COMPILE_OPTIONS -Werror)
+        endif()
+        target_link_libraries(${selftest} PRIVATE SDL2::SDL2 m)
+    endforeach()
+
+    # The self-tests assert against the extracted retail data. Register them as ctest
+    # cases only when that data is present: a data-less CI run still compiles and links
+    # them (regression coverage) but does not report failures it cannot legitimately judge.
+    enable_testing()
+    if(EXISTS "${WOS_DATA_DIR}/worlds/Evergreen")
+        foreach(selftest engine_selftest world_selftest)
+            add_test(NAME ${selftest} COMMAND ${selftest} "${WOS_DATA_DIR}")
+        endforeach()
+        message(STATUS "wos: retail data at ${WOS_DATA_DIR}; self-tests registered with ctest")
+    else()
+        message(STATUS "wos: no retail data at ${WOS_DATA_DIR}; self-tests built but not registered")
+    endif()
+endif()

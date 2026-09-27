@@ -1,0 +1,59 @@
+name: Release
+
+# Publishes the engine binaries on a v* tag. The artifacts intentionally exclude the
+# copyrighted retail data and the GPL-2 TimGM6mb soundfont: the user supplies the data
+# they legally own (tools/fetch_game_data.sh) and can drop the soundfont in with
+# tools/fetch_soundfont.sh. Shipping the soundfont here would drag the whole binary
+# under GPL-2, so we keep it out of the release by default.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build + package release artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libsdl2-dev zip
+      - name: Fetch soundfont (build-time only; not shipped)
+        run: tools/fetch_soundfont.sh
+      - name: Build Linux
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+      - name: Build Windows (x86_64, mingw cross)
+        run: |
+          cmake -S . -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake -DWOS_WINDOWS_ARCH=x86_64
+          cmake --build build-win -j"$(nproc)"
+      - name: Package Linux
+        run: |
+          mkdir -p dist/wos-linux
+          cp build/wos build/TinySoundFont.LICENSE dist/wos-linux/
+          tar -czf dist/wos-linux.tar.gz -C dist wos-linux
+      - name: Package Windows
+        run: |
+          mkdir -p dist/wos-windows
+          cp build-win/wos.exe build-win/SDL2.dll build-win/TinySoundFont.LICENSE dist/wos-windows/
+          (cd dist/wos-windows && zip -q -r ../wos-windows.zip .)
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/wos-linux.tar.gz
+            dist/wos-windows.zip
+          body: |
+            Well of Souls engine binaries (Linux + Windows x86_64).
+
+            These binaries do **not** include the original game data or the TimGM6mb
+            soundfont. To play:
+              1. Provide the retail data you own: `tools/fetch_game_data.sh extracted`
+                 (or point the binary at an existing data directory with `--data DIR`).
+              2. For audio, run `tools/fetch_soundfont.sh` and place `TimGM6mb.sf2`
+                 next to the binary (it is fetched, not redistributed, here).
+          generate_release_notes: true

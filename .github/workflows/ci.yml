@@ -1,0 +1,91 @@
+name: CI
+
+# The engine, the self-tests and the replay suite are all driven by the extracted
+# retail data, which is copyrighted and deliberately not stored here. The build jobs
+# therefore always run and need no secrets; the behavioural job additionally runs when
+# the repository supplies the installer through the WOS_INSTALLER_URL secret
+# (see tools/fetch_game_data.sh). Without that secret, CI is a compile/link gate.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    name: Build (Linux, gcc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libsdl2-dev
+      - name: Fetch soundfont (pinned SHA-256)
+        run: tools/fetch_soundfont.sh
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - name: Build game + self-tests
+        run: cmake --build build -j"$(nproc)"
+      - name: "Smoke: binary starts and prints usage"
+        run: |
+          SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/wos 2>&1 | grep -q -- "--data" \
+            || { echo "wos did not print usage"; exit 1; }
+
+  build-windows:
+    name: Build (Windows, mingw cross)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch soundfont (pinned SHA-256)
+        run: tools/fetch_soundfont.sh
+      # cmake/mingw-w64.cmake auto-fetches the pinned llvm-mingw + SDL2 toolchain.
+      - name: Configure (x86_64)
+        run: cmake -S . -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake -DWOS_WINDOWS_ARCH=x86_64
+      - name: Build game + self-tests
+        run: cmake --build build-win -j"$(nproc)"
+      - name: Verify wos.exe produced
+        run: test -f build-win/wos.exe
+
+  test:
+    name: Behavioural tests (needs retail data)
+    # ubuntu-22.04 ships mono + p7zip, which the CIC unpacker needs.
+    runs-on: ubuntu-22.04
+    env:
+      WOS_INSTALLER_URL: ${{ secrets.WOS_INSTALLER_URL }}
+      WOS_INSTALLER_SHA256: ${{ secrets.WOS_INSTALLER_SHA256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libsdl2-dev
+      - name: Fetch soundfont (pinned SHA-256)
+        run: tools/fetch_soundfont.sh
+      # Secrets are only present for pushes to this repo; forks and PRs from outside
+      # contributors skip the data-dependent steps and still exercise the build.
+      - name: Install unpacker (mono, 7z)
+        if: env.WOS_INSTALLER_URL != ''
+        run: sudo apt-get install -y mono-complete p7zip-full
+      - name: Download + extract retail data
+        if: env.WOS_INSTALLER_URL != ''
+        run: tools/fetch_game_data.sh
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - name: Build game + self-tests
+        run: cmake --build build -j"$(nproc)"
+      - name: Self-tests (ctest)
+        if: env.WOS_INSTALLER_URL != ''
+        run: ctest --test-dir build --output-on-failure
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+      - name: Replay acceptance
+        if: env.WOS_INSTALLER_URL != ''
+        run: |
+          export WOS_BUILD="$PWD/build"
+          tests/replay_offline.sh
+          tests/replay_gaps.sh
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy

@@ -3,3 +3,11 @@ build*/
 /work/
 *.o
 __pycache__/
+
+# Original commercial game data. These are copyrighted and must never be committed
+# or pushed to a remote; tools/extract_installer.sh produces `extracted/` from a
+# locally-held copy of the installer (see tools/fetch_game_data.sh for CI).
+/assets/
+
+# Stray per-directory harness config; the tracked project config is /.omp/config.yml.
+/src/.omp/
