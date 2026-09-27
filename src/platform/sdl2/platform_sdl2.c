@@ -36,6 +36,15 @@ fail:
     return -1;
 }
 
+void plat_text_input(int enable)
+{
+    if (enable) {
+        if (!SDL_IsTextInputActive()) SDL_StartTextInput();
+    } else if (SDL_IsTextInputActive()) {
+        SDL_StopTextInput();
+    }
+}
+
 void plat_shutdown(void)
 {
     wos_audio_shutdown();

@@ -62,6 +62,8 @@ void plat_shutdown(void);
 
 /* Input: returns 1 and fills *ev while events are pending, 0 when the queue is empty. */
 int plat_poll_event(PlatEvent *ev);
+/* Text entry: enable while a text field has focus (shows the on-screen keyboard on touch devices). */
+void plat_text_input(int enable);
 
 /* Video: present a w*h framebuffer of 0x00RRGGBB pixels, scaled to the window. */
 void plat_present(const uint32_t *pixels, int w, int h);
