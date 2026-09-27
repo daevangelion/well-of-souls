@@ -71,7 +71,9 @@ fetch the soundfont with `tools/fetch_soundfont.sh` and place it next to the bin
 
 ## License
 
-No top-level license has been chosen yet; until one is added, the source is
-all-rights-reserved by default. Vendored third-party code keeps its own terms
-(`src/third_party/`): stb_image and font8x8 are public domain, TinySoundFont is MIT,
-tml is zlib. TimGM6mb (fetched, not committed) is GPL-2.
+The project's own source is dedicated to the public domain under
+[CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/) (see `LICENSE`).
+Vendored third-party code keeps its own terms (`src/third_party/`): stb_image and
+font8x8 are public domain, TinySoundFont is MIT, tml is zlib. The TimGM6mb soundfont
+(fetched, not committed) is GPL-2. The original game data and installer are copyrighted
+and are not distributed here.

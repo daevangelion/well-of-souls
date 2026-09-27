@@ -1,0 +1,35 @@
+Public Domain Dedication (CC0-1.0) — with third-party carve-outs
+
+This project (the "Work") is dedicated to the public domain by its author under the
+Creative Commons CC0 1.0 Universal Public Domain Dedication
+(<https://creativecommons.org/publicdomain/zero/1.0/>). To the extent possible under
+law, the author has waived all copyright and related or neighbouring rights to the Work.
+You may copy, modify, distribute and use the Work, including for commercial purposes,
+without asking permission and without attribution.
+
+Scope and exceptions
+--------------------
+
+The CC0-1.0 dedication above applies to the project's own original source (src/ except
+src/third_party/, tests/, tools/, cmake/, docs/ and top-level build files). It does NOT
+apply to the following, each of which retains its own license:
+
+  * src/third_party/ — vendored single-file libraries under their upstream terms:
+        - stb_image.h, stb_image_impl.c .... public domain (Nothings / Sean Barrett)
+        - font8x8_basic.h ................... public domain (Daniel Hepper)
+        - tsf.h, tinysoundfont_impl.c ....... MIT (see TinySoundFont.LICENSE)
+        - tml.h, TinySoundFont.LICENSE ...... zlib license
+    Keep the notices contained in those files intact. MIT and zlib require their
+    permission/notice text to be preserved, so they cannot be relicensed to the public
+    domain by this project.
+
+  * The TimGM6mb MIDI soundfont (TimGM6mb.sf2) is fetched at build time by
+    tools/fetch_soundfont.sh and is NOT distributed here. It is GPL-2.0; see
+    TimGM6mb.LICENSE.txt produced by that script.
+
+  * The original Well of Souls game data, installer and binaries are copyrighted by
+    their respective owners, are NOT distributed in this repository, and are covered by
+    no license here. Supply data you legally own; see tools/fetch_game_data.sh.
+
+To the extent possible under law, the author makes no warranty about the Work and
+disclaims all liability for its use.
