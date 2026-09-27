@@ -39,6 +39,25 @@ cmake --build build-win                     # -> build-win/wos.exe
 
 Run with `build/wos --data extracted` (add `--headless` for the acceptance harness).
 
+### Android
+
+The Gradle build can provision the game data and soundfont for you. Supply the
+installer (or a URL) and/or your own soundfont as Gradle properties (`-P`) or
+environment variables; with an installer the data is unpacked during the build:
+
+```sh
+cd android
+./gradlew assembleDebug -PwosInstaller=/path/to/WellOfSouls.exe
+./gradlew assembleDebug -PwosInstallerUrl=https://... -PwosInstallerSha256=<hex>
+./gradlew assembleDebug -PwosSoundfont=/path/to/font.sf2          # custom bank
+./gradlew assembleDebug -PwosSoundfontUrl=https://... -PwosSoundfontSha256=<hex>
+./gradlew assembleDebug -PwosSoundfontLicense=/path/to/LICENSE   # its license text
+```
+
+With no overrides it uses a pre-extracted `../../extracted` tree and the pinned
+TimGM6mb bank. Unpacking the installer needs `mono` and `7z` on PATH. A custom
+soundfont is staged under the fixed `TimGM6mb.sf2` name the engine loads at runtime.
+
 ## Tests
 
 The self-tests and the replay suite are driven by the extracted retail data, so they

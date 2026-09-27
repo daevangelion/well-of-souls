@@ -1,11 +1,56 @@
 plugins { id 'com.android.application' }
 
 final def sdlRoot = file('/mnt/build/android-deps/SDL2-2.32.10')
-final def dataRoot = file('../../extracted')
 final def packagedAssets = layout.buildDirectory.dir('generated/gameAssets')
 final def soundfontCache = new File(System.getProperty('user.home'), '.cache/wos-soundfont')
+
+// Provisioning inputs, set as Gradle properties (-P...) or environment variables:
+//   ./gradlew assembleDebug -PwosInstaller=/path/to/WellOfSouls.exe
+//   ./gradlew assembleDebug -PwosInstallerUrl=https://... -PwosInstallerSha256=<hex>
+//   ./gradlew assembleDebug -PwosSoundfont=/path/to/font.sf2
+//   ./gradlew assembleDebug -PwosSoundfontUrl=https://... [-PwosSoundfontSha256=<hex>]
+//   ./gradlew assembleDebug -PwosSoundfontLicense=/path/to/LICENSE
+// With an installer (file or URL) the game data is unpacked during the build; otherwise
+// a pre-extracted ../../extracted tree is used. With a soundfont override a custom bank
+// is used; otherwise the pinned TimGM6mb bank is fetched.
+def opt = { String prop, String env ->
+    def v = project.findProperty(prop)
+    if (v == null || v.toString().trim().isEmpty()) v = System.getenv(env)
+    (v == null || v.toString().trim().isEmpty()) ? null : v.toString().trim()
+}
+def installer        = opt('wosInstaller', 'WOS_INSTALLER')
+def installerUrl     = opt('wosInstallerUrl', 'WOS_INSTALLER_URL')
+def installerSha     = opt('wosInstallerSha256', 'WOS_INSTALLER_SHA256')
+def soundfont        = opt('wosSoundfont', 'WOS_SOUNDFONT')
+def soundfontUrl     = opt('wosSoundfontUrl', 'WOS_SOUNDFONT_URL')
+def soundfontSha     = opt('wosSoundfontSha256', 'WOS_SOUNDFONT_SHA256')
+def soundfontLicense = opt('wosSoundfontLicense', 'WOS_SOUNDFONT_LICENSE')
+
+// Data root: unpack into the build dir when an installer is supplied, else use a
+// pre-extracted tree next to the project.
+def provisionData = !!(installer || installerUrl)
+def dataRoot = provisionData
+    ? new File(layout.buildDirectory.get().asFile, 'gameData')
+    : file('../../extracted')
+
 def fetchSoundfont = tasks.register('fetchSoundfont', Exec) {
     commandLine file('../../tools/fetch_soundfont.sh').absolutePath
+    environment 'WOS_SOUNDFONT', soundfont ?: ''
+    environment 'WOS_SOUNDFONT_URL', soundfontUrl ?: ''
+    environment 'WOS_SOUNDFONT_SHA256', soundfontSha ?: ''
+    environment 'WOS_SOUNDFONT_LICENSE', soundfontLicense ?: ''
+}
+
+def prepareGameData = tasks.register('prepareGameData', Exec) {
+    onlyIf { provisionData }
+    commandLine file('../../tools/fetch_game_data.sh').absolutePath, dataRoot.absolutePath
+    environment 'WOS_INSTALLER', installer ?: ''
+    environment 'WOS_INSTALLER_URL', installerUrl ?: ''
+    environment 'WOS_INSTALLER_SHA256', installerSha ?: ''
+    inputs.property 'wosInstaller', installer ?: ''
+    inputs.property 'wosInstallerUrl', installerUrl ?: ''
+    inputs.property 'wosInstallerSha256', installerSha ?: ''
+    outputs.dir dataRoot
 }
 
 android {
@@ -49,6 +94,7 @@ android {
 // A sorted size/hash manifest drives transactional first-launch extraction and APK upgrades.
 def packageGameAssets = tasks.register('packageGameAssets', Sync) {
     dependsOn fetchSoundfont
+    if (provisionData) dependsOn prepareGameData
     inputs.dir dataRoot
     from(dataRoot) { into 'wos-data' }
     from(soundfontCache) { include 'TimGM6mb.sf2', 'TimGM6mb.LICENSE.txt' }
@@ -56,7 +102,10 @@ def packageGameAssets = tasks.register('packageGameAssets', Sync) {
     into packagedAssets
     doFirst {
         if (!new File(dataRoot, 'Souls.exe').isFile()) {
-            throw new GradleException('Missing extracted game data: run ../tools/extract_installer.sh')
+            throw new GradleException(provisionData
+                ? "Installer did not unpack to ${dataRoot} (mono and 7z must be on PATH)"
+                : "Missing extracted game data. Run tools/fetch_game_data.sh, or pass " +
+                  "-PwosInstaller=<file> / -PwosInstallerUrl=<url> to the Gradle build.")
         }
     }
     doLast {
