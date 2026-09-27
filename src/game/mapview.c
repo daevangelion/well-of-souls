@@ -1,6 +1,7 @@
 /* Offline map screen. Geometry/movement: docs/re/maps.md sections 4, 6 and 8. */
 #include "game.h"
 #include "hero.h"
+#include "panels.h"
 #include "../engine/font.h"
 #include "../engine/log.h"
 #include "../engine/rng.h"
@@ -16,6 +17,7 @@
 #define BUTTON_COUNT 7
 #define ENTRY_GRACE 60
 #define ENCOUNTER_GRACE 300
+#define PATH_NODES_MAX 2000 /* FUN_00461dcc: bounded 2000-node detour search. */
 
 static Map map;
 static int loaded;
@@ -28,9 +30,13 @@ static int32_t pos_x, pos_y, target_x, target_y;
 static int walking, keyboard, facing = 7, step_remainder;
 static int blocked_dx, blocked_dy;
 static int entry_frames, encounter_frames, link_latch = -1;
-static int hover = -1, mouse_held, panel = -1;
+static int hover = -1, mouse_held, minimap;
 static char message[128];
-static int pending[FIGHT_MAX], pending_count, pending_difficulty;
+static int pending[FIGHT_MAX], pending_count, pending_difficulty, pending_distance = 20;
+typedef struct { int x, y; } PathPoint;
+static PathPoint path[PATH_NODES_MAX], path_work[PATH_NODES_MAX];
+static int path_count, path_next;
+static int music_index, music_count, music_running;
 static void map_update(const Input *input);
 static void map_render(Framebuffer *fb);
 static const Screen map_screen = { "map", NULL, map_update, map_render, NULL };
@@ -45,24 +51,27 @@ static int valid_monster(int id)
     return id > 0 && id < WORLD_MAX_MONSTERS && g_world.monsters[id].used;
 }
 
-void game_set_pending_fight(const int *ids, int count, int difficulty)
+void game_set_pending_fight(const int *ids, int count, int difficulty, int distance_pct)
 {
     int i;
     pending_count = 0;
     pending_difficulty = difficulty;
+    pending_distance = clamp(distance_pct, 0, 100);
     if (!ids) return;
     for (i = 0; i < count && pending_count < FIGHT_MAX; ++i)
         if (valid_monster(ids[i])) pending[pending_count++] = ids[i];
 }
 
-int game_take_pending_fight(int *ids, int max, int *difficulty)
+int game_take_pending_fight(int *ids, int max, int *difficulty, int *distance_pct)
 {
     int n = clamp(pending_count, 0, max > 0 ? max : 0);
     if (difficulty) *difficulty = pending_difficulty;
+    if (distance_pct) *distance_pct = pending_distance;
     if (ids && n) memcpy(ids, pending, (size_t)n * sizeof(*ids));
     if (!ids) n = 0;
     pending_count = 0;
     pending_difficulty = 0;
+    pending_distance = 20;
     return n;
 }
 
@@ -80,12 +89,7 @@ static const ObjRect *object_rect(const Link *link)
 
 static int owns_item(int id)
 {
-    int i;
-    if (id <= 0) return 1;
-    for (i = 0; i < HERO_INVENTORY; ++i)
-        if (g_hero.inventory[i].item_id == id && g_hero.inventory[i].count > 0) return 1;
-    for (i = 0; i < 8; ++i) if (g_hero.equip[i] == id) return 1;
-    return g_hero.right_hand == id;
+    return id <= 0 || hero_item_count(&g_hero, id) > 0;
 }
 
 static int movement_effect(int effect)
@@ -132,6 +136,7 @@ static void stop_walk(void)
     walking = keyboard = 0;
     step_remainder = 0;
     blocked_dx = blocked_dy = 0;
+    path_count = path_next = 0;
 }
 
 static void place_hero(int link, int drop_in)
@@ -164,10 +169,12 @@ static void place_hero(int link, int drop_in)
     g_hero.x = x; g_hero.y = y;
     pos_x = x * 256; pos_y = y * 256;
     walking = keyboard = step_remainder = 0;
+    blocked_dx = blocked_dy = path_count = path_next = 0;
     entry_frames = ENTRY_GRACE;
     encounter_frames = ENCOUNTER_GRACE;
     link_latch = -1;
-    panel = -1;
+    minimap = 0;
+    panel_close();
     snprintf(message, sizeof(message), "%s", map.def->name);
 }
 
@@ -182,6 +189,37 @@ static void load_art(void)
         snprintf(rel, sizeof(rel), "art/button%s.bmp", button_names[i]);
         if (image_load(&buttons[i], world_path(path, sizeof(path), rel)) != 0)
             image_load(&buttons[i], world_data_path(path, sizeof(path), rel));
+    }
+}
+
+static void map_music_track(void)
+{
+    char key[32], fallback[80];
+    const char *name;
+    snprintf(key, sizeof(key), "midi%d", music_index);
+    name = world_music(map.def->root, key);
+    if (!name || !*name) {
+        snprintf(fallback, sizeof(fallback), "%s.mid", map.def->root);
+        name = fallback;
+    }
+    game_music(name);
+    /* No backend (or rejected track): never spin through the playlist. */
+    music_running = plat_music_playing();
+}
+
+static void map_music_start(void)
+{
+    music_count = world_music_count(map.def->root);
+    if (music_count < 1) music_count = 1;
+    music_index = 1;
+    map_music_track();
+}
+
+static void map_music_update(void)
+{
+    if (music_running && !plat_music_playing()) {
+        music_index = music_index % music_count + 1;
+        map_music_track();
     }
 }
 
@@ -219,6 +257,7 @@ void game_enter_map(int map_id, int link, int drop_in)
     load_art();
     screen_set(&map_screen);
     wos_log_event("map_enter", "map=%d x=%d y=%d", map_id, g_hero.x, g_hero.y);
+    map_music_start();
     if (drop_in && link >= 0 && link < OBL_RECORDS && map.links[link].used)
         activate_link(link);
 }
@@ -232,6 +271,7 @@ void game_return_to_map(void)
     place_hero(g_hero.link, 0);
     screen_set(&map_screen);
     wos_log_event("map_enter", "map=%d x=%d y=%d", map.id, g_hero.x, g_hero.y);
+    map_music_start();
 }
 
 static void camera(int *x, int *y)
@@ -265,6 +305,146 @@ static uint32_t integer_sqrt(uint64_t n)
     return (uint32_t)result;
 }
 
+/* FUN_00461b11 truncates to the containing four-unit grid cell, then centres.
+ * The sign correction in the decomp is for negative inputs, not a +3 offset. */
+static int grid_snap(int v)
+{
+    return (v / 4) * 4 + 2;
+}
+
+static int path_clear(int x, int y, int clearance)
+{
+    if (!map_walkable(&map, x, y, g_hero.tokens)) return 0;
+    return !clearance ||
+        (map_walkable(&map, x - 1, y - 1, g_hero.tokens) &&
+         map_walkable(&map, x + 1, y - 1, g_hero.tokens) &&
+         map_walkable(&map, x - 1, y + 1, g_hero.tokens) &&
+         map_walkable(&map, x + 1, y + 1, g_hero.tokens));
+}
+
+/* FUN_00461b93: half-unit line march, optionally checking four neighbours.
+ * Diagonal legs retain one-unit clearance so fixed-point truncation cannot
+ * put the actor on the blocked side of an exact terrain-cell corner. */
+static int line_march(PathPoint from, PathPoint to, PathPoint *last, int clearance)
+{
+    int dx = to.x - from.x, dy = to.y - from.y;
+    int steps = 2 * (abs(dx) > abs(dy) ? abs(dx) : abs(dy)), i;
+    PathPoint previous = from;
+    *last = from;
+    if (!steps) return path_clear(from.x, from.y, clearance);
+    for (i = 0; i <= steps; ++i) {
+        PathPoint p = { from.x + (int)((int64_t)dx * i / steps),
+                        from.y + (int)((int64_t)dy * i / steps) };
+        if (!path_clear(p.x, p.y, clearance || (dx && dy)) ||
+            (p.x / 4 != previous.x / 4 && p.y / 4 != previous.y / 4 &&
+             (!path_clear(p.x, previous.y, 0) || !path_clear(previous.x, p.y, 0)))) {
+            last->x = grid_snap(last->x);
+            last->y = grid_snap(last->y);
+            return 0;
+        }
+        *last = previous = p;
+    }
+    return 1;
+}
+
+/* Retail direction tables at 0x4f21a0/0x4f21c0, beginning south. */
+static const int path_dx[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+static const int path_dy[8] = { 1, 1, 0, -1, -1, -1, 0, 1 };
+
+static int path_direction(PathPoint from, PathPoint to)
+{
+    int x = (to.x > from.x) - (to.x < from.x);
+    int y = (to.y > from.y) - (to.y < from.y), i;
+    for (i = 0; i < 8; ++i) if (path_dx[i] == x && path_dy[i] == y) return i;
+    return 0;
+}
+
+/* FUN_00461dcc: march to the obstruction, then follow either edge using the
+ * eight-direction table. Each blocked neighbour rotates the search one step;
+ * after advancing, aim back toward the last blocked neighbour. */
+static int path_build(PathPoint start, PathPoint goal, int turn)
+{
+    PathPoint current, last, blocked, next;
+    int count = 1, direction, attempts, iterations;
+    path_work[0] = start;
+    if (line_march(start, goal, &current, 0)) {
+        path_work[1] = goal;
+        return 2;
+    }
+    if (!path_clear(current.x, current.y, 0) ||
+        !line_march(start, current, &last, 0)) return 0;
+    if (current.x != start.x || current.y != start.y) path_work[count++] = current;
+    direction = path_direction(current, goal);
+    for (iterations = 0; iterations < PATH_NODES_MAX && count < PATH_NODES_MAX - 1; ++iterations) {
+        if (line_march(current, goal, &last, 0)) {
+            path_work[count++] = goal;
+            break;
+        }
+        blocked = goal;
+        for (attempts = 0; attempts < 10; ++attempts) {
+            next.x = grid_snap(current.x + path_dx[direction] * 4);
+            next.y = grid_snap(current.y + path_dy[direction] * 4);
+            if (line_march(current, next, &last, 0)) break;
+            blocked = next;
+            direction = (direction + turn + 8) % 8;
+        }
+        if (attempts == 10) return 0;
+        path_work[count++] = next;
+        direction = path_direction(next, blocked);
+        current = next;
+    }
+    if (path_work[count - 1].x != goal.x || path_work[count - 1].y != goal.y) return 0;
+    /* Original pruning scans backward for the furthest clearance-safe shortcut. */
+    {
+        int at = 0, out = 1;
+        while (at < count - 1) {
+            int far = count - 1;
+            while (far > at + 1 && !line_march(path_work[at], path_work[far], &last, 1)) --far;
+            path_work[out++] = path_work[far];
+            at = far;
+        }
+        count = out;
+    }
+    return count;
+}
+
+static void start_path(int x, int y)
+{
+    PathPoint start = { g_hero.x, g_hero.y }, goal = { grid_snap(x), grid_snap(y) };
+    int first, second;
+    stop_walk();
+    if (!map_walkable(&map, goal.x, goal.y, g_hero.tokens)) {
+        wos_log_event("path_none", "x=%d y=%d", goal.x, goal.y);
+        return;
+    }
+    first = path_build(start, goal, 1);
+    if (first) memcpy(path, path_work, (size_t)first * sizeof(*path));
+    second = path_build(start, goal, -1);
+    if (second && (!first || second < first)) {
+        first = second;
+        memcpy(path, path_work, (size_t)first * sizeof(*path));
+    }
+    if (!first) {
+        wos_log_event("path_none", "x=%d y=%d", goal.x, goal.y);
+        return;
+    }
+    path_count = first;
+    path_next = 1;
+    target_x = path[1].x * 256;
+    target_y = path[1].y * 256;
+    walking = 1;
+    wos_log_event("path_found", "nodes=%d x=%d y=%d", first, goal.x, goal.y);
+}
+
+static void path_arrive(void)
+{
+    if (path_next + 1 < path_count) {
+        ++path_next;
+        target_x = path[path_next].x * 256;
+        target_y = path[path_next].y * 256;
+    } else stop_walk();
+}
+
 static void move_step(int dx, int dy)
 {
     int speed = map.id == 0 ? 3200 : 4800; /* maps.md section 6: 24.8 units/second. */
@@ -275,7 +455,7 @@ static void move_step(int dx, int dy)
     step = step_remainder / 60;
     step_remainder %= 60;
     distance = integer_sqrt((uint64_t)((int64_t)dx * dx + (int64_t)dy * dy));
-    if (!distance) { stop_walk(); return; }
+    if (!distance) { path_arrive(); return; }
     facing = (dy < 0 ? 0 : dy > 0 ? 2 : 1) * 3 + (dx < 0 ? 0 : dx > 0 ? 2 : 1);
     if (!keyboard && distance <= (uint32_t)step) { nx = target_x; ny = target_y; }
     else {
@@ -293,7 +473,7 @@ static void move_step(int dx, int dy)
     }
     pos_x = nx; pos_y = ny;
     g_hero.x = nx / 256; g_hero.y = ny / 256;
-    if (!keyboard && pos_x == target_x && pos_y == target_y) stop_walk();
+    if (!keyboard && pos_x == target_x && pos_y == target_y) path_arrive();
 }
 
 static void add_monster(int *ids, int *n, int id)
@@ -301,7 +481,7 @@ static void add_monster(int *ids, int *n, int id)
     if (*n < FIGHT_MAX && valid_monster(id)) ids[(*n)++] = id;
 }
 
-static int encounter_roster(const Link *link, int distance, int *ids)
+static int encounter_roster(const Link *link, int *ids)
 {
     int n = 0, i, group = link->difficulty;
     if (!group && map.mon_count) {
@@ -324,15 +504,6 @@ static int encounter_roster(const Link *link, int distance, int *ids)
                 if (rng_bounded(game_rng(), 100) < 5) add_monster(ids, &n, m->monster_id);
             }
         }
-    } else if (group > 0 && group < WORLD_MAX_GROUPS && g_world.groups[group].used) {
-        const GroupDef *g = &g_world.groups[group];
-        int pct = clamp(distance, 20, 80);
-        for (i = 0; i < g->count && i < GROUP_MAX_MEMBERS; ++i)
-            if (rng_bounded(game_rng(), 100) < (unsigned)pct ||
-                (g_world.groups[0].count && (g_world.groups[0].members[0] & 1)))
-                add_monster(ids, &n, g->members[i]);
-        if (!n && g->count > 0 && g->count <= GROUP_MAX_MEMBERS)
-            add_monster(ids, &n, g->members[rng_bounded(game_rng(), (unsigned)g->count)]);
     }
     return n;
 }
@@ -340,7 +511,7 @@ static int encounter_roster(const Link *link, int distance, int *ids)
 static void encounter_tick(int nearest, int hit, int distance, int moved)
 {
     const Link *link;
-    int threshold, ids[FIGHT_MAX], n;
+    int threshold, ids[FIGHT_MAX], n, pct, group;
     if (encounter_frames > 0) { --encounter_frames; return; }
     if (nearest < 0 || g_hero.hp <= 0) return;
     link = &map.links[nearest];
@@ -352,11 +523,16 @@ static void encounter_tick(int nearest, int hit, int distance, int moved)
      * The port has no hunting-training action yet. One roll per fixed 60 Hz tick. */
     threshold = movement_effect(11) ? 20 : 200;
     if (!moved || rng_bounded(game_rng(), 10000) >= (unsigned)threshold) return;
-    n = encounter_roster(link, distance, ids);
-    if (!n) return;
+    n = encounter_roster(link, ids);
+    group = link->difficulty < 0 ? -link->difficulty : link->difficulty;
+    if (!n && (!group || group >= WORLD_MAX_GROUPS ||
+               !g_world.groups[group].used || g_world.groups[group].count < 1)) return;
+    pct = clamp(distance, 20, 80);
+    if (link->difficulty < 0) pct = 100 - pct;
     stop_walk();
     g_hero.link = nearest;
-    game_set_pending_fight(ids, n, link->difficulty);
+    game_set_pending_fight(ids, n, link->difficulty, pct);
+    wos_log_event("encounter", "group=%d distance=%d", link->difficulty, pct);
     encounter_frames = ENCOUNTER_GRACE;
     game_enter_scene(2, link);
 }
@@ -364,6 +540,8 @@ static void encounter_tick(int nearest, int hit, int distance, int moved)
 static void map_update(const Input *in)
 {
     int i, dx, dy, hit, nearest, distance, moved;
+    map_music_update();
+    if (panel_active()) { panel_update(in); return; }
     hover = -1;
     mouse_held = (in->mouse_down & (1u << 1)) != 0;
     for (i = 0; i < BUTTON_COUNT; ++i)
@@ -372,24 +550,31 @@ static void map_update(const Input *in)
         stop_walk();
         if (hover == 5) { game_enter_scene(1, NULL); return; }
         if (hover == 6) { hero_save(&g_hero); game_go_well(); return; }
-        panel = panel == hover ? -1 : hover;
+        if (hover < 4) {
+            static const PanelKind kinds[] = { PANEL_ITEMS, PANEL_SPELLS, PANEL_EQUIP, PANEL_STATS };
+            minimap = 0;
+            panel_open(kinds[hover]);
+            return;
+        }
+        minimap = !minimap;
     }
-    if (in->pressed[PLAT_KEY_ESCAPE]) { stop_walk(); panel = -1; }
-    if (panel >= 0) return;
+    if (in->pressed[PLAT_KEY_ESCAPE]) { stop_walk(); minimap = 0; }
+    if (minimap) return;
     if ((in->mouse_pressed & (1u << 1)) && in->mouse_x >= 0 &&
         in->mouse_x < VIEW_W && in->mouse_y >= 0 && in->mouse_y < VIEW_H) {
         int cx, cy;
-        stop_walk();
         camera(&cx, &cy);
-        target_x = clamp((cx + in->mouse_x) / 4, 0, map.image.w - 1) * 256;
-        target_y = clamp((cy + in->mouse_y) / 4, 0, map.image.h - 1) * 256;
-        walking = target_x != pos_x || target_y != pos_y;
+        start_path(clamp((cx + in->mouse_x) / 4, 0, map.image.w - 1),
+                   clamp((cy + in->mouse_y) / 4, 0, map.image.h - 1));
     }
     dx = !!in->down[PLAT_KEY_RIGHT] - !!in->down[PLAT_KEY_LEFT];
     dy = !!in->down[PLAT_KEY_DOWN] - !!in->down[PLAT_KEY_UP];
     if ((dx * 256 != blocked_dx) || (dy * 256 != blocked_dy))
         blocked_dx = blocked_dy = 0;
-    if ((dx || dy) && !(blocked_dx || blocked_dy)) { walking = keyboard = 1; }
+    if ((dx || dy) && !(blocked_dx || blocked_dy)) {
+        path_count = path_next = 0;
+        walking = keyboard = 1;
+    }
     else if (keyboard) stop_walk();
     moved = walking;
     if (walking) move_step(keyboard ? dx * 256 : target_x - pos_x,
@@ -415,42 +600,17 @@ static void meter(Framebuffer *fb, int x, int y, const char *label, int cur, int
     font_draw(fb, x + 3, y + 4, text, 0xffffff);
 }
 
-static void draw_panel(Framebuffer *fb)
+static void draw_minimap(Framebuffer *fb)
 {
-    int i, y = 60;
-    char text[128];
+    int x, py, w = 312, h = map.image.h * 312 / map.image.w;
     fb_fill(fb, (Rect){12, 20, 340, 376}, 0x14202b);
     fb_rect(fb, (Rect){12, 20, 340, 376}, 0xb8a67d);
-    font_draw(fb, 24, 34, button_names[panel], 0xffdc94);
-    if (panel == 4) {
-        /* Minimap is the low-resolution jpg, nearest-neighbour fit to the panel. */
-        int x, py, w = 312, h = map.image.h * 312 / map.image.w;
-        if (h > 296) { h = 296; w = map.image.w * h / map.image.h; }
-        for (py = 0; py < h; ++py)
-            for (x = 0; x < w; ++x)
-                fb_pixel(fb, 24 + x, 60 + py, map.image.pixels[(py * map.image.h / h) * map.image.w + x * map.image.w / w]);
-        fb_fill(fb, (Rect){23 + g_hero.x * w / map.image.w, 59 + g_hero.y * h / map.image.h, 3, 3}, 0xff2020);
-    } else if (panel == 0 || panel == 2) {
-        int count = panel == 0 ? HERO_INVENTORY : 8;
-        for (i = 0; i < count && y < 360; ++i) {
-            int id = panel == 0 ? g_hero.inventory[i].item_id : g_hero.equip[i];
-            if (id <= 0 || id >= WORLD_MAX_ITEMS || !g_world.items[id].used) continue;
-            if (panel == 0 && g_hero.inventory[i].count <= 0) continue;
-            snprintf(text, sizeof(text), "%s x%d", g_world.items[id].name,
-                     panel == 0 ? g_hero.inventory[i].count : 1);
-            font_wrap(fb, (Rect){24, y, 312, 20}, text, 0xffffff);
-            y += 24;
-        }
-        if (y == 60) font_draw(fb, 24, y, "Empty", 0xc0c0c0);
-    } else if (panel == 3) {
-        static const char *const ability[] = { "Strength", "Wisdom", "Stamina", "Agility", "Dexterity" };
-        for (i = 0; i < HERO_ABILITIES; ++i) {
-            snprintf(text, sizeof(text), "%s: %d", ability[i], g_hero.ability[i]);
-            font_draw(fb, 24, y, text, 0xffffff); y += 24;
-        }
-        snprintf(text, sizeof(text), "XP: %lld", (long long)g_hero.xp);
-        font_draw(fb, 24, y, text, 0xffffff);
-    } else font_wrap(fb, (Rect){24, y, 312, 64}, "Cast spells while in a scene.", 0xc0c0c0);
+    font_draw(fb, 24, 34, "Map", 0xffdc94);
+    if (h > 296) { h = 296; w = map.image.w * h / map.image.h; }
+    for (py = 0; py < h; ++py)
+        for (x = 0; x < w; ++x)
+            fb_pixel(fb, 24 + x, 60 + py, map.image.pixels[(py * map.image.h / h) * map.image.w + x * map.image.w / w]);
+    fb_fill(fb, (Rect){23 + g_hero.x * w / map.image.w, 59 + g_hero.y * h / map.image.h, 3, 3}, 0xff2020);
     font_draw(fb, 24, 380, "Escape to return", 0xb8a67d);
 }
 
@@ -514,5 +674,6 @@ static void map_render(Framebuffer *fb)
     snprintf(text, sizeof(text), "%s (%d,%d)", map.def->name, g_hero.x, g_hero.y);
     font_wrap(fb, (Rect){292, 425, 336, 16}, text, 0xc8cfdb);
     font_wrap(fb, (Rect){8, 451, 624, 24}, message, 0xffffff);
-    if (panel >= 0) draw_panel(fb);
+    if (minimap) draw_minimap(fb);
+    if (panel_active()) panel_render(fb);
 }

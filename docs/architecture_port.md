@@ -37,6 +37,13 @@ than real time.
 | scene interpreter FUN_0047d577 opcode switch | scene.c |
 | fight state machine FUN_00490e7c, damage FUN_004a7794, payout FUN_0042bb5c | battle.c |
 | filmstrip loader FUN_0048df3c / FUN_0048dad9 | world.c sheets |
+| training screens: hand click 0x419107, element click 0x425c30, erosion 0x4258b8 | hero.c hero_train, panels.c PANEL_TRAIN |
+| inventory/equip (0x40C694 attack/defense totals), item use | hero.c, panels.c PANEL_ITEMS/PANEL_EQUIP |
+| OFFER/OFFER2 shops (filter all.c:93027) | panels.c PANEL_SHOP, opened by scene.c |
+| spell casting, monster AI (FUN_004809a3, FUN_00490645), weapon spell binding | battle.c |
+| detour pathfinder FUN_00461b11/FUN_00461b93/FUN_00461dcc | mapview.c |
+| music.ini playlists, fight/victory music | world.c world_music, audio.c game_music |
+| map hero blit FUN_00416426 (sub-cell InflateRect -1) | world.c sheet_draw_map_dir |
 
 ## Deliberate deviations
 | Deviation | Reason |
@@ -47,16 +54,15 @@ than real time.
 | Hero saves use a port format (`.wsh`) under `--save`, not the encrypted/serial-bound `.her` | `.her` is tied to the machine's soul ID |
 | Networking (SRNet.dll), online worlds, PK, the chat and the world CRC check are not implemented | the target is offline solo play |
 | Every GetTickCount timing is converted to 60 Hz steps | deterministic replays |
-| OFFER/OFFER2 shops are shown as display-only catalogues | buying and selling is outside the offline acceptance path; flagged for later work |
+| Quest TIMER/COUNTDOWN run on a global 60 Hz clock (256 ids) that keeps ticking across screens; WEATHER/FX log `visual=unsupported`; PARTY is a no-op offline | there is no party or weather renderer in solo mode yet |
 | Quest cookies (`#<name>`) persist in a per-hero `.cookies` sidecar next to the save | the original keeps them server-side or in the `.her` blob |
-| Click-to-walk marches in a straight line and stops at blocked terrain; the original's detour pathfinder (FUN_00461dcc) is not ported yet | the simplest correct subset; flagged |
+| Detour pathfinder (FUN_00461b11/FUN_00461b93/FUN_00461dcc): a bounded 2000-node two-sided wall-following search. Diagonal path legs keep one map unit of clearance | the clearance stops fixed-point truncation from landing on the blocked side of terrain corners |
 | Encounter roll uses hunting rating 0 for a fresh hero: 200/10000 per moving 60 Hz step (original: per timer tick) | the tick was converted to steps |
 | LOCK has no online peers to lock out | solo only |
 | Arrow-key walking on the map, plus keyboard shortcuts for menus and fights | lets deterministic replays drive the game; mouse behaviour is unchanged |
-| Battle: when group 0 does not force all members, the neutral group-member probability is fixed at 50%; the link-distance weighting is not applied | battle_begin does not receive the distance to the link; flagged |
 | Battle: solo flee always succeeds | nothing else in solo play can reject it |
-| Battle: hand-training PP gains are capped at 5,000,000, not per-class caps | world.h does not expose the class training caps yet; flagged |
-| Battle: only physical combat; no spell casting, spell-proc equipment or scripted monster AI (monsters.txt arg20) | outside the first-fight acceptance path; flagged |
+| Spell effects are drawn as element-coloured flashes over 4 s instead of the effectsNN/attackNN particle strips | presentation only; the damage, timing and fizzle rules follow the decomp |
+| A missing music file (e.g. Evergreen `lost.mid`, which music.ini names but was never shipped) logs `music_error` and stays silent | the retail data is incomplete |
 | No "Place Yourself On Gaiea" prompt after the first incarnation; a fresh hero starts above link 0 of map 0 | the prompt places the player on the online world globe (FUN_00434f95("earth")) |
 | The PK opt-in confirmation in New Soul is skipped (always non-PK) | there is no PK in solo play |
 

@@ -1,0 +1,68 @@
+# seed: 1
+# requires: shop_buy item_use equip
+# Buy a potion and a level-zero helmet from the Soul Brother.
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+key n
+wait 5
+text Collector
+key RETURN
+expect hero_ready 300
+expect map_enter 600
+keydown DOWN
+expect scene_enter 180
+keyup DOWN
+wait 20
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 5
+key y
+wait 5
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+expect panel_open 180
+key b
+expect shop_buy 60
+# OFFER2 walks IDs: leather toupee (200) is index 19.
+click 330 270
+key RIGHT
+key b
+expect shop_buy 60
+shot /tmp/wos-gap-shop-buy.bmp
+key ESCAPE
+click 435 82
+shot /tmp/wos-gap-items.bmp
+# Inventory is sorted: potion, ticket, helmet.
+key u
+expect item_use 60
+# Consuming the potion leaves the ticket then helmet.
+key RIGHT
+key e
+expect equip 60
+click 180 44
+shot /tmp/wos-gap-equip.bmp
+click 245 44
+shot /tmp/wos-gap-stats.bmp
+click 320 44
+shot /tmp/wos-gap-train.bmp
+click 110 44
+shot /tmp/wos-gap-spells.bmp
+key ESCAPE
+quit

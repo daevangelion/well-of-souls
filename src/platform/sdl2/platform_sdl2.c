@@ -13,21 +13,28 @@ static int frame_w, frame_h;
 
 int plat_init(const char *title, int w, int h, unsigned flags)
 {
+    Uint32 window_flags = SDL_WINDOW_RESIZABLE |
+        ((flags & PLAT_INIT_HEADLESS) ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN);
     if (w <= 0 || h <= 0 || w > INT_MAX / 4 || window) return -1;
+#ifdef __ANDROID__
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS) < 0) return -1;
     window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                             w, h, SDL_WINDOW_RESIZABLE |
-                             ((flags & PLAT_INIT_HEADLESS) ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
+                             w, h, window_flags);
     if (!window) goto fail;
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (!renderer) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
     if (!renderer) goto fail;
+    if (SDL_RenderSetLogicalSize(renderer, w, h) < 0) goto fail;
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB888,
                                 SDL_TEXTUREACCESS_STREAMING, w, h);
     if (!texture) goto fail;
     frame_w = w;
     frame_h = h;
-    SDL_StartTextInput();
+    SDL_StopTextInput();
     wos_audio_init();
     return 0;
 fail:
@@ -76,16 +83,16 @@ static int translate_key(SDL_Keycode key)
     case SDLK_LCTRL: case SDLK_RCTRL: return PLAT_KEY_CTRL;
     case SDLK_LALT: case SDLK_RALT: return PLAT_KEY_ALT;
     case SDLK_KP_ENTER: return PLAT_KEY_RETURN;
+    case SDLK_AC_BACK: return PLAT_KEY_ESCAPE;
     default: return 0;
     }
 }
 
 static void mouse_position(PlatEvent *ev, int x, int y)
 {
-    int w, h;
-    SDL_GetWindowSize(window, &w, &h);
-    ev->x = w > 0 ? (int)((int64_t)x * frame_w / w) : 0;
-    ev->y = h > 0 ? (int)((int64_t)y * frame_h / h) : 0;
+    /* SDL_RenderSetLogicalSize already maps window/touch events into the letterboxed viewport. */
+    ev->x = x;
+    ev->y = y;
 }
 
 int plat_poll_event(PlatEvent *ev)
@@ -133,12 +140,18 @@ void plat_present(const uint32_t *pixels, int w, int h)
         SDL_Texture *replacement = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB888,
                                                      SDL_TEXTUREACCESS_STREAMING, w, h);
         if (!replacement) return;
+        if (SDL_RenderSetLogicalSize(renderer, w, h) < 0) {
+            SDL_DestroyTexture(replacement);
+            return;
+        }
         SDL_DestroyTexture(texture);
         texture = replacement;
         frame_w = w;
         frame_h = h;
     }
     if (SDL_UpdateTexture(texture, NULL, pixels, w * 4) < 0) return;
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
     SDL_RenderCopy(renderer, texture, NULL, NULL);
     SDL_RenderPresent(renderer);
 }

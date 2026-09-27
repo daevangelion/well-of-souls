@@ -1,0 +1,31 @@
+# seed: 1
+# requires: battle_start battle_hit train
+# Earn wallet PP by attacking a real encounter, then spend it through Training.
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+key n
+wait 5
+text Student
+key RETURN
+expect hero_ready 300
+expect map_enter 600
+hold RIGHT 60
+expect hero_move 300
+keydown DOWN
+expect battle_start 1200
+keyup DOWN
+key a
+wait 180
+# Stats is available over battle; training pauses combat while the panel is open.
+click 440 32
+click 320 44
+key t
+expect train 60
+shot /tmp/wos-gap-train.bmp
+key TAB
+shot /tmp/wos-gap-elements.bmp
+key ESCAPE
+quit

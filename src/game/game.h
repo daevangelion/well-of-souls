@@ -25,8 +25,13 @@ const Map *game_current_map(void);
 void game_enter_scene(int scene_no, const Link *link);
 
 /* Random encounter (map -> scene 2). The monster list is consumed by the next argument-less FIGHT.
- * count == 0 means "pick from groups.txt by the link difficulty". */
-void game_set_pending_fight(const int *monster_ids, int count, int difficulty);
-int  game_take_pending_fight(int *monster_ids, int max, int *difficulty);
+ * count == 0 means "pick from groups.txt by the link difficulty".
+ * distance_pct is the clamped 20..80 Manhattan-distance inclusion percentage,
+ * inverted for negative groups (FUN_0049099b). */
+void game_set_pending_fight(const int *monster_ids, int count, int difficulty, int distance_pct);
+int  game_take_pending_fight(int *monster_ids, int max, int *difficulty, int *distance_pct);
+
+/* Resolve world MIDI first, then shared MIDI; NULL/empty stops playback. */
+void game_music(const char *midi_name);
 
 #endif

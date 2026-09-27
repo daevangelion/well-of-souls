@@ -63,6 +63,7 @@ static void art_background(const char *file)
 }
 static void menu(void)
 {
+    plat_text_input(0);
     state=MENU; ticks=0; message[0]=0; art_background("beg.jpg");
     wos_log_event("boot_menu","");
 }
@@ -108,6 +109,7 @@ static void well_background(void)
 void game_go_well(void)
 {
     int i; char rel[128], path[768];
+    plat_text_input(0);
     state=WELL; message[0]=0; soul_count=hero_list_saves(souls,MAX_CHOICES);
     selected_soul=soul_count?0:-1;
     if(g_hero.valid) for(i=0;i<soul_count;++i) if(!text_casecmp(souls[i],g_hero.name)) selected_soul=i;
@@ -133,6 +135,7 @@ static void new_soul(void)
 {
     char path[768], section[8]; char *text; Ini ini; int i;
     state=NEW_SOUL; name[0]=0; message[0]=0; name_focus=1;
+    plat_text_input(1);
     class_count=0; selected_class=0; selected_gender=0; gender_count=0;
     for(i=1;i<WORLD_MAX_CLASSES;++i)
         if(g_world.classes[i].used && !g_world.classes[i].hidden) class_ids[class_count++]=i;
@@ -226,8 +229,10 @@ static void front_update(const Input *in)
         else if(clicked(in,bar_rect(4))) snprintf(message,sizeof(message),"Incarnate your soul to explore the world map.");
         else if(in->pressed[PLAT_KEY_ESCAPE]) { menu(); }
     } else if(state==NEW_SOUL) {
-        if(in->pressed[PLAT_KEY_ESCAPE] || clicked(in,cancel_rect)) { state=WELL; message[0]=0; return; }
-        if(clicked(in,name_rect)) name_focus=1;
+        if(in->pressed[PLAT_KEY_ESCAPE] || clicked(in,cancel_rect)) {
+            plat_text_input(0); state=WELL; message[0]=0; return;
+        }
+        if(clicked(in,name_rect)) { name_focus=1; plat_text_input(1); }
         if(name_focus) {
             size_t len=strlen(name), add=strlen(in->text);
             if(in->pressed[PLAT_KEY_BACKSPACE] && len) name[--len]=0;
@@ -324,7 +329,8 @@ static void front_render(Framebuffer *fb)
         fb_fill(fb,(Rect){0,444,640,36},0x241820); font_wrap(fb,(Rect){8,450,624,28},message,0xffd080);
     }
 }
-static const Screen front_screen={"front",NULL,front_update,front_render,NULL};
+static void front_leave(void) { plat_text_input(0); }
+static const Screen front_screen={"front",NULL,front_update,front_render,front_leave};
 void game_go_front(void) { menu(); screen_set(&front_screen); }
 int game_boot(void)
 {

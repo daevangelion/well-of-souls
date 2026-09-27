@@ -17,6 +17,10 @@
 #define WORLD_MAX_SPELLS    768
 #define WORLD_MAX_TERRAINS  256
 #define WORLD_MAX_SCENES    10000
+#define WORLD_MAX_ELEMENTS  256
+#define WORLD_MAX_HANDS       8
+#define WORLD_MAX_TROPHIES 4096
+#define TROPHY_MAX_RANGES    10
 #define GROUP_MAX_MEMBERS   9
 #define OBL_RECORDS         256   /* .obl = 256 x 800 bytes */
 #define OBL_RECORD_SIZE     800
@@ -82,6 +86,13 @@ typedef struct {
     int start_item_count;
     int hidden;
     int max_wallet;             /* -1 = no class-specific gold cap */
+    int hand_ratio;             /* 0 means 100 - magic_ratio */
+    int max_ability[5], start_ability_set;
+    int start_element_pp[8], max_element_pp[8];
+    int start_hand_pp[8], max_hand_pp[8];
+    int no_gifts, hidden_start_level;
+    int start_spells[8], start_spell_count;
+    int start_tokens[8], start_token_count;
     LevelDef levels[WORLD_MAX_LEVELS + 1]; /* sparse 1..99; [0] holds class starting HP/MP */
 } ClassDef;
 
@@ -94,13 +105,41 @@ typedef struct {
     int level;
     int element, defense, attack, hp, mp;
     int movement;    /* arg6 dotted bootEffect; maps.md section 3 */
+    int equip_token, flags, max_count;
+    int trophy_needed, trophy_made, trophy_count_needed, trophy_count_made;
+    int spell_binding, ability_points, find_probability, find_monster;
+    int travel_mode, travel_map_scene, travel_link, travel_drop_in, travel_scene;
+    int attack_path, attack_image, attack_flags, attack_weather, attack_effect;
+    char description[256], sound[256];
 } ItemDef;
 
 typedef struct {
     int used;
     char name[64];
     int pp_cost, element, damage;
+    int mp_cost, summon_id;
+    int req_affinity, all_targets, flags, min_level, token;
+    int trophy_needed, trophy_made, trophy_count_needed, trophy_count_made;
+    int path, effects_row, max_cols, max_fx, ms_per_col;
+    int gravity, effects, weather, loop;
+    int extra[2];     /* optional arg17 dotted pair, FUN_0047fced +0x180/+0x184 */
+    char sfx_summon[80], sfx_travel[80], sfx_strike[80];
 } SpellDef;
+
+typedef struct { int used; char name[32]; } ElementDef;
+typedef struct {
+    int used;
+    char name[80], sound[80];
+    int strength_percent; /* arg2 (0..100), default 50 */
+    int damage_weight;    /* strength_percent * 40 / 100 + 10, FUN_004825df */
+} HandDef;
+typedef struct {
+    int used;
+    char name[33], image[33];
+    int image_index, stack_size, gp, probability, token, flags;
+    int monster_first[TROPHY_MAX_RANGES], monster_last[TROPHY_MAX_RANGES];
+    int monster_range_count;
+} TrophyDef;
 
 /* One quest.txt scene: script lines [first_line, end_line) in World.lines. */
 typedef struct {
@@ -149,12 +188,13 @@ typedef struct {
     ObjRect objrects[OBR_RECORDS];
 } Map;
 
-/* A filmstrip sprite sheet (skin, monster/villager sheet, item icons): cells are h x h squares. */
+/* Row-major atlas; character filmstrips have one row of height-sized square cells. */
 typedef struct {
     Image image;
-    int cell;         /* cell side in pixels (= image height, or forced 48) */
-    int count;        /* width / cell */
+    int cell;         /* cell width in pixels; character sheets use image height */
+    int count;        /* (image.w / cell) * (image.h / cell_h) */
     int64_t key;      /* RGB key: original bottom-up DIB (0,h-1), normalized Image (0,0) */
+    int cell_h;       /* rectangular art cells; skins/monsters use cell_h == cell */
 } Sheet;
 
 typedef struct {
@@ -171,7 +211,11 @@ typedef struct {
     ItemDef items[WORLD_MAX_ITEMS];
     SpellDef spells[WORLD_MAX_SPELLS];
     SceneDef scenes[WORLD_MAX_SCENES];
+    ElementDef elements[WORLD_MAX_ELEMENTS];
+    HandDef hands[WORLD_MAX_HANDS];
+    TrophyDef trophies[WORLD_MAX_TROPHIES];
     int starting_gp;          /* config.ini startingGP, default 500 */
+    int max_unspent_pp;       /* config.ini maxUnspentPP, default 1000000 */
 } World;
 
 extern World g_world;
@@ -181,6 +225,9 @@ int world_load(const char *data_dir, const char *name);
 void world_free(void);
 /* Comma/whitespace lexer with quotes and comments; -1 on token/count overflow. */
 int world_tokenize(const char *line, char tokens[][256], int max);
+/* Borrowed music.ini values, map section then [common]; absent value is "". */
+const char *world_music(const char *root, const char *key);
+int world_music_count(const char *root);
 
 /* Load map id (jpg, X4 jpg, .ter, .obl, .mon, objects). 0 on success. Caller owns Map. */
 int map_load(Map *map, int id);
@@ -195,12 +242,14 @@ int map_walkable(const Map *map, int x, int y, const unsigned char *tokens);
  * Falls back to "josh1" (monsters) like FUN_0048df3c. 0 on success. */
 int sheet_load_skin(Sheet *sheet, const char *name);
 int sheet_load_monster(Sheet *sheet, const char *name);
+/* World art/ overrides root art/. Name may include .bmp; cells tile row-major. */
+int sheet_load_art(Sheet *sheet, const char *name, int cell_w, int cell_h);
 void sheet_free(Sheet *sheet);
 /* Draw cell `index` (or a sub-rect of it) with transparency. */
 struct Framebuffer;
 void sheet_draw(struct Framebuffer *fb, const Sheet *sheet, int index, int x, int y, int flip);
 /* Hero skin map sprite: the MAP cell is a 3x3 grid of (cell/3) squares; dir 0..8 row-major
- * (4 = centre/camp). */
+ * (4 = centre/camp). One-pixel guides on all four subcell edges are excluded (0x4165ba). */
 void sheet_draw_map_dir(struct Framebuffer *fb, const Sheet *sheet, int dir, int x, int y);
 
 /* Path helpers: "<data>/<rel>" and "<world dir>/<rel>" into buf. */

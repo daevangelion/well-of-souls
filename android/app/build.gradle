@@ -1,0 +1,72 @@
+plugins { id 'com.android.application' }
+
+final def sdlRoot = file('/mnt/build/android-deps/SDL2-2.32.10')
+final def dataRoot = file('../../extracted')
+final def packagedAssets = layout.buildDirectory.dir('generated/gameAssets')
+
+android {
+    namespace 'org.syntheticreality.wos'
+    compileSdk 34
+    ndkVersion '26.3.11579264'
+    defaultConfig {
+        applicationId 'org.syntheticreality.wos'
+        minSdk 23
+        targetSdk 34
+        versionCode 1
+        versionName '0.1'
+        ndk { abiFilters 'arm64-v8a' }
+        externalNativeBuild {
+            cmake { arguments "-DSDL2_SOURCE_DIR=${sdlRoot}" }
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    sourceSets {
+        main {
+            java.srcDirs += [new File(sdlRoot, 'android-project/app/src/main/java')]
+            assets.srcDir packagedAssets
+        }
+    }
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+            buildStagingDirectory file('/mnt/build/wos-android-native')
+        }
+    }
+    buildTypes {
+        debug { jniDebuggable true }
+    }
+    lint { abortOnError true }
+}
+
+// A sorted size/hash manifest drives transactional first-launch extraction and APK upgrades.
+def packageGameAssets = tasks.register('packageGameAssets', Sync) {
+    inputs.dir dataRoot
+    from(dataRoot) { into 'wos-data' }
+    into packagedAssets
+    doFirst {
+        if (!new File(dataRoot, 'Souls.exe').isFile()) {
+            throw new GradleException('Missing extracted game data: run ../tools/extract_installer.sh')
+        }
+    }
+    doLast {
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        def entries = fileTree(dataRoot).files.sort { a, b -> a.path <=> b.path }.collect { f ->
+            def name = dataRoot.toPath().relativize(f.toPath()).toString().replace('\\', '/')
+            if (name.contains('\n') || name.contains('\r') || name.contains('\t')) {
+                throw new GradleException("Unsupported asset name: ${name}")
+            }
+            digest.reset()
+            f.withInputStream { input ->
+                byte[] buffer = new byte[65536]
+                for (int n; (n = input.read(buffer)) > 0;) digest.update(buffer, 0, n)
+            }
+            "${digest.digest().encodeHex()}\t${f.length()}\t${name}\n"
+        }.join('')
+        new File(packagedAssets.get().asFile, 'wos-manifest.txt').setText(entries, 'UTF-8')
+    }
+}
+tasks.named('preBuild').configure { dependsOn packageGameAssets }

@@ -44,6 +44,10 @@ The detailed findings for each subsystem are in `docs/re/*.md`:
 - Derived monster stats (level-0 columns): the HP/MP/offense/defense coefficients are 1162/513/567/834, each /100. The STR/STA/WIS/AGI/DEX coefficients are 197/212/231/189/175, each /100. The record-0 percentage is applied afterwards. None of these are randomized. Damage = base * 8000/((targetLevel+40)*(targetSta+200)) * 200/(targetDefense+200), followed by variance/critical. (Battle)
 - objects.obr holds UP TO 1000 x 48 B. Evergreen's is 12288 B (256 rows), and FUN_00463630 accepts the shorter table. A missing .ter is allowed: FUN_0041e421 creates a cleared terrain DIB before the optional load (Springwell has no .ter). Skins need not be an exact multiple of their height: Adventurer is 577x96 (6 cells + a separator column). monsters.txt arg20 is an AI string (FUN_004809a3), not a spell list. (WorldData)
 - Hero physical charge/proficiency (0x48b1ad, 0x4a7ba6, FUN_00424dd2): effectivePP = (gauge+15)*handPP/30, and training = 10000*effectivePP/(effectivePP+5000). FUN_00424dd2 is not a clamp; it computes scale*(1-1/(PP*0.0002+1)). When training > 5000, power += trunc(power*pow(1.1892, training*0.001-5)). Each physical action earns 20 hand PP. The gauge does NOT heal; battle.md 4 reads it wrong. (Battle)
+- maps.md 6: grid snap FUN_00461b11 (all.c:70251) is (v/4 truncated)*4+2, i.e. the containing cell's centre, not ((v+3)>>2)*4+2. Pathfinder direction tables: dx[0..7] = {0,1,1,1,0,-1,-1,-1}, dy = {1,1,0,-1,-1,-1,0,1}. (MapView)
+- OFFER2 item filter (all.c:93027-93032): items.txt findProbability != 0 (record +0x2d*4, loader all.c:96158), class < 100, gp > 0, used, and level within the inclusive min..max. The args are `min,max[,class]` triples; sell price = gp/2. The docs call the first test 'inUse'; it is the find probability. (Panels)
+- Training screens (found with objdump; Ghidra missed them): hand click 0x419107 and element click 0x425c30 debit the PP wallet, then call 0x419306/0x4258b8. The default amount is 200 (0x425bfb); an alternate dynamic amount comes from 0x425b88. Right-click untrains, never below START_*, and refunds half. Training an element erodes the opposite element by 15%, the neighbours at wheel distance 3/5 by 5% and those at distance 2/6 by 1%, with affinities floored at 20. spells.txt ppCost 0 means a computed cost, not auto-known; a spell must be Learned. (FrontHero)
+- Loader and asm checks (WorldData): the items.txt clamp to 20 applies to arg12 abilityPoints, not arg13 findProbability (the retail Health Potion has find=80). Trophy count minima are 1, not 2. Spell maxFx caps at 1023, not 100. The class max PP arrays default to 5,000,000. Spells with raw 0 PP/MP/damage are completed by the integer asm at 0x480274 (145/150/130% steps). Measured art: items.bmp is 4096x64 with a 64 px pitch (not 48); effects00 is 256x160; attack00 is 384x480.
 
 ## Port Progress
 | Subsystem | Status | Files |
@@ -53,6 +57,6 @@ The detailed findings for each subsystem are in `docs/re/*.md`:
 | World data: quest.txt + #include, tables, scene index, map binaries, filmstrip sheets | done | src/game/world.c |
 | Front end: title, menu, world select, Well, New Soul, save/load (.wsh) | done | src/game/front.c, hero.c |
 | Map mode: walking, terrain, links, random encounters, panels | done (no detour pathfinder) | src/game/mapview.c |
-| Scene VM: dialog, actors, conditions, tokens, cookies, FIGHT | core opcodes done; shops display-only | src/game/scene.c |
-| Battle: physical combat, rewards, level-ups | done (no spells) | src/game/battle.c |
-| Spells, items/equipment screens, shops, training, music per map | not started | |
+| Scene VM: dialog, actors, conditions, tokens, cookies, timers, arithmetic, FIGHT, shops | done (WEATHER/FX visuals unsupported) | src/game/scene.c |
+| Battle: physical + spell combat, rewards, level-ups, training gain | done | src/game/battle.c |
+| Spells (hero, monster AI, weapon binding), items/equipment, shops, training, music.ini playlists, detour pathfinder | done (spell visuals are flashes) | battle.c, hero.c, panels.c, scene.c, audio.c, mapview.c |

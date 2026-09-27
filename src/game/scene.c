@@ -4,6 +4,7 @@
 #include "game.h"
 #include "hero.h"
 #include "battle.h"
+#include "panels.h"
 #include "../game_main.h"
 #include "../engine/screen.h"
 #include "../engine/font.h"
@@ -30,11 +31,11 @@ typedef struct {
     Sheet sheet;
 } Actor;
 typedef struct { char key[96], value[256]; } Cookie;
-typedef enum { RUN, WAITING, SPEAKING, ASKING, FIGHTING, OFFERING } Suspend;
+typedef enum { RUN, WAITING, SPEAKING, ASKING, FIGHTING } Suspend;
 static struct {
     int number, pc, end, selected, wait, yes, locked, hide_hero;
     int64_t compare;
-    int dialog_age, reveal, stats, theme_frames, theme_period;
+    int dialog_age, reveal, theme_frames, theme_period;
     uint32_t flags;
     BattleResult outcome;
     Suspend suspended;
@@ -52,6 +53,29 @@ static char cookie_owner[640];
 static char unknown[UNKNOWN][64];
 static int unknown_count;
 static const Screen scene_screen;
+
+/* TIMER ids are bounded locally; COUNTDOWN survives scene/map transitions
+ * (quest.txt:1220-1235), measured exclusively by the game's fixed-step callback. */
+#define SCENE_TIMERS 256
+typedef struct { int length, remaining; } SceneTimer;
+static SceneTimer timers[SCENE_TIMERS], countdown;
+void scene_reset_timers(void)
+{
+    memset(timers,0,sizeof timers);
+    memset(&countdown,0,sizeof countdown);
+}
+void scene_tick(void)
+{
+    int i;
+    if(countdown.remaining>0) countdown.remaining--;
+    for(i=0;i<SCENE_TIMERS;i++) if(timers[i].remaining>0) timers[i].remaining--;
+}
+static int seconds_to_frames(const char *text)
+{
+    double seconds=strtod(text,NULL);
+    if(!(seconds>0)) return 0;
+    return seconds>=(double)INT_MAX/60 ? INT_MAX : (int)(seconds*60);
+}
 
 static int eq(const char *a, const char *b) { return text_casecmp(a,b)==0; }
 static void copy(char *out, size_t cap, const char *in)
@@ -80,12 +104,6 @@ static void unknown_op(const char *op)
     if(unknown_count<UNKNOWN) copy(unknown[unknown_count++],64,op);
     else return;
     wos_log_event("scene_unknown","op=%s",op);
-}
-static int inventory_count(int id)
-{
-    int i;
-    for(i=0;i<HERO_INVENTORY;i++) if(g_hero.inventory[i].item_id==id) return g_hero.inventory[i].count;
-    return 0;
 }
 static void cookie_path(char *out, size_t cap)
 {
@@ -146,10 +164,14 @@ static void cookie_set(const char *key,const char *value)
 static const char *cookie_get(const char *key,char *buf,size_t cap)
 {
     int i;
+    char lower[96];
+    for(i=0;key[i]&&i<(int)sizeof lower-1;i++) lower[i]=(char)tolower((unsigned char)key[i]);
+    lower[i]=0;
     int64_t n=0;
     if(eq(key,"str.name")||eq(key,"str.soul")) return g_hero.name;
     if(eq(key,"str.worldName")) return g_world.name;
     if(eq(key,"str.mapName") && g_hero.map>=0 && g_hero.map<WORLD_MAX_MAPS) return g_world.maps[g_hero.map].name;
+    if(eq(key,"lastAsk")) return vm.reply;
     if(eq(key,"num.mapNum")) n=g_hero.map;
     else if(eq(key,"num.mapFlags")||eq(key,"num.sceneMapFlags")) n=vm.flags;
     else if(eq(key,"num.hostClass")) n=g_hero.klass;
@@ -163,6 +185,15 @@ static const char *cookie_get(const char *key,char *buf,size_t cap)
     else if(eq(key,"num.hostX")) n=g_hero.x;
     else if(eq(key,"num.hostY")) n=g_hero.y;
     else if(eq(key,"g.num")) n=g_hero.gender;
+    else if(eq(key,"num.countDown")) n=countdown.remaining/60+(countdown.remaining%60!=0);
+    else if(!strncmp(lower,"num.timerleft",13)||!strncmp(lower,"num.timerlength",15)) {
+        int length=!strncmp(lower,"num.timerlength",15);
+        int id=number(lower+(length?15:13));
+        if(id>=0&&id<SCENE_TIMERS) {
+            int frames=length?timers[id].length:timers[id].remaining;
+            n=frames/60+(frames%60!=0);
+        }
+    }
     else {
         for(i=0;i<cookie_count;i++) if(eq(cookies[i].key,key)) return cookies[i].value;
         return "0";
@@ -257,6 +288,8 @@ static void theme(int id)
         if(eq(t[0],"+THEMES")) { inside=1;continue; }
         if(eq(t[0],"-THEMES")) break;
         if(inside && n>=3 && number(t[0])==id) {
+            const char *ext=strrchr(t[2],'.');
+            if(ext&&(eq(ext,".mid")||eq(ext,".midi"))) { game_music(t[2]);return; }
             if(asset_path(path,sizeof path,"sfx",t[2],".wav")) {
                 size_t off=12,data=0;unsigned rate=0;
                 vm.theme=text_read_file(path,&vm.theme_size);
@@ -298,13 +331,15 @@ static int atom(const char *s)
     if(eq(s,"LOSE")) return vm.outcome==BATTLE_LOST||vm.outcome==BATTLE_FLED;
     if(eq(s,"YES")) return vm.yes;
     if(eq(s,"NO")) return !vm.yes;
+    if(eq(s,"XP")) return countdown.remaining==0;
     switch(toupper((unsigned char)*s)) {
     case '#': return g_hero.map==id;
     case 'C': return g_hero.klass==id;
     case 'F': return (vm.flags&(uint32_t)id)!=0;
     case 'G': return g_hero.gold>=id;
-    case 'I': return inventory_count(id)>=count;
+    case 'I': return hero_item_count(&g_hero,id)>=count;
     case 'T': return id>=0&&id<HERO_TOKENS&&g_hero.tokens[id];
+    case 'S': return hero_spell_known(&g_hero,id);
     case 'V': return g_hero.level>=id;
     case 'R': return (int)rng_bounded(game_rng(),100)<id;
     case 'E':
@@ -332,28 +367,24 @@ static int condition(const char *s)
 }
 static void give(const char *arg,int take)
 {
-    int id=number(arg+1),count=1,i; const char *dot=strchr(arg,'.');
+    int id=number(arg+1),count=1; const char *dot=strchr(arg,'.');
     if(dot) count=number(dot+1);
     if(id<0||count<0) return;
     switch(toupper((unsigned char)*arg)) {
     case 'T': if(id<HERO_TOKENS) g_hero.tokens[id]=(unsigned char)!take;break;
-    case 'G':
-        if(take) g_hero.gold=g_hero.gold>id?g_hero.gold-id:0;
-        else if(g_hero.gold<=INT64_MAX-id) g_hero.gold+=id;
-        break;
+    case 'G': hero_add_gold(&g_hero,take?-(int64_t)id:id);break;
+    case 'P': hero_add_pp(&g_hero,take?-(int64_t)id:id);break;
+    case 'S': hero_set_spell(&g_hero,id,!take);break;
     case 'H': if(g_hero.hp>0) g_hero.hp=bounded_add(g_hero.hp,take?-id:id,g_hero.max_hp);break;
     case 'M': g_hero.mp=bounded_add(g_hero.mp,take?-id:id,g_hero.max_mp);break;
     /* Retail Evergreen uses GIVE L1 to resurrect (quest.txt:1625). */
     case 'L': if(id==1) { if(take) g_hero.hp=0;else if(g_hero.hp<=0) g_hero.hp=1; }break;
     case 'I':
-        if(!id||id>=WORLD_MAX_ITEMS||!g_world.items[id].used) break;
-        for(i=0;i<HERO_INVENTORY;i++) if(g_hero.inventory[i].item_id==id) break;
-        if(i==HERO_INVENTORY && !take) for(i=0;i<HERO_INVENTORY;i++) if(!g_hero.inventory[i].count) break;
-        if(i<HERO_INVENTORY) {
-            g_hero.inventory[i].item_id=id;
-            g_hero.inventory[i].count=bounded_add(g_hero.inventory[i].count,take?-count:count,INT_MAX);
-            if(!g_hero.inventory[i].count) g_hero.inventory[i].item_id=0;
-        }
+        if(take) {
+            int have=hero_item_count(&g_hero,id);
+            if(count>have) count=have;
+            if(count>0) hero_take_item(&g_hero,id,count);
+        } else hero_give_item(&g_hero,id,count);
         break;
     case 'Z': { char key[96],buf[64],val[64];int old;
         snprintf(key,sizeof key,"num.Trophy%d",id);old=number(cookie_get(key,buf,sizeof buf));
@@ -378,19 +409,26 @@ static int jump(const char *label)
 }
 static void offer(char t[][256],int n,int filtered)
 {
-    size_t used=0;int i,j;
-    vm.dialog[0]=0;
-    append(vm.dialog,sizeof vm.dialog,&used,"Available wares:\n");
-    for(i=1;i<WORLD_MAX_ITEMS;i++) {
-        const ItemDef *item=&g_world.items[i];int show=0;
-        if(!item->used) continue;
-        if(!filtered) { for(j=1;j<n;j++) if(number(t[j])==i) show=1; }
-        else for(j=1;j+1<n;j+=3) if(item->gp>0 && item->level>=number(t[j])&&item->level<=number(t[j+1]) && (j+2>=n||item->klass==number(t[j+2]))) show=1;
-        if(show) { char line[128];snprintf(line,sizeof line,"%s (%d gold)\n",item->name,item->gp);append(vm.dialog,sizeof vm.dialog,&used,line); }
-        if(used>650) { append(vm.dialog,sizeof vm.dialog,&used,"...\n");break; }
-    }
-    copy(vm.speaker,sizeof vm.speaker,"Shop - press Enter to close");
-    vm.reveal=(int)strlen(vm.dialog);vm.dialog_age=0;vm.suspended=OFFERING;
+    const char *args[ARGS];
+    int i;
+    for(i=1;i<n;i++) args[i-1]=t[i];
+    panel_open_shop(args,n-1,filtered);
+}
+static void arithmetic(const char *op,const char *key,const char *amount)
+{
+    char buf[64],value[64];
+    int64_t a=number(cookie_get(key,buf,sizeof buf)),b=number(amount),result=a;
+    if(eq(op,"ADD")) result=a+b;
+    else if(eq(op,"SUB")) result=a-b;
+    else if(eq(op,"MUL")) result=a*b;
+    else if(eq(op,"DIV")) {if(!b)return;result=a/b;}
+    else {if(!b)return;result=a%b;}
+    /* Cookies use signed integer arithmetic; avoid C signed-overflow UB. */
+    if(result>INT_MAX) result=INT_MAX;
+    if(result<INT_MIN) result=INT_MIN;
+    vm.compare=result;
+    snprintf(value,sizeof value,"%lld",(long long)result);
+    cookie_set(key,value);
 }
 static void step(void)
 {
@@ -426,10 +464,24 @@ static void step(void)
         copy(vm.title,sizeof vm.title,n>4?t[4]:vm.link.name);return;
     }
     if(eq(t[0],"THEME")) { theme(n>1?number(t[1]):0);return; }
-    if(eq(t[0],"MUSIC")) {
-        char path[640];
-        if(n<2||!t[1][0]) plat_music_stop();
-        else if(asset_path(path,sizeof path,"MIDI",t[1],".mid")) plat_music_play(path,1);
+    if(eq(t[0],"MUSIC")) {game_music(n>1?t[1]:NULL);return;}
+    if(eq(t[0],"BKGND")) {if(n>1)background(t[1]);return;}
+    if(eq(t[0],"WEATHER")||eq(t[0],"FX")) {
+        wos_log_event("scene_effect","op=%s value=%d visual=unsupported",t[0],n>1?number(t[1]):0);
+        return;
+    }
+    if(eq(t[0],"PARTY")) {
+        /* Offline host has no remote party members to eject. */
+        wos_log_event("scene_offline","op=PARTY");return;
+    }
+    if(eq(t[0],"COUNTDOWN")) {
+        countdown.length=countdown.remaining=n>1?seconds_to_frames(t[1]):0;
+        return;
+    }
+    if(eq(t[0],"TIMER")) {
+        int id=n>1?number(t[1]):-1;
+        if(id>=0&&id<SCENE_TIMERS&&n>2) timers[id].length=timers[id].remaining=seconds_to_frames(t[2]);
+        else wos_log_event("scene_error","op=TIMER reason=arguments");
         return;
     }
     if(eq(t[0],"SOUND")) { if(n>1) sound(t[1]);return; }
@@ -474,13 +526,18 @@ static void step(void)
         vm.suspended=ASKING;vm.yes=0;vm.reply[0]=0;vm.reveal=(int)strlen(vm.dialog);return;
     }
     if(eq(t[0],"FIGHT")||eq(t[0],"FIGHT2")) {
-        int ids[ARGS],count=0,difficulty=vm.link.difficulty;
+        int ids[ARGS],count=0,difficulty=vm.link.difficulty,distance_pct=20;
         for(i=1;i<n;i++) if(number(t[i])) ids[count++]=number(t[i]);
-        if(!count) count=game_take_pending_fight(ids,ARGS,&difficulty);
+        if(!count) count=game_take_pending_fight(ids,ARGS,&difficulty,&distance_pct);
         if(count<0) count=0;
-        battle_begin(ids,count,n>1&&count?0:difficulty);vm.suspended=FIGHTING;return;
+        battle_begin(ids,count,n>1&&count?0:difficulty,distance_pct);vm.suspended=FIGHTING;return;
     }
     if(eq(t[0],"SET")) { if(n>2) cookie_set(t[1],t[2]);return; }
+    if(eq(t[0],"ADD")||eq(t[0],"SUB")||eq(t[0],"MUL")||eq(t[0],"DIV")||eq(t[0],"MOD")||eq(t[0],"MODULUS")) {
+        if(n>2) arithmetic(t[0],t[1],t[2]);
+        return;
+    }
+    if(eq(t[0],"STRCMP")) {if(n>2)vm.compare=text_casecmp(t[1],t[2]);return;}
     if(eq(t[0],"COMPARE")) {
         int64_t d=n>2?(int64_t)number(t[1])-number(t[2]):0;
         vm.compare=d;return;
@@ -512,8 +569,8 @@ static void step(void)
         else jump(t[1]);
         return;
     }
-    if(eq(t[0],"GIVE")||eq(t[0],"TAKE")||eq(t[0],"HOST_GIVE")||eq(t[0],"HOST_TAKE")) {
-        int take=eq(t[0],"TAKE")||eq(t[0],"HOST_TAKE");
+    if(eq(t[0],"GIVE")||eq(t[0],"TAKE")||eq(t[0],"HOST_GIVE")||eq(t[0],"HOST_TAKE")||eq(t[0],"PARTY_GIVE")||eq(t[0],"PARTY_TAKE")) {
+        int take=eq(t[0],"TAKE")||eq(t[0],"HOST_TAKE")||eq(t[0],"PARTY_TAKE");
         for(i=1;i<n;i++)give(t[i],take);
         return;
     }
@@ -529,7 +586,7 @@ static int hit(const Input *in,Rect r)
 {
     return (in->mouse_pressed&(1u<<1)) && in->mouse_x>=r.x && in->mouse_y>=r.y && in->mouse_x<r.x+r.w && in->mouse_y<r.y+r.h;
 }
-static Rect button_rect(int i) { Rect r={415+i*51,8,48,48};return r; }
+static Rect button_rect(int i) { Rect r={415+(i%4)*51,8+(i/4)*51,48,48};return r; }
 static void actors_update(void)
 {
     int i;
@@ -544,9 +601,17 @@ static void actors_update(void)
 static void scene_update(const Input *in)
 {
     int advance=in->pressed[PLAT_KEY_RETURN]||in->pressed[PLAT_KEY_SPACE]||((in->mouse_pressed&((1u<<1)|(1u<<3)))&&in->mouse_x<364);
+    if(panel_active()) {panel_update(in);return;}
     actors_update();
     if(vm.theme_period>0&&--vm.theme_frames<=0) {plat_sound_play(vm.theme,vm.theme_size);vm.theme_frames=vm.theme_period;}
-    if(hit(in,button_rect(0)))vm.stats=!vm.stats;
+    if(hit(in,button_rect(0))) {panel_open(PANEL_STATS);return;}
+    if(hit(in,button_rect(4))) {panel_open(PANEL_ITEMS);return;}
+    if(hit(in,button_rect(5))) {
+        if(vm.suspended==FIGHTING) battle_open_spells();
+        else panel_open(PANEL_SPELLS);
+        return;
+    }
+    if(hit(in,button_rect(6))) {panel_open(PANEL_EQUIP);return;}
     if(vm.suspended==FIGHTING) {
         BattleResult result;
         if(hit(in,button_rect(3))) {Input flee=*in;flee.pressed[PLAT_KEY_ESCAPE]=1;result=battle_update(&flee);}
@@ -557,12 +622,12 @@ static void scene_update(const Input *in)
     if(in->pressed[PLAT_KEY_ESCAPE]||hit(in,button_rect(1))||hit(in,button_rect(3))) {finish();return;}
     if(hit(in,button_rect(2))) {hero_save(&g_hero);game_go_well();return;}
     if(vm.suspended==WAITING) {if(vm.wait>0)vm.wait--;else vm.suspended=RUN;return;}
-    if(vm.suspended==SPEAKING||vm.suspended==OFFERING) {
+    if(vm.suspended==SPEAKING) {
         int len=(int)strlen(vm.dialog);
         vm.dialog_age++;
         if(vm.reveal<len && vm.dialog_age%2==0)vm.reveal++; /* 30 chars/s, battle.md section 4. */
         if(advance) {if(vm.reveal<len)vm.reveal=len;else vm.suspended=RUN;}
-        else if(vm.suspended==SPEAKING&&vm.dialog_age>len*2+180)vm.suspended=RUN;
+        else if(vm.dialog_age>len*2+180)vm.suspended=RUN;
         return;
     }
     if(vm.suspended==ASKING) {
@@ -616,7 +681,7 @@ static void scene_render(Framebuffer *fb)
             Actor *a=&vm.actors[i];
             draw_actor(fb,&a->sheet,a->pose[a->frame],(int)((int64_t)a->x*364/25600),(int)((int64_t)a->y*416/25600));
         }
-        if(vm.suspended==SPEAKING||vm.suspended==ASKING||vm.suspended==OFFERING) {
+        if(vm.suspended==SPEAKING||vm.suspended==ASKING) {
             size_t len=strlen(vm.dialog),shown=vm.reveal<0?0:(size_t)vm.reveal;
             if(shown>len)shown=len;
             memcpy(buf,vm.dialog,shown);buf[shown]=0;
@@ -634,16 +699,15 @@ static void scene_render(Framebuffer *fb)
     draw_button(fb,button_rect(1),"Map",vm.suspended!=FIGHTING);
     draw_button(fb,button_rect(2),"Well",vm.suspended!=FIGHTING);
     draw_button(fb,button_rect(3),vm.suspended==FIGHTING?"Flee":"Exit",1);
-    fb_rect(fb,(Rect){364,70,256,256},0x718294);
-    if(g_hero.valid)sheet_draw(fb,&vm.hero,1,468-vm.hero.cell/2,285-vm.hero.cell,0);
-    font_wrap(fb,(Rect){376,82,232,32},g_hero.name,0xffe4a0);
+    draw_button(fb,button_rect(4),"Items",1);
+    draw_button(fb,button_rect(5),"Spell",1);
+    draw_button(fb,button_rect(6),"Equip",1);
+    fb_rect(fb,(Rect){364,114,256,256},0x718294);
+    if(g_hero.valid)sheet_draw(fb,&vm.hero,1,468-vm.hero.cell/2,350-vm.hero.cell,0);
+    font_wrap(fb,(Rect){376,126,232,24},g_hero.name,0xffe4a0);
     snprintf(buf,sizeof buf,"Level %d\nHP %d / %d\nMP %d / %d\nGold %lld",g_hero.level,g_hero.hp,g_hero.max_hp,g_hero.mp,g_hero.max_mp,(long long)g_hero.gold);
-    font_wrap(fb,(Rect){376,115,232,80},buf,0xffffff);
-    if(vm.stats) {
-        snprintf(buf,sizeof buf,"STR %d  WIS %d\nSTA %d  AGI %d  DEX %d",g_hero.ability[0],g_hero.ability[1],g_hero.ability[2],g_hero.ability[3],g_hero.ability[4]);
-        font_wrap(fb,(Rect){376,290,232,32},buf,0xffffff);
-    }
-    font_wrap(fb,(Rect){376,340,232,60},vm.title,0xc8d9e8);
+    font_wrap(fb,(Rect){376,153,232,80},buf,0xffffff);
+    font_wrap(fb,(Rect){376,380,232,24},vm.title,0xc8d9e8);
     if(vm.locked)font_draw(fb,376,400,"Scene locked",0xffc060);
     fb_fill(fb,(Rect){0,416,640,64},0x202c38);
     fb_fill(fb,(Rect){8,424,176,12},0x501010);
@@ -655,10 +719,16 @@ static void scene_render(Framebuffer *fb)
     snprintf(buf,sizeof buf,"MP %d/%d",g_hero.mp,g_hero.max_mp);
     font_draw(fb,200,426,buf,0xffffff);
     font_wrap(fb,(Rect){8,444,624,28},vm.suspended==FIGHTING?"Fight: choose an action, or Escape to flee.":"Click / Space / Enter: advance dialog. Escape: leave scene.",0xd5dce8);
+    if(countdown.remaining>0) {
+        snprintf(buf,sizeof buf,"Countdown: %d",countdown.remaining/60+(countdown.remaining%60!=0));
+        font_draw(fb,384,424,buf,0xffe4a0);
+    }
+    if(panel_active()) panel_render(fb);
 }
 static void scene_leave(void)
 {
     int i;
+    panel_close();
     image_free(&vm.background);sheet_free(&vm.hero);
     for(i=0;i<ACTORS;i++)sheet_free(&vm.actors[i].sheet);
     free(vm.theme);vm.theme=NULL;vm.theme_size=0;

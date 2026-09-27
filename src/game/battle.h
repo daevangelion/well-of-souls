@@ -17,8 +17,11 @@ typedef enum {
 
 /* Begin a fight against monsters.txt ids (negative id = ally, FIGHT 1,2,-4 syntax).
  * count == 0: pick from groups.txt using `difficulty` (FUN_0049099b), else the map .mon list.
- * Emits `battle_start monsters=<n>`. */
-void battle_begin(const int *monster_ids, int count, int difficulty);
+ * distance_pct is the map's clamped/sign-adjusted per-member inclusion probability.
+ * Emits `battle_start monsters=<n> distance=<pct>`. */
+void battle_begin(const int *monster_ids, int count, int difficulty, int distance_pct);
+/* Open the in-fight known-spell chooser (also bound to S). */
+void battle_open_spells(void);
 /* Advance one 60 Hz step. Returns BATTLE_RUNNING until resolved; on win emits
  * `battle_won xp=<n> gold=<n>` and applies rewards to g_hero. */
 BattleResult battle_update(const Input *input);

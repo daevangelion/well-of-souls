@@ -68,6 +68,15 @@ void plat_music_stop(void)
 #endif
 }
 
+int plat_music_playing(void)
+{
+#ifdef WOS_HAVE_SDL_MIXER
+    return audio_ready && Mix_PlayingMusic();
+#else
+    return 0;
+#endif
+}
+
 void wos_audio_shutdown(void)
 {
     int i;

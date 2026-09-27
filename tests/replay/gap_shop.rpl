@@ -1,0 +1,48 @@
+# seed: 1
+# requires: shop_buy shop_sell
+# Enter the Gateway of Dreams, agree to the Soul Brother, and trade.
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+key n
+wait 5
+text Trader
+key RETURN
+expect hero_ready 300
+expect map_enter 600
+keydown DOWN
+expect scene_enter 180
+keyup DOWN
+wait 20
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 5
+key y
+wait 5
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+expect panel_open 180
+key b
+expect shop_buy 60
+key TAB
+key s
+expect shop_sell 60
+shot /tmp/wos-gap-shop.bmp
+key ESCAPE
+quit

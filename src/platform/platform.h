@@ -65,7 +65,7 @@ int plat_poll_event(PlatEvent *ev);
 /* Text entry: enable while a text field has focus (shows the on-screen keyboard on touch devices). */
 void plat_text_input(int enable);
 
-/* Video: present a w*h framebuffer of 0x00RRGGBB pixels, scaled to the window. */
+/* Video: present a w*h framebuffer of 0x00RRGGBB pixels, letterboxed with aspect preserved. */
 void plat_present(const uint32_t *pixels, int w, int h);
 
 /* Time. */
@@ -86,5 +86,6 @@ int   plat_list_dir(const char *path, void (*cb)(const char *name, int is_dir, v
 void plat_sound_play(const void *wav, size_t len);
 void plat_music_play(const char *midi_path, int loop);
 void plat_music_stop(void);
+int plat_music_playing(void);
 
 #endif

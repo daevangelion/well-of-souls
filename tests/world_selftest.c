@@ -1,6 +1,7 @@
 /* Standalone retail-data smoke driver; not linked into wos. */
 #include "game/world.h"
 #include "engine/fb.h"
+#include "platform/platform.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,13 +50,128 @@ static void check_sheet(const char *name, int skin)
         int side=sheet.cell/3;
         fb_clear(&fb,0x123456); sheet_draw_map_dir(&fb,&sheet,dir,0,0);
         for(y=0;y<side;++y) for(x=0;x<side;++x) {
-            uint32_t source=sheet.image.pixels[(size_t)(y+(dir/3)*side)*sheet.image.w+x+(dir%3)*side];
-            assert(pixels[(size_t)y*sheet.cell+x]==(source==sheet.key?0x123456:source));
+            uint32_t expected=0x123456;
+            if(x<side-2 && y<side-2) {
+                uint32_t source=sheet.image.pixels[(size_t)(y+(dir/3)*side+1)*sheet.image.w+x+(dir%3)*side+1];
+                if(source!=sheet.key) expected=source;
+            }
+            assert(pixels[(size_t)y*sheet.cell+x]==expected);
         }
     }
     printf("sheet %s %dx%d cell=%d frames=%d key=%06lx draw=OK\n",name,sheet.image.w,sheet.image.h,
            sheet.cell,sheet.count,(unsigned long)sheet.key);
     free(pixels); sheet_free(&sheet);
+}
+
+static void check_gap_tables(void)
+{
+    int i,trophies=0;
+    const SpellDef *s=&g_world.spells[1];
+    const ClassDef *c=&g_world.classes[9];
+    assert(s->pp_cost==250 && s->mp_cost==2 && s->damage==30 && s->effects_row==63);
+    assert(g_world.spells[3].damage==-11 && g_world.spells[3].pp_cost==562);
+    assert(g_world.spells[6].all_targets && g_world.spells[6].req_affinity==5);
+    assert(g_world.spells[5].weather==1055 && g_world.spells[7].effects==3);
+    assert(g_world.spells[8].pp_cost==-1 && g_world.spells[78].flags==2);
+    assert(g_world.items[1].find_probability==80 && !strcmp(g_world.items[1].sound,"petGulp.wav"));
+    assert(g_world.items[3].ability_points==-2 && g_world.items[8].ability_points==5);
+    assert(g_world.items[97].travel_map_scene==5 && g_world.items[97].travel_link==11 && g_world.items[97].travel_drop_in==1);
+    assert(!strcmp(g_world.items[96].sound,"http://www.synthetic-reality.com/wosquest.htm"));
+    assert(c->magic_ratio==45 && c->hand_ratio==45 && c->no_gifts);
+    for(i=0;i<5;++i) assert(c->max_ability[i]==100);
+    for(i=0;i<8;++i) assert(c->start_hand_pp[i]==1000 && c->max_hand_pp[i]==5000);
+    assert(g_world.classes[1].start_ability_set && g_world.classes[1].max_element_pp[0]==5000000);
+    assert(!strcmp(g_world.elements[5].name,"Fire") && !strcmp(g_world.elements[7].name,"Air"));
+    assert(!strcmp(g_world.hands[0].name,"Sword") && g_world.hands[0].damage_weight==22);
+    assert(g_world.hands[2].damage_weight==50 && !strcmp(g_world.hands[2].sound,"sword8.wav"));
+    assert(g_world.trophies[1].monster_first[0]==1 && g_world.trophies[1].probability==80);
+    assert(g_world.trophies[1000].stack_size==99 && g_world.trophies[1014].flags==8);
+    for(i=0;i<WORLD_MAX_TROPHIES;++i) trophies+=g_world.trophies[i].used!=0;
+    assert(!strcmp(world_music("rustrock","fight"),"ahad_glasse~1"));
+    assert(!strcmp(world_music("evergreen","victory"),"orbwon.mid"));
+    assert(!strcmp(world_music("missing-map","midi1"),"scrn_overworld"));
+    assert(!strcmp(world_music("INFERNO","MIDI3"),"desert sin") && world_music_count("inferno")==3);
+    assert(!*world_music("evergreen","levelup") && g_world.max_unspent_pp==100000);
+    printf("gap tables: Dirt pp=%d mp=%d damage=%d; item1 find=80; class9 caps=100/5000; trophies=%d; music inferno=3/common victory=orbwon.mid; PP cap=100000\n",
+           s->pp_cost,s->mp_cost,s->damage,trophies);
+}
+
+static void check_art(const char *name, int cell_w, int cell_h)
+{
+    Sheet sheet={0};
+    Framebuffer fb;
+    uint32_t pixels[48*64];
+    int x,y,columns,index;
+    assert(sheet_load_art(&sheet,name,cell_w,cell_h)==0);
+    assert(sheet.cell==cell_w && sheet.cell_h==cell_h);
+    columns=sheet.image.w/cell_w;
+    index=sheet.count>columns?columns:sheet.count-1;
+    fb_init(&fb,pixels,cell_w,cell_h); fb_clear(&fb,0x123456);
+    sheet_draw(&fb,&sheet,index,0,0,0);
+    for(y=0;y<cell_h;++y) for(x=0;x<cell_w;++x) {
+        uint32_t source=sheet.image.pixels[(size_t)(index/columns*cell_h+y)*sheet.image.w+(index%columns)*cell_w+x];
+        assert(pixels[y*cell_w+x]==(source==sheet.key?0x123456:source));
+    }
+    assert(sheet_load_art(&sheet,name,0,cell_h)==-1 && sheet.cell==cell_w);
+    printf("art %s %dx%d cell=%dx%d frames=%d row-major draw=OK\n",name,sheet.image.w,sheet.image.h,cell_w,cell_h,sheet.count);
+    sheet_free(&sheet);
+}
+
+static void fixture_file(const char *dir, const char *name, const char *contents)
+{
+    char path[1024];
+    FILE *f;
+    assert(snprintf(path,sizeof(path),"%s/%s",dir,name)>0);
+    f=plat_fopen(path,"wb"); assert(f);
+    assert(fwrite(contents,1,strlen(contents),f)==strlen(contents));
+    assert(fclose(f)==0);
+}
+
+/* Optional argv[2] is a caller-owned temporary root, never the retail directory. */
+static void check_parser_edges(const char *root)
+{
+    char dir[1024];
+    const ItemDef *item;
+    const SpellDef *spell;
+    assert(plat_mkdir(root)==0);
+    assert(snprintf(dir,sizeof(dir),"%s/worlds",root)>0 && plat_mkdir(dir)==0);
+    assert(snprintf(dir,sizeof(dir),"%s/worlds/ParserEdges",root)>0 && plat_mkdir(dir)==0);
+    fixture_file(dir,"quest.txt",
+        "+ITEMS\n1 Boots 20 +3 50 7.9.1.4.10.11.0.3 12 258 -7 900 1 2 99 80.24 \"test item\" \"s.wav\" 4.220.90.2.3\n-ITEMS\n"
+        "+SPELLS\n0 Scale 50 0 200 150 0\n"
+        "1 Test 0 3 0 0 102.5.6.7.8.9.0.3 123 2 4 2000 50 2003004.5.6 1 summon.wav travel.wav strike.wav 4.5\n"
+        "2 Heal -1 0 0 4 0\n-SPELLS\n"
+        "+LEVELS\n100 0 20 0 Test 10 1\nMAX_ABILITY 999 9 8 7 6\nSTART_ELEMENT_PP 1 2 3 4 5 6 7 8\n"
+        "MAX_ELEMENT_PP 10 20 30 40 50 60 70 80\nSTART_HAND_PP 8 7 6 5 4 3 2 1\n"
+        "MAX_HAND_PP 80 70 60 50 40 30 20 10\nSTART_SPELLS 1 2\nSTART_TOKENS 7 8\n"
+        "START_ITEMS 1\nNO_GIFTS\nHAND_RATIO 0\nHIDDEN_CLASS 120\n101 0 1 0 Learner\n-LEVELS\n"
+        "+ELEMENTS\n255 Chaos\n-ELEMENTS\n+HANDS\n0 Sword 200 sword.wav\n-HANDS\n"
+        "+TROPHIES\n1 Test trophy 2 200 5 1.3-5.9 80 7 8\n-TROPHIES\n");
+    fixture_file(dir,"music.ini","[common]\nfight=common\nnumMidi=2\nmidi1=one\n[place]\nfight=\nnumMidi=0\n");
+    assert(world_load(root,"ParserEdges")==0);
+    item=&g_world.items[1]; spell=&g_world.spells[1];
+    assert(item->image_ext==1 && item->movement==12 && item->element==2);
+    assert(item->defense==-7 && item->attack==255 && item->ability_points==20);
+    assert(item->find_probability==80 && item->find_monster==24 && item->equip_token==9 && item->flags==1);
+    assert(item->max_count==4 && item->trophy_count_needed==1 && item->trophy_count_made==3);
+    assert(item->attack_image==199 && item->attack_flags==63);
+    assert(spell->all_targets && spell->flags==5 && spell->min_level==6 && spell->token==7);
+    assert(spell->mp_cost==7 && spell->pp_cost==562 && spell->damage==100);
+    assert(spell->trophy_needed==8 && spell->trophy_made==9 && spell->trophy_count_needed==1);
+    assert(spell->gravity==4 && spell->effects==5 && spell->weather==6 && spell->max_fx==1023);
+    assert(!strcmp(spell->sfx_strike,"strike.wav") && spell->extra[1]==5);
+    assert(g_world.spells[2].damage==0 && g_world.spells[2].pp_cost==-1);
+    assert(g_world.classes[1].max_ability[0]==255 && g_world.classes[1].start_element_pp[7]==8);
+    assert(g_world.classes[1].max_element_pp[7]==80 && g_world.classes[1].max_hand_pp[7]==10);
+    assert(g_world.classes[1].start_spell_count==2 && g_world.classes[1].start_tokens[1]==8);
+    assert(g_world.classes[1].hidden_start_level==100 && g_world.classes[1].hand_ratio==0);
+    assert(g_world.hands[0].damage_weight==50 && g_world.trophies[1].stack_size==99);
+    assert(g_world.trophies[1].monster_range_count==3 && g_world.trophies[1].monster_last[1]==5);
+    assert(!*world_music("place","fight") && world_music_count("place")==0);
+    assert(!strcmp(world_music("other","fight"),"common") && world_music_count("other")==2);
+    world_free();
+    assert(!*world_music("other","fight"));
+    puts("parser edges: dotted costs/caps/negative values/ranges/empty music overrides PASS");
 }
 
 int main(int argc, char **argv)
@@ -65,6 +181,11 @@ int main(int argc, char **argv)
     static const int scene_ids[]={0,2,3};
     check_tokenizer();
     assert(world_load(argc>1?argv[1]:"extracted","Evergreen")==0);
+    check_gap_tables();
+    check_art("items",48,64);
+    check_art("buttonBar.bmp",48,48);
+    check_art("attack00",48,48);
+    check_art("effects00",48,48);
     for(i=0;i<WORLD_MAX_MAPS;++i) maps+=g_world.maps[i].used!=0;
     for(i=0;i<WORLD_MAX_MONSTERS;++i) monsters+=g_world.monsters[i].used!=0;
     for(i=0;i<WORLD_MAX_GROUPS;++i) groups+=g_world.groups[i].used!=0;
@@ -127,6 +248,7 @@ int main(int argc, char **argv)
     for(i=0;i<map.terrain.w*map.terrain.h;++i) assert(map.terrain.indices[i]==0);
     printf("map 13 missing terrain=%dx%d clear=OK\n",map.terrain.w,map.terrain.h);
     map_free(&map); world_free();
+    if(argc>2) check_parser_edges(argv[2]);
     puts("world_selftest: PASS");
     return 0;
 }

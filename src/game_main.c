@@ -5,6 +5,7 @@
 #include "engine/rng.h"
 #include "engine/screen.h"
 #include "engine/text.h"
+#include "game/scene.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -114,6 +115,7 @@ int game_main(int argc,char **argv)
             for(j=0;j<n;++j) input_event(&input,&events[j]);
         }
         if(capped && frame>=max_frames) { result=3; break; }
+        scene_tick(); /* global quest TIMER/COUNTDOWN clock, independent of the current screen */
         screen=screen_current(); if(screen && screen->update) screen->update(&input);
         fb_reset_clip(&fb); fb_clear(&fb,0);
         screen=screen_current(); if(screen && screen->render) screen->render(&fb);

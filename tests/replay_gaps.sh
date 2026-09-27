@@ -3,6 +3,7 @@
 # Each replay declares in its header:
 #   # seed: N                      (default 1)
 #   # requires: evt1 evt2 ...     (each must appear as "EVT <name>" in the log)
+#   # requires-match: REGEX       (repeatable; some log line must match "^EVT REGEX", grep -E)
 # A replay passes when wos exits 0 (all `expect`s met) and every required event was logged.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -33,12 +34,20 @@ for rpl in "$root"/tests/replay/gap_*.rpl; do
     for ev in $requires; do
         grep -q "^EVT $ev\b" "$work/$name/events.log" || missing="$missing $ev"
     done
+    patterns=$(sed -n 's/^# requires-match: *//p' "$rpl")
+    if [ -n "$patterns" ]; then
+        while IFS= read -r pat; do
+            grep -Eq "^EVT $pat" "$work/$name/events.log" || missing="$missing [$pat]"
+        done <<EOF
+$patterns
+EOF
+    fi
     if [ "$status" -ne 0 ] || [ -n "$missing" ]; then
         echo "FAIL $name: exit=$status missing:${missing:- none}"
         tail -n 5 "$work/$name/stdout.log"
         fail=1
     else
-        echo "PASS $name: $requires"
+        echo "PASS $name: $requires $patterns" | tr '\n' ' '; echo
     fi
 done
 [ "$count" -gt 0 ] || { echo "FAIL: no gap replays"; exit 1; }

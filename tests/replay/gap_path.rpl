@@ -1,0 +1,20 @@
+# seed: 1
+# requires: boot_menu hero_ready map_enter path_found hero_move
+# Evergreen spawn (179,202); click (226,192) targets map (190,198).
+# Direct walking hits the shoreline. Detour goes via (190,202), then north.
+# Expected: path_found nodes=3 x=190 y=198; hero_move x=190 y=198.
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+key n
+wait 5
+text PathWalker
+key RETURN
+expect hero_ready 300
+expect map_enter 600
+click 226 192
+expect path_found 60
+expect hero_move 180
+quit

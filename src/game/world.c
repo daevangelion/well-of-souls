@@ -18,6 +18,8 @@
 
 World g_world;
 static char data_root[512];
+static Ini music_ini;
+static char *music_text;
 
 static void copy_string(char *dst, size_t cap, const char *src)
 {
@@ -87,6 +89,12 @@ static int dotted(const char *s, int part)
     return number(s);
 }
 static int arg(char t[][256], int n, int i) { return i < n ? number(t[i]) : 0; }
+
+static int clamp(int value, int low, int high)
+{ return value < low ? low : value > high ? high : value; }
+
+static int dotarg(char t[][256], int n, int arg_index, int part)
+{ return arg_index < n ? dotted(t[arg_index],part) : 0; }
 
 static int append_line(char **text, size_t *size, size_t *capacity, const char *line)
 {
@@ -158,8 +166,12 @@ static int parse_levels(char t[][256], int n, int *current)
         if (!level) {
             c->used = 1; *current = id;
             copy_string(c->name,sizeof(c->name),l->name);
-            c->magic_ratio = arg(t,n,5); c->right_hand = arg(t,n,6);
+            c->magic_ratio = clamp(arg(t,n,5),0,100); c->right_hand = arg(t,n,6);
+            c->hand_ratio = 100-c->magic_ratio;
             c->max_wallet = -1;
+            for(i=0;i<5;++i) c->max_ability[i]=255;
+            /* FUN_00483984 defaults, not the smaller example caps in levels.txt. */
+            for(i=0;i<8;++i) c->max_element_pp[i]=c->max_hand_pp[i]=5000000;
         }
         return 0;
     }
@@ -172,7 +184,18 @@ static int parse_levels(char t[][256], int n, int *current)
         for (i=0;i<5;++i) c->auto_max[i]=number(t[i+1]);
         c->auto_max_set=1;
     } else if (!text_casecmp(t[0],"START_ABILITY")) {
-        for (i=0;i<5;++i) c->start_ability[i]=arg(t,n,i+1);
+        c->start_ability_set=1;
+        for (i=0;i<5;++i) c->start_ability[i]=clamp(arg(t,n,i+1),0,255);
+    } else if (!text_casecmp(t[0],"MAX_ABILITY")) {
+        for(i=0;i<5;++i) c->max_ability[i]=clamp(arg(t,n,i+1),0,255);
+    } else if (!text_casecmp(t[0],"START_ELEMENT_PP")) {
+        for(i=0;i<8;++i) c->start_element_pp[i]=arg(t,n,i+1);
+    } else if (!text_casecmp(t[0],"MAX_ELEMENT_PP")) {
+        for(i=0;i<8;++i) c->max_element_pp[i]=arg(t,n,i+1);
+    } else if (!text_casecmp(t[0],"START_HAND_PP")) {
+        for(i=0;i<8;++i) c->start_hand_pp[i]=arg(t,n,i+1);
+    } else if (!text_casecmp(t[0],"MAX_HAND_PP")) {
+        for(i=0;i<8;++i) c->max_hand_pp[i]=arg(t,n,i+1);
     } else if (!text_casecmp(t[0],"START_LOCATION")) {
         if (n<3) return -1;
         c->start_map=arg(t,n,1); c->start_link=arg(t,n,2); c->start_drop_in=arg(t,n,3);
@@ -181,9 +204,19 @@ static int parse_levels(char t[][256], int n, int *current)
         for (i=0;i<4 && i+1<n;++i) copy_string(c->default_skin[i],sizeof(c->default_skin[i]),t[i+1]);
     } else if (!text_casecmp(t[0],"START_ITEMS")) {
         c->start_item_count=0;
-        for (i=1;i<n && i<=8;++i) c->start_items[c->start_item_count++]=number(t[i]);
-    } else if (!text_casecmp(t[0],"MAGIC_RATIO")) c->magic_ratio=arg(t,n,1);
-    else if (!text_casecmp(t[0],"HIDDEN_CLASS")) c->hidden=1;
+        for (i=1;i<n && i<=8;++i) c->start_items[c->start_item_count++]=clamp(number(t[i]),0,WORLD_MAX_ITEMS-1);
+    } else if (!text_casecmp(t[0],"START_SPELLS")) {
+        c->start_spell_count=0;
+        for(i=1;i<n && i<=8;++i) c->start_spells[c->start_spell_count++]=clamp(number(t[i]),0,WORLD_MAX_SPELLS-1);
+    } else if (!text_casecmp(t[0],"START_TOKENS")) {
+        c->start_token_count=0;
+        for(i=1;i<n && i<=8;++i) c->start_tokens[c->start_token_count++]=clamp(number(t[i]),0,4095);
+    } else if (!text_casecmp(t[0],"MAGIC_RATIO")) c->magic_ratio=clamp(arg(t,n,1),0,100);
+    else if (!text_casecmp(t[0],"HAND_RATIO")) c->hand_ratio=clamp(arg(t,n,1),0,100);
+    else if (!text_casecmp(t[0],"NO_GIFTS")) c->no_gifts=1;
+    else if (!text_casecmp(t[0],"HIDDEN_CLASS")) {
+        c->hidden=1; c->hidden_start_level=clamp(arg(t,n,1),0,100);
+    }
     else if (!text_casecmp(t[0],"MAX_WALLET")) {
         c->max_wallet=arg(t,n,1); if(c->max_wallet<1) c->max_wallet=-1;
     }
@@ -249,18 +282,100 @@ static int parse_row(int section, char t[][256], int n, int *current_class)
     }
     case SEC_ITEMS: {
         ItemDef *v;
-        if(id>=WORLD_MAX_ITEMS || n<6) return -1;
+        if(id>=WORLD_MAX_ITEMS || n<15) return -1;
         v=&g_world.items[id]; v->used=1; copy_string(v->name,sizeof(v->name),t[1]);
-        v->klass=arg(t,n,2); v->image=dotted(t[3],0); v->image_ext=dotted(t[3],1);
-        v->gp=arg(t,n,4); v->level=arg(t,n,5); v->movement=n>6?dotted(t[6],1):0;
-        v->element=arg(t,n,7); v->defense=arg(t,n,8); v->attack=arg(t,n,9);
-        v->hp=arg(t,n,10); v->mp=arg(t,n,11); break;
+        v->klass=arg(t,n,2); v->image=dotted(t[3],0);
+        v->image_ext=t[3][0]=='+'?1:dotted(t[3],1);
+        v->gp=arg(t,n,4); v->level=arg(t,n,5);
+        v->equip_token=clamp(dotted(t[5],1),0,INT_MAX);
+        v->flags=dotted(t[5],2); v->max_count=dotted(t[5],3);
+        v->trophy_needed=dotted(t[5],4); v->trophy_made=dotted(t[5],5);
+        /* FUN_00482fc1: <2 becomes ONE, not two as the RE prose claimed. */
+        v->trophy_count_needed=clamp(dotted(t[5],6),1,INT_MAX);
+        v->trophy_count_made=clamp(dotted(t[5],7),1,INT_MAX);
+        v->spell_binding=arg(t,n,6); v->movement=dotted(t[6],1);
+        if(v->klass==20 && !v->movement) v->movement=v->spell_binding;
+        v->element=arg(t,n,7)&255;
+        v->defense=clamp(arg(t,n,8),INT_MIN,255); v->attack=clamp(arg(t,n,9),INT_MIN,255);
+        v->hp=arg(t,n,10); v->mp=arg(t,n,11);
+        /* The 20 ceiling applies to arg12 (ability), NOT arg13 (find probability). */
+        v->ability_points=clamp(arg(t,n,12),INT_MIN,20);
+        v->find_probability=arg(t,n,13); v->find_monster=dotted(t[13],1);
+        copy_string(v->description,sizeof(v->description),t[14]);
+        if(n>15) copy_string(v->sound,sizeof(v->sound),t[15]);
+        v->attack_path=clamp(arg(t,n,16),-1,63);
+        v->attack_image=clamp(dotarg(t,n,16,1),0,199);
+        v->attack_flags=clamp(dotarg(t,n,16,2),0,63);
+        v->attack_weather=clamp(dotarg(t,n,16,3),0,63);
+        v->attack_effect=clamp(dotarg(t,n,16,4),0,63);
+        if(v->klass==4) {
+            v->travel_mode=dotted(t[2],1); v->travel_map_scene=dotted(t[2],2);
+            v->travel_link=dotted(t[2],3); v->travel_drop_in=dotted(t[2],4);
+            v->travel_scene=dotted(t[2],5);
+        }
+        break;
     }
     case SEC_SPELLS: {
         SpellDef *v;
-        if(id>=WORLD_MAX_SPELLS || n<5) return -1;
+        int affinity, packed;
+        if(id>=WORLD_MAX_SPELLS || n<7) return -1;
         v=&g_world.spells[id]; v->used=1; copy_string(v->name,sizeof(v->name),t[1]);
-        v->pp_cost=arg(t,n,2); v->element=arg(t,n,3); v->damage=arg(t,n,4); break;
+        v->pp_cost=arg(t,n,2); v->element=arg(t,n,3); v->damage=arg(t,n,4);
+        v->summon_id=dotted(t[4],1); v->mp_cost=arg(t,n,5);
+        affinity=arg(t,n,6); v->req_affinity=affinity%100; v->all_targets=affinity>99;
+        v->flags=dotted(t[6],1); v->min_level=dotted(t[6],2); v->token=dotted(t[6],3);
+        v->trophy_needed=dotted(t[6],4); v->trophy_made=dotted(t[6],5);
+        v->trophy_count_needed=clamp(dotted(t[6],6),1,INT_MAX);
+        v->trophy_count_made=clamp(dotted(t[6],7),1,INT_MAX);
+        v->path=arg(t,n,7); v->effects_row=arg(t,n,8);
+        v->max_cols=n>9?arg(t,n,9):16; v->max_fx=n>10?arg(t,n,10):32;
+        if(v->max_fx<0 || v->max_fx>1023) v->max_fx=1023;
+        v->ms_per_col=n>11?arg(t,n,11):100;
+        packed=arg(t,n,12); v->gravity=packed%1000;
+        v->effects=(packed%1000000)/1000; v->weather=(packed%1000000000)/1000000;
+        if(dotarg(t,n,12,1)>0) v->effects=dotarg(t,n,12,1);
+        if(dotarg(t,n,12,2)>0) v->weather=dotarg(t,n,12,2);
+        v->loop=arg(t,n,13);
+        if(n>14) copy_string(v->sfx_summon,sizeof(v->sfx_summon),t[14]);
+        if(n>15) copy_string(v->sfx_travel,sizeof(v->sfx_travel),t[15]);
+        if(n>16) copy_string(v->sfx_strike,sizeof(v->sfx_strike),t[16]);
+        v->extra[0]=dotarg(t,n,17,0); v->extra[1]=dotarg(t,n,17,1);
+        break;
+    }
+    case SEC_ELEMENTS: {
+        ElementDef *v;
+        if(id>=WORLD_MAX_ELEMENTS || n<2) return -1;
+        v=&g_world.elements[id]; v->used=1;
+        copy_string(v->name,sizeof(v->name),t[1]); break;
+    }
+    case SEC_HANDS: {
+        HandDef *v;
+        if(id>=WORLD_MAX_HANDS || n<2) return -1;
+        v=&g_world.hands[id]; v->used=1;
+        copy_string(v->name,sizeof(v->name),t[1]);
+        v->strength_percent=n>2?clamp(arg(t,n,2),0,100):50;
+        v->damage_weight=v->strength_percent*40/100+10;
+        if(n>3) copy_string(v->sound,sizeof(v->sound),t[3]);
+        break;
+    }
+    case SEC_TROPHIES: {
+        TrophyDef *v;
+        const char *part;
+        if(id>=WORLD_MAX_TROPHIES || n<8) return -1;
+        v=&g_world.trophies[id]; v->used=1;
+        copy_string(v->name,sizeof(v->name),t[1]); copy_string(v->image,sizeof(v->image),t[2]);
+        v->image_index=arg(t,n,3); v->stack_size=clamp(arg(t,n,4),0,99); v->gp=arg(t,n,5);
+        v->probability=arg(t,n,7); v->token=arg(t,n,8); v->flags=arg(t,n,9);
+        part=t[6];
+        while(*part && v->monster_range_count<TROPHY_MAX_RANGES) {
+            const char *end=strchr(part,'.'), *dash=strchr(part,'-');
+            int r=v->monster_range_count++;
+            v->monster_first[r]=number(part);
+            v->monster_last[r]=dash && (!end || dash<end)?number(dash+1):v->monster_first[r];
+            if(!end) break;
+            part=end+1;
+        }
+        break;
     }
     default: break;
     }
@@ -290,7 +405,8 @@ static int parse_world(void)
             }
             continue;
         }
-        if(active<0 || active>SEC_SCENES) continue;
+        if(active<0 || (active>SEC_SCENES && active!=SEC_ELEMENTS &&
+           active!=SEC_HANDS && active!=SEC_TROPHIES)) continue;
         if(active==SEC_SCENES) {
             /* Dialogue may exceed a token: only SCENE declarations need lexing. */
             if(strlen(p)<5 || toupper((unsigned char)p[0])!='S' ||
@@ -317,7 +433,52 @@ static int parse_world(void)
 void world_free(void)
 {
     free(g_world.lines); free(g_world.text);
+    free(music_text); music_text=NULL; memset(&music_ini,0,sizeof(music_ini));
     memset(&g_world,0,sizeof(g_world)); data_root[0]=0;
+}
+
+const char *world_music(const char *root, const char *key)
+{
+    const char *fallback;
+    if(!key) return "";
+    fallback=ini_get(&music_ini,"common",key,"");
+    return root && *root?ini_get(&music_ini,root,key,fallback):fallback;
+}
+
+int world_music_count(const char *root)
+{
+    return clamp(number(world_music(root,"numMidi")),0,INI_MAX_ENTRIES);
+}
+
+/* The x86 integer loop at 0x480274 is absent from Ghidra's pseudocode. */
+static int scaled(int value, int percent, int divisor)
+{
+    int64_t result=(int64_t)value*percent/divisor;
+    return result>INT_MAX?INT_MAX:result<INT_MIN?INT_MIN:(int)result;
+}
+
+static int spell_auto(int value, int percent)
+{
+    if(percent>=1 && percent<=500) value=scaled(value,percent,100);
+    return value<1?1:value;
+}
+
+static void complete_spells(void)
+{
+    int id;
+    const SpellDef *zero=&g_world.spells[0];
+    for(id=1;id<WORLD_MAX_SPELLS;++id) {
+        SpellDef *s=&g_world.spells[id];
+        int mp=200, pp=5000, damage=3000, level;
+        if(!s->used) continue;
+        for(level=0;level<s->req_affinity;++level) {
+            mp=scaled(mp,145,100); pp=scaled(pp,150,100); damage=scaled(damage,130,100);
+        }
+        if(s->all_targets) { mp=scaled(mp,120,100); pp=scaled(pp,200,100); }
+        if(!s->mp_cost) s->mp_cost=spell_auto(mp/100,zero->mp_cost);
+        if(!s->pp_cost) s->pp_cost=spell_auto(pp/20,zero->pp_cost);
+        if(!s->damage && s->element) s->damage=spell_auto(damage/100,zero->damage);
+    }
 }
 
 int world_load(const char *data_dir, const char *name)
@@ -340,14 +501,20 @@ int world_load(const char *data_dir, const char *name)
     g_world.line_count=count; p=g_world.text;
     for(n=0;n<count;++n) { g_world.lines[n]=p; p+=strlen(p)+1; }
     if(parse_world()) goto fail;
+    complete_spells();
     g_world.starting_gp=500;
     if(!world_path(path,sizeof(path),"config.ini")) goto fail;
+    g_world.max_unspent_pp=1000000;
     config=text_read_file(path,NULL);
     if(config) {
         if(ini_parse(&ini,config)) { free(config); goto fail; }
         g_world.starting_gp=number(ini_get(&ini,"General","startingGP","500"));
+        g_world.max_unspent_pp=clamp(number(ini_get(&ini,"General","maxUnspentPP","1000000")),0,INT_MAX);
         free(config);
     }
+    if(!world_path(path,sizeof(path),"music.ini")) goto fail;
+    music_text=text_read_file(path,NULL);
+    if(music_text && ini_parse(&music_ini,music_text)) goto fail;
     return 0;
 fail:
     fprintf(stderr,"world: cannot load %s\n",name);
@@ -492,7 +659,7 @@ static int load_sheet(Sheet *out, const char *path, int skin)
     int x,y,end;
     unsigned char key_index=0;
     if(image_load(&s.image,path)) return -1;
-    s.cell=s.image.h; s.count=s.image.w/s.cell;
+    s.cell=s.cell_h=s.image.h; s.count=s.image.w/s.cell;
     /* FUN_0048df3c floors width/height; Adventurer has a trailing separator. */
     if(!s.count || (skin && (s.cell<=35 || s.count<5))) {
         sheet_free(&s); return -1;
@@ -528,11 +695,38 @@ int sheet_load_monster(Sheet *sheet, const char *name)
     if(!world_data_path(path,sizeof(path),"monsters/josh1.bmp")) return -1;
     return load_sheet(sheet,path,0);
 }
+
+int sheet_load_art(Sheet *out, const char *name, int cell_w, int cell_h)
+{
+    Sheet s={0};
+    char path[1024],rel[256];
+    size_t len;
+    int n,columns,rows;
+    if(!name || cell_w<=0 || cell_h<=0) return -1;
+    len=strlen(name);
+    n=snprintf(rel,sizeof(rel),"art/%s%s",name,
+               len>=4 && !text_casecmp(name+len-4,".bmp")?"":".bmp");
+    if(n<0 || (size_t)n>=sizeof(rel)) return -1;
+    if(!world_path(path,sizeof(path),rel) || image_load(&s.image,path)) {
+        if(!world_data_path(path,sizeof(path),rel) || image_load(&s.image,path)) return -1;
+    }
+    columns=s.image.w/cell_w; rows=s.image.h/cell_h;
+    if(!columns || !rows) { sheet_free(&s); return -1; }
+    s.cell=cell_w; s.cell_h=cell_h; s.count=columns*rows;
+    s.key=s.image.indices?s.image.palette[s.image.indices[0]]:s.image.pixels[0];
+    /* Raw UI/effects atlases have no character shadow/separator normalization. */
+    sheet_free(out); *out=s;
+    return 0;
+}
+
 void sheet_draw(struct Framebuffer *fb, const Sheet *sheet, int index, int x, int y, int flip)
 {
     Rect src;
-    if(!sheet || index<0 || index>=sheet->count) return;
-    src=(Rect){index*sheet->cell,0,sheet->cell,sheet->cell};
+    int columns;
+    if(!sheet || index<0 || index>=sheet->count || sheet->cell<=0 || sheet->cell_h<=0) return;
+    columns=sheet->image.w/sheet->cell;
+    if(!columns) return;
+    src=(Rect){(index%columns)*sheet->cell,(index/columns)*sheet->cell_h,sheet->cell,sheet->cell_h};
     fb_blit_sub(fb,&sheet->image,src,x,y,flip,sheet->key);
 }
 void sheet_draw_map_dir(struct Framebuffer *fb, const Sheet *sheet, int dir, int x, int y)
@@ -541,6 +735,9 @@ void sheet_draw_map_dir(struct Framebuffer *fb, const Sheet *sheet, int dir, int
     Rect src;
     if(!sheet || !sheet->count || dir<0 || dir>8) return;
     cell=sheet->cell/3;
-    src=(Rect){(dir%3)*cell,(dir/3)*cell,cell,cell};
+    if(cell<=2) return;
+    /* Map painter 0x4639eb calls 0x416426: its MAP branch insets all four
+     * source edges by one (InflateRect -1,-1), excluding authoring guides. */
+    src=(Rect){(dir%3)*cell+1,(dir/3)*cell+1,cell-2,cell-2};
     fb_blit_sub(fb,&sheet->image,src,x,y,0,sheet->key);
 }

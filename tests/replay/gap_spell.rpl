@@ -1,0 +1,243 @@
+# seed: 24
+# requires: hero_ready spell_learn spell_cast music_play
+# requires-match: spell_cast caster=hero
+# requires-match: spell_cast caster=monster
+# Retail Book-User: 21 real attacks earn 252 PP; retreat before retaliation.
+# Learn Health Weave in the normal Spells panel, then meet Slobber + Giant Flea.
+# Health Weave is cast once; the second spell event must come from a monster.
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+key n
+wait 5
+text GapBook
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key RETURN
+expect hero_ready 300
+expect map_enter 600
+hold RIGHT 60
+keydown DOWN
+expect battle_start 1200
+keyup DOWN
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 2, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 3, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 4, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 5, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 6, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 7, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 8, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 9, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 10, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 11, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 12, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 13, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 14, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 15, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 16, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 17, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 18, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 19, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 20, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+# Practice attack 21, retreat before retaliation.
+wait 300
+keydown RIGHT
+expect battle_start 1500
+keyup RIGHT
+key a
+wait 35
+key f
+expect map_enter 600
+click 415 8
+wait 3
+click 110 44
+wait 3
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key l
+expect spell_learn 300
+key ESCAPE
+hold RIGHT 150
+keydown DOWN
+expect battle_start 1500
+keyup DOWN
+key s
+shot /tmp/wos-gap-spell-menu.bmp
+key DOWN
+key RETURN
+key a
+wait 90
+shot /tmp/wos-gap-spell-effect.bmp
+expect spell_cast 600
+expect spell_cast 600
+shot /tmp/wos-gap-spell.bmp
+key f
+expect map_enter 600
+quit

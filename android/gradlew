@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64}
+export GRADLE_USER_HOME=/mnt/build/gradle
+export ANDROID_HOME=/mnt/build/android-sdk
+export ANDROID_SDK_ROOT=$ANDROID_HOME
+if [ ! -f "$ANDROID_HOME/ndk/26.3.11579264/source.properties" ] ||
+   [ ! -f /mnt/build/android-deps/SDL2-2.32.10/CMakeLists.txt ]; then
+    "$root/../tools/fetch_android.sh"
+fi
+"$root/../tools/extract_installer.sh"
+exec "$JAVA_HOME/bin/java" -classpath "$root/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"

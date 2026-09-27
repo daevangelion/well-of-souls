@@ -14,10 +14,7 @@ if(NOT TARGET SDL2::SDL2)
     add_library(SDL2::SDL2 ALIAS PkgConfig::SDL2)
 endif()
 
-file(GLOB WOS_ROOT_SOURCES CONFIGURE_DEPENDS "src/*.c")
-file(GLOB_RECURSE WOS_SOURCES CONFIGURE_DEPENDS
-    "src/engine/*.c" "src/game/*.c" "src/platform/sdl2/*.c")
-file(GLOB_RECURSE WOS_THIRD_PARTY CONFIGURE_DEPENDS "src/third_party/*.c")
+include(cmake/wos_sources.cmake)
 add_executable(wos ${WOS_ROOT_SOURCES} ${WOS_SOURCES} ${WOS_THIRD_PARTY})
 target_include_directories(wos PRIVATE src)
 foreach(source IN LISTS WOS_ROOT_SOURCES WOS_SOURCES)

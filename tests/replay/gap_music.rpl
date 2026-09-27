@@ -1,0 +1,23 @@
+# seed: 1
+# requires: boot_menu hero_ready map_enter music_play hero_move encounter battle_start
+# Map entry resolves music.ini [evergreen] midi1=scrn_overworld.
+# Walking south after the eastward leg triggers the retail .mon encounter.
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+key n
+wait 5
+text MusicWalker
+key RETURN
+expect hero_ready 300
+expect map_enter 600
+expect music_play 60
+hold RIGHT 60
+expect hero_move 300
+keydown DOWN
+expect encounter 1200
+keyup DOWN
+expect battle_start 600
+quit
