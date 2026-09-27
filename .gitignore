@@ -1,0 +1,5 @@
+build*/
+/extracted/
+/work/
+*.o
+__pycache__/

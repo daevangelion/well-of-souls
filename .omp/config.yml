@@ -1,0 +1,9 @@
+modelRoles:
+  default: anthropic/claude-opus-5-5
+  astra: openai-codex/gpt-6-astra
+  bunny: opencode-zen/space-bunny-free
+task:
+  agentModelOverrides:
+    task: "@astra"
+    scout: "@bunny"
+    sonic: "@bunny"
