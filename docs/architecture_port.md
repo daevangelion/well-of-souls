@@ -55,7 +55,7 @@ than real time.
 | Arrow-key walking on the map, plus keyboard shortcuts for menus and fights | lets deterministic replays drive the game; mouse behaviour is unchanged |
 | Battle: when group 0 does not force all members, the neutral group-member probability is fixed at 50%; the link-distance weighting is not applied | battle_begin does not receive the distance to the link; flagged |
 | Battle: solo flee always succeeds | nothing else in solo play can reject it |
-| Battle: when the hero acts, the regen gauge is cashed in as HP/MP healing (FUN_0048b069); the original may use it for proficiency instead | uncertain in the decomp; left explicit in battle.c |
+| Battle: hand-training PP gains are capped at 5,000,000, not per-class caps | world.h does not expose the class training caps yet; flagged |
 | Battle: only physical combat; no spell casting, spell-proc equipment or scripted monster AI (monsters.txt arg20) | outside the first-fight acceptance path; flagged |
 | No "Place Yourself On Gaiea" prompt after the first incarnation; a fresh hero starts above link 0 of map 0 | the prompt places the player on the online world globe (FUN_00434f95("earth")) |
 | The PK opt-in confirmation in New Soul is skipped (always non-PK) | there is no PK in solo play |

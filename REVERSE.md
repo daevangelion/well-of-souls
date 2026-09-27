@@ -43,9 +43,16 @@ The detailed findings for each subsystem are in `docs/re/*.md`:
 - art.md 4: `Link.background[80]` is the scene image name. Link object rects come from OBJECTS.OBR entry `object_id`, which has explicit rects at +32/+36/+40/+44; the objects are not square cells. (ReArt)
 - Derived monster stats (level-0 columns): the HP/MP/offense/defense coefficients are 1162/513/567/834, each /100. The STR/STA/WIS/AGI/DEX coefficients are 197/212/231/189/175, each /100. The record-0 percentage is applied afterwards. None of these are randomized. Damage = base * 8000/((targetLevel+40)*(targetSta+200)) * 200/(targetDefense+200), followed by variance/critical. (Battle)
 - objects.obr holds UP TO 1000 x 48 B. Evergreen's is 12288 B (256 rows), and FUN_00463630 accepts the shorter table. A missing .ter is allowed: FUN_0041e421 creates a cleared terrain DIB before the optional load (Springwell has no .ter). Skins need not be an exact multiple of their height: Adventurer is 577x96 (6 cells + a separator column). monsters.txt arg20 is an AI string (FUN_004809a3), not a spell list. (WorldData)
+- Hero physical charge/proficiency (0x48b1ad, 0x4a7ba6, FUN_00424dd2): effectivePP = (gauge+15)*handPP/30, and training = 10000*effectivePP/(effectivePP+5000). FUN_00424dd2 is not a clamp; it computes scale*(1-1/(PP*0.0002+1)). When training > 5000, power += trunc(power*pow(1.1892, training*0.001-5)). Each physical action earns 20 hand PP. The gauge does NOT heal; battle.md 4 reads it wrong. (Battle)
 
 ## Port Progress
 | Subsystem | Status | Files |
 |-----------|--------|-------|
-| Platform (SDL2) | in progress | src/platform/ |
-| Engine infra | in progress | src/engine/ |
+| Platform (SDL2): video, input, case-insensitive files, WAV mixer, optional MIDI | done | src/platform/ |
+| Engine: framebuffer, BMP/JPEG, 8x8 font, UI, INI, replay/log, RNG, screens | done | src/engine/ |
+| World data: quest.txt + #include, tables, scene index, map binaries, filmstrip sheets | done | src/game/world.c |
+| Front end: title, menu, world select, Well, New Soul, save/load (.wsh) | done | src/game/front.c, hero.c |
+| Map mode: walking, terrain, links, random encounters, panels | done (no detour pathfinder) | src/game/mapview.c |
+| Scene VM: dialog, actors, conditions, tokens, cookies, FIGHT | core opcodes done; shops display-only | src/game/scene.c |
+| Battle: physical combat, rewards, level-ups | done (no spells) | src/game/battle.c |
+| Spells, items/equipment screens, shops, training, music per map | not started | |

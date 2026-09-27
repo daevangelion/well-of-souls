@@ -72,6 +72,8 @@ void hero_create(Hero *h, const char *name, int klass, int gender, const char *s
     h->gender = gender >= 0 && gender < 4 ? gender : 0;
     snprintf(h->name, sizeof(h->name), "%s", name ? name : "");
     memcpy(h->ability, c->start_ability, sizeof(h->ability));
+    /* levels.txt header / FUN_004207BD: preferred hand starts trained to five. */
+    if (c->right_hand >= 1 && c->right_hand <= 8) h->hand_pp[c->right_hand - 1] = 5000;
     /* New Soul reads the class's level-zero starting values (0x460A7E),
      * not the first cumulative level increment. */
     h->max_hp = c->auto_max_set ? c->auto_max[0] : c->levels[0].d_hp;
@@ -162,7 +164,7 @@ int hero_save(const Hero *h)
     char path[1024]; FILE *f; int i, failed;
     if (!h->valid || save_path(path, sizeof(path), h->name, 1)) return -1;
     f = plat_fopen(path, "wb"); if (!f) return -1;
-    fwrite("WSH1", 1, 4, f);
+    fwrite("WSH2", 1, 4, f);
     fwrite(h->name, 1, sizeof(h->name), f); fwrite(h->skin, 1, sizeof(h->skin), f);
     put32(f,h->gender); put32(f,h->klass); put32(f,h->level);
     put64(f,h->xp); put64(f,h->gold);
@@ -170,6 +172,7 @@ int hero_save(const Hero *h)
     for (i=0;i<HERO_ABILITIES;++i) put32(f,h->ability[i]);
     put32(f,h->right_hand);
     for (i=0;i<8;++i) put32(f,h->equip[i]);
+    for (i=0;i<8;++i) put32(f,h->hand_pp[i]);
     for (i=0;i<HERO_INVENTORY;++i) { put32(f,h->inventory[i].item_id); put32(f,h->inventory[i].count); }
     fwrite(h->tokens,1,HERO_TOKENS,f);
     put32(f,h->map); put32(f,h->link); put32(f,h->x); put32(f,h->y);
@@ -182,7 +185,7 @@ int hero_load(Hero *h, const char *name)
     Hero v = {0}; char path[1024], magic[4]; FILE *f; int i, failed;
     if (save_path(path,sizeof(path),name,0)) return -1;
     f=plat_fopen(path,"rb"); if (!f) return -1;
-    if (fread(magic,1,4,f)!=4 || memcmp(magic,"WSH1",4)) { fclose(f); return -1; }
+    if (fread(magic,1,4,f)!=4 || memcmp(magic,"WSH2",4)) { fclose(f); return -1; }
     if (fread(v.name,1,sizeof(v.name),f)!=sizeof(v.name) ||
         fread(v.skin,1,sizeof(v.skin),f)!=sizeof(v.skin)) { fclose(f); return -1; }
     v.gender=get32(f); v.klass=get32(f); v.level=get32(f);
@@ -191,6 +194,7 @@ int hero_load(Hero *h, const char *name)
     for(i=0;i<HERO_ABILITIES;++i) v.ability[i]=get32(f);
     v.right_hand=get32(f);
     for(i=0;i<8;++i) v.equip[i]=get32(f);
+    for(i=0;i<8;++i) v.hand_pp[i]=get32(f);
     for(i=0;i<HERO_INVENTORY;++i) { v.inventory[i].item_id=get32(f); v.inventory[i].count=get32(f); }
     if(fread(v.tokens,1,HERO_TOKENS,f)!=HERO_TOKENS) { fclose(f); return -1; }
     v.map=get32(f); v.link=get32(f); v.x=get32(f); v.y=get32(f);
@@ -203,6 +207,7 @@ int hero_load(Hero *h, const char *name)
        v.right_hand<0 || v.right_hand>=WORLD_MAX_ITEMS) return -1;
     for(i=0;i<HERO_ABILITIES;++i) if(v.ability[i]<0 || v.ability[i]>255) return -1;
     for(i=0;i<8;++i) if(v.equip[i]<0 || v.equip[i]>=WORLD_MAX_ITEMS) return -1;
+    for(i=0;i<8;++i) if(v.hand_pp[i]<0 || v.hand_pp[i]>5000000) return -1;
     for(i=0;i<HERO_INVENTORY;++i)
         if(v.inventory[i].item_id<0 || v.inventory[i].item_id>=WORLD_MAX_ITEMS || v.inventory[i].count<0) return -1;
     v.valid=1; *h=v; return 0;

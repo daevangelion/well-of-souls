@@ -8,6 +8,7 @@
 #include "../engine/log.h"
 #include "../engine/rng.h"
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -23,7 +24,7 @@ static struct {
     Sheet sheets[ACTORS];
     int count, sheets_count, state, frame, round_start, cursor, target;
     int queued, attacker, victim, animation, hp_gauge, mp_gauge, regen_start;
-    int regen_initial, xp, gold, damage;
+    int regen_initial, xp, gold, damage, attack_training;
     BattleResult result;
     Rect view;
 } fight;
@@ -107,8 +108,12 @@ static void spawn(int signed_id)
         if (!strcmp(m->skin,"mirror")) sheet_load_skin(&fight.sheets[a->sheet_index],g_hero.skin);
         else sheet_load_monster(&fight.sheets[a->sheet_index],m->skin);
     }
-    /* First attack has the full 8-second charge, like a newly allocated actor. */
-    a->last_action = -480;
+    /* FUN_00491e45 initializes monsters' last-action tick to
+     * now - rand()%5000 - 3000, not a full eight-second charge. */
+    a->last_action = -(180 + roll(300));
+    wos_log_event("battle_actor","slot=%d monster=%d hp=%d level=%d offense=%d defense=%d str=%d sta=%d charge=%d",
+                  fight.count,id,a->hp,a->level,a->offense,a->defense,
+                  a->ability[ABIL_STR],a->ability[ABIL_STA],-a->last_action);
     ++fight.count;
 }
 static void random_group(int difficulty)
@@ -221,6 +226,11 @@ static int physical_damage(Combatant *a, Combatant *b, int monster)
         power = power*elapsed/480;
         if (power < 1) power = 1;
     }
+    else if (fight.attack_training > 5000) {
+        /* 004a7ba6..004a7c00: training above five adds an exponential
+         * fraction of the original power (FMUL before ftol in the binary). */
+        power += (int64_t)(power * pow(1.1892, fight.attack_training * 0.001 - 5.0));
+    }
     raw = power*8000/((int64_t)(b->level+40)*(b->ability[ABIL_STA]+200));
     raw = raw*200/(b->defense+200);
     d = clamp(raw,1,32000);
@@ -240,13 +250,20 @@ static void start_attack(int actor, int target)
 {
     Combatant *a = &fight.actors[actor];
     if (actor == 0) {
-        /* Requested solo action healing, gauge conversion FUN_0048b069.
-         * A96 also uses these gauges for weapon proficiency (0048b1ad). */
-        int heal = (fight.hp_gauge+15)*a->ability[ABIL_STR]/30;
-        int mana = (fight.mp_gauge+15)*a->ability[ABIL_WIS]/30;
-        g_hero.hp = a->hp = clamp((int64_t)a->hp+heal,0,a->max_hp);
-        g_hero.mp = a->mp = clamp((int64_t)a->mp+mana,0,g_hero.max_mp);
-        fight.hp_gauge = fight.mp_gauge = fight.regen_initial = 0;
+        int hand = g_world.classes[g_hero.klass].right_hand - 1;
+        int item = g_hero.right_hand;
+        int64_t pp;
+        if (item > 0 && item < WORLD_MAX_ITEMS &&
+            g_world.items[item].klass >= 12 && g_world.items[item].klass <= 19)
+            hand = g_world.items[item].klass - 12;
+        /* 0048b1ad and 00419306: charge adjusts training, then earns 20
+         * hand PP. These functions do NOT heal HP/MP. */
+        pp = hand >= 0 && hand < 8 ? (int64_t)(fight.hp_gauge+15)*g_hero.hand_pp[hand]/30 : 0;
+        /* FUN_00424dd2(pp,10000): 10000*(1-1/(pp*.0002+1)). */
+        fight.attack_training = pp > 0 ? (int)(10000*pp/(pp+5000)) : 0;
+        if (hand >= 0 && hand < 8)
+            g_hero.hand_pp[hand] = clamp((int64_t)g_hero.hand_pp[hand]+20,0,5000000);
+        fight.hp_gauge = fight.regen_initial = 0;
         fight.regen_start = fight.frame;
         fight.queued = 0;
     }
@@ -285,7 +302,7 @@ BattleResult battle_update(const Input *in)
     }
     fight.hp_gauge = clamp(fight.regen_initial+(int64_t)(fight.frame-fight.regen_start)*
                            (fight.actors[0].ability[ABIL_STR]/2+100)/600,0,100);
-    fight.mp_gauge = clamp(fight.regen_initial+(int64_t)(fight.frame-fight.regen_start)*
+    fight.mp_gauge = clamp(25+(int64_t)fight.frame*
                            (fight.actors[0].ability[ABIL_WIS]/2+100)/600,0,100);
     if (fight.target < 0 || fight.actors[fight.target].hp <= 0) fight.target = first_enemy();
     if (in) {
@@ -313,6 +330,8 @@ BattleResult battle_update(const Input *in)
             Combatant *victim = &fight.actors[fight.victim];
             victim->damage = fight.damage;
             victim->floating = FLOAT_FRAMES;
+            wos_log_event("battle_hit","frame=%d attacker=%d target=%d dmg=%d",
+                          fight.frame,fight.attacker,fight.victim,fight.damage);
             if (fight.damage >= 0) victim->hp = clamp((int64_t)victim->hp-fight.damage,0,victim->max_hp);
             if (fight.victim == 0) g_hero.hp = victim->hp;
             else if (!victim->hp && !victim->ally) {

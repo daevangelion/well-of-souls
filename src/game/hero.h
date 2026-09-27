@@ -31,6 +31,7 @@ typedef struct {
     int ability[HERO_ABILITIES];
     int right_hand;             /* equipped right-hand item id (0 = bare hands) */
     int equip[8];               /* helmet, armor, boots, shield, ring, amulet, ... (item ids) */
+    int hand_pp[8];             /* hands 1..8; preferred hand begins at 5000 PP */
     HeroItem inventory[HERO_INVENTORY];
     unsigned char tokens[HERO_TOKENS];
     /* map position */
@@ -46,8 +47,8 @@ extern Hero g_hero;
 void hero_create(Hero *hero, const char *name, int klass, int gender, const char *skin);
 
 /* Save file: game_save_path()/<world>/savedHeroes/<name>.wsh.
- * WSH1: magic, fixed NUL-terminated name/skin arrays, little-endian stats,
- * inventory, token bytes and position; not the retail .her record.
+ * WSH2: magic, fixed NUL-terminated name/skin arrays, little-endian stats,
+ * hand PP, inventory, token bytes and position; not the retail .her record.
  * Save/load return 0 on success, -1 on I/O or invalid data; load is transactional. */
 int hero_save(const Hero *hero);
 int hero_load(Hero *hero, const char *name);
