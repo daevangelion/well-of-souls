@@ -1,0 +1,4 @@
+Upstream: https://github.com/schellingb/TinySoundFont
+Commit: 853a0a171759f1ddba0de1442133a75912bbeffa
+Files tsf.h, tml.h and TinySoundFont.LICENSE are unmodified upstream downloads.
+tsf.h: MIT; tml.h: zlib (notice preserved in header).

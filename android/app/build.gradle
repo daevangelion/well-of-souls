@@ -3,6 +3,10 @@ plugins { id 'com.android.application' }
 final def sdlRoot = file('/mnt/build/android-deps/SDL2-2.32.10')
 final def dataRoot = file('../../extracted')
 final def packagedAssets = layout.buildDirectory.dir('generated/gameAssets')
+final def soundfontCache = new File(System.getProperty('user.home'), '.cache/wos-soundfont')
+def fetchSoundfont = tasks.register('fetchSoundfont', Exec) {
+    commandLine file('../../tools/fetch_soundfont.sh').absolutePath
+}
 
 android {
     namespace 'org.syntheticreality.wos'
@@ -44,8 +48,11 @@ android {
 
 // A sorted size/hash manifest drives transactional first-launch extraction and APK upgrades.
 def packageGameAssets = tasks.register('packageGameAssets', Sync) {
+    dependsOn fetchSoundfont
     inputs.dir dataRoot
     from(dataRoot) { into 'wos-data' }
+    from(soundfontCache) { include 'TimGM6mb.sf2', 'TimGM6mb.LICENSE.txt' }
+    from('../../src/third_party/TinySoundFont.LICENSE')
     into packagedAssets
     doFirst {
         if (!new File(dataRoot, 'Souls.exe').isFile()) {
