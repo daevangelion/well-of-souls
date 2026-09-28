@@ -58,6 +58,15 @@ With no overrides it uses a pre-extracted `../../extracted` tree and the pinned
 TimGM6mb bank. Unpacking the installer needs `mono` and `7z` on PATH. A custom
 soundfont is staged under the fixed `TimGM6mb.sf2` name the engine loads at runtime.
 
+**Runtime supply (no bundled data).** The game data is copyrighted and is not
+bundled in the APK. On first launch the app asks you to supply the original
+`WellOfSouls.exe` installer — pick it with the system file picker, or download
+it from a URL — and decodes it **on-device** with a native Clickteam installer
+decoder (`src/platform/sdl2/cic_unpack.c`, validated byte-exact against cicdec).
+The decoded game is stored in internal storage and reused on later launches.
+The desktop build keeps the same decoder for host-side unpacking but never links
+the codecs into the game binary.
+
 ## Tests
 
 The self-tests and the replay suite are driven by the extracted retail data, so they
