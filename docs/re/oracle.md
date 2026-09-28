@@ -725,7 +725,9 @@ the suite report success:
   `PORT-ONLY` and counted in the failure total, because an unreachable target is exactly the
   failure the suite exists to catch.
 
-The full suite is **16 scripts, 86 labels**, `labels=86 equal=4 mismatched=83`. The four green
+The full suite is **16 scripts, 97 labels**, `labels=97 equal=4 mismatched=94`. (The count grew
+from 86 when `front@tos` was added to all eleven translated scripts, to make the Terms of Service
+window observable rather than assumed.) The four green
 labels are `front_hotspots/options` (34 keys compared, all equal — every numbered option read live
 out of `DAT_006840D0`) and `quest_timer_cookies/scene@{enter,mid,timers}`, which are a *weak*
 green: all 40 `scene.*` keys are port-only per 5.4.4, so only one key is really compared on each.
@@ -844,6 +846,17 @@ constant, so the port's per-window draws have no counterpart to be tuned towards
   `HTTRANSPARENT`, which is what real hit-testing does; and `dump_hotspots` emits the entry's
   **HWND** at record+0x68, which was the one field it did not emit — an earlier version read
   record+0x70 and called it "target", which is the lParam and is 0 for every entry.
+
+  **State 2 does NOT bounce back to 1 — it persists.** Measured with the TOS accepted and then
+  "Play now" clicked, with no other input: `front_state` is 2 at t=1000, 2000, 5000 and 9000
+  after the click. This settles a live question rather than leaving it open, and it contradicts
+  the reading that `FUN_0041F699` returns to state 1 when `SendMessageA(frame, 0x46F)` answers 0
+  because no world is registered in solo. State 2 persisting means **0x46F answered non-zero** —
+  the game considers a world loaded at that point in an offline run — so the `else` branch ran
+  (`FUN_0041D374()` + `FUN_00429C9C("MainMenu.wav")`). That is a fact about solo boot rather
+  than about the front end, and it is upstream of everything else: either `FUN_00427D89` (the
+  slot-allocation function) marks a world loaded, or the flag is set elsewhere in boot. So there
+  IS a route 2 → 3 that this suite has not found.
 
   **State 2 is still stuck, and now demonstrably so rather than mysteriously.** It registers
   exactly one hotspot, `state=1 rect=39,60,533,102 clickable=0 msg=0000 hwnd=0`, label "Where Do

@@ -214,6 +214,17 @@ static char worlds[MAX_CHOICES][64], souls[MAX_CHOICES][HERO_NAME_MAX];
 static char genders[4][64], name[HERO_NAME_MAX], message[160];
 static int pending_death, resurrect_on_well, place_prompt, place_map, place_link;
 static int show_credits;
+/* The Terms of Service modal, FUN_00402A73 (all.c:16956), called from
+ * FUN_0041B891 case 1 (all.c:21092). It shows a top-level dialog carrying
+ * tos.rtf and returns 0 on Cancel, and the caller then posts 0x46E and
+ * WM_CLOSE, so declining QUITS rather than returning to the menu. The accept
+ * is remembered: FUN_00402A73 compares a date string derived from tos.rtf
+ * against the stored one with _stricmp, and only re-prompts when they differ.
+ * The button rects are Oracle4's live measurement of the original's #32770 at
+ * a 640x480 client. */
+static int tos_open;
+static const Rect tos_accept = { 356, 371, 75, 23 };
+static const Rect tos_cancel = { 442, 371, 75, 23 };
 /* The BIO editor. FUN_00452107 is a custom CWnd whose commit handler reads the
  * edit at +0x338; the port keeps the body here and hands it to hero_bio_save.
  * The button that opens it is "Edits" (0x4F02C4) on the world-select screen. */
@@ -304,6 +315,67 @@ static const char *golden_soul_string(void)
     return table[i];
 }
 
+/* FUN_0044BA39/FUN_0045270F reduce tos.rtf to a date string; the original then
+ * compares it with the stored one and re-prompts on a mismatch. The port has no
+ * profile store, so the identity is the file's size and mtime, written to
+ * <save>/legal.ini under [LEGAL] TOS_DATE - the same slot the original keeps in
+ * WIN.INI, and the same "changed file means re-prompt" rule. */
+static int tos_identity(char *out, size_t cap)
+{
+    char path[768]; FILE *f; long size; char *text; size_t n;
+    snprintf(path,sizeof(path),"%s/tos.rtf",game_data_path());
+    f = plat_fopen(path,"rb");
+    if (!f) return 0;
+    if (fseek(f,0,SEEK_END)) { fclose(f); return 0; }
+    size = ftell(f);
+    fclose(f);
+    n = snprintf(out,cap,"%ld",size);
+    text = text_read_file(path,&n);
+    if (text) {
+        size_t i, sum = 0;
+        for (i = 0; i < n; ++i) sum = sum * 31u + (unsigned char)text[i];
+        free(text);
+        snprintf(out,cap,"%ld-%08lx",size,(unsigned long)sum);
+    }
+    return 1;
+}
+static int tos_already_accepted(const char *id)
+{
+    char path[1024], line[256]; FILE *f; int seen = 0;
+    snprintf(path,sizeof(path),"%s/legal.ini",game_save_path());
+    f = plat_fopen(path,"rb"); if (!f) return 0;
+    while (fgets(line,sizeof(line),f)) {
+        char *nl = strchr(line,'\n'); if (nl) *nl = 0;
+        if (seen && !strcmp(line,id)) { fclose(f); return 1; }
+        if (!strcmp(line,"[LEGAL]")) seen = 1;
+    }
+    fclose(f);
+    return 0;
+}
+static void tos_record_accept(const char *id)
+{
+    char path[1024]; FILE *f; int seen = 0;
+    snprintf(path,sizeof(path),"%s/legal.ini",game_save_path());
+    f = plat_fopen(path,"rb");
+    if (f) { char line[256];
+        while (fgets(line,sizeof(line),f)) if (!strcmp(line,"[LEGAL]\n")) seen = 1;
+        fclose(f); }
+    f = plat_fopen(path,"ab"); if (!f) return;
+    if (!seen) fputs("[LEGAL]\n",f);
+    fprintf(f,"TOS_DATE=%s\n",id);
+    fclose(f);
+}
+/* Returns 1 to continue into the menu, 0 when the user declined. */
+static int tos_gate(void)
+{
+    char id[64];
+    if (!tos_identity(id,sizeof(id))) return 1;          /* no tos.rtf: nothing to ask */
+    if (tos_already_accepted(id)) return 1;             /* same revision: do not re-ask */
+    tos_open = 1;
+    wos_log_event("tos_prompt","id=%s",id);
+    return 2;                                           /* pending; resolved on input */
+}
+
 static void art_menu(void)
 {
     art_background("beg.jpg");
@@ -315,9 +387,9 @@ static void art_menu(void)
     spot_add(0,0xe00,1500,"Read the attractive help file.", 0x00ff00,500,1248,500,500,248,500,MSG_HELP,0);
     spot_add(0,0xe00,1750,"Visit synthetic-reality.com.",  0x00ff00,500,1310,625,500,310,625,MSG_WEBSITE,0);
     spot_add(0,0xe00,2000,"Depart this realm.",            0x00ff00,500,1372,750,500,372,750,MSG_DEPART,0);
-    /* State 1 also plays tos.rtf (FUN_00402A73, all.c:21092) and, when the
-     * reader refuses it, posts 0x46E and WM_CLOSE. */
-    plat_open_external("tos.rtf");
+    /* State 1 gates on the Terms of Service, FUN_00402A73 (all.c:21092), which
+     * is NOT an external open: it is a modal with the file rendered inside it,
+     * and declining it posts 0x46E then WM_CLOSE, i.e. it quits. */
 }
 
 static int compare_worlds(const void *a,const void *b) { return text_casecmp(a,b); }
@@ -463,7 +535,9 @@ static void front_goto(int next)
     switch(next) {
     case FRONT_TITLE:  art_title(); break;
     case FRONT_MENU:   art_menu(); game_music("MainMenu.wav");
-                       wos_log_event("boot_menu",""); break;
+                       wos_log_event("boot_menu","");
+                       if (tos_gate()==2) tos_open=1;    /* FUN_00402A73's modal */
+                       break;
     case FRONT_WHERE:  art_where(); game_music("MainMenu.wav"); break;
     case FRONT_CHOOSE: art_choose_world(); break;
     case FRONT_STORY:  art_story(); break;
@@ -693,6 +767,22 @@ static int front_bio_update(const Input *in)
 static void front_update(const Input *in)
 {
     int i, hit=-1, key=0; last_input=*in;
+    if (tos_open) {
+        if (clicked(in,tos_accept) || in->pressed[PLAT_KEY_RETURN]) {
+            char id[64];
+            tos_open=0;
+            if (tos_identity(id,sizeof(id))) tos_record_accept(id);
+            wos_log_event("tos_accept","");
+            return;
+        }
+        if (clicked(in,tos_cancel) || in->pressed[PLAT_KEY_ESCAPE]) {
+            tos_open=0;
+            wos_log_event("tos_decline","");
+            game_request_quit();
+            return;
+        }
+        return;
+    }
     if (bio_open) { front_bio_update(in); return; }
     if (show_credits) {
         /* FUN_0042198F shows it for 1000 ms with the text centred; the port
@@ -742,9 +832,51 @@ static void front_update(const Input *in)
         }
         break;
     case FRONT_WHERE:
-        /* State 2 is the splash between "Play now" and the world list: the
-         * stepper FUN_00438E8E runs state 1 -> "The World has been chosen" ->
-         * state 2 -> FUN_0041B891(3). Any input or keypress continues it. */
+        /* OPEN ITEM, deliberately not "fixed" - the solo exit from state 2 is
+         * UNRESOLVED, and both readings of it have been measured wrong once
+         * already. What is established:
+         *
+         *  - The original does NOT leave this state on any input. Oracle4 ran
+         *    the original headless (script in their message, dumps front@t1000,
+         *    t2000, t5000, t9000 after clicking Play now) and front_state stayed
+         *    2 for the full nine seconds. Clicks at 240/200/300/400, RETURN,
+         *    ESC, SPACE and idle were all measured to do nothing.
+         *  - FUN_0041BDB4 case 2 (all.c:21253) is
+         *        iVar5 = FUN_004057D3(); if (iVar5 < 1) goto default;
+         *        InvalidateRect(...);
+         *    It repaints while hotspots are live and otherwise does nothing:
+         *    there is no transition in it. Cases 1 and 3 (all.c:21249) are bare
+         *    repaints. So the tick is not the route.
+         *  - FUN_0041B891(3) has EXACTLY ONE caller in the binary:
+         *    FUN_00428D43 (all.c:30698), the abort/back handler, which sets
+         *    DAT_004df8a4 = -1 first. State 3 is therefore reached via ABORT,
+         *    not as state 2's forward destination.
+         *  - FUN_0041F699, the 0x46B handler (all.c:23549), does
+         *        FUN_0041B891(2);
+         *        if (SendMessageA(frame, 0x46F, 0, 0) == 0) FUN_0041B891(1);
+         *        else { FUN_0041D374(); FUN_00429C9C("MainMenu.wav"); }
+         *    0x46F's only posters are the REGISTRATION dialog's DoModal path
+         *    (all.c:7308, 7325, 7336 in FUN_0040930D), wParam 1/2/3/4 for
+         *    ok/retry/needs-serial/gold. I reasoned that solo therefore returns
+         *    0 and bounces to state 1 -- ORACLE4'S MEASUREMENT REFUTES THAT: the
+         *    state stayed 2, so 0x46F did NOT return 0 and the else branch ran,
+         *    which means the game considers a world loaded at that point in an
+         *    offline run. That is an upstream fact about solo boot nobody has
+         *    chased yet, and it may be the missing route.
+         *  - The online route is MFC WM_COMMAND via a message map, not a switch,
+         *    so it does not appear as a comparison in the decomp and I have not
+         *    decoded it.
+         *
+         * WHY THE PORT ADVANCES ANYWAY: the original's behaviour here is to park,
+         * and a front end that cannot leave state 2 is unreachable for every
+         * other test. This advance is the port's escape hatch and is NOT a claim
+         * about the original. It stays until the route is known.
+         *
+         * The thing that made this look settled when it was not: the TOS modal
+         * was covering the main menu and swallowing every click aimed at "Play
+         * now", so the scripts were stopping at state 1 for an unrelated reason
+         * and state 2 was never actually reached. front_dump emits front_state so
+         * that the next attempt is compared rather than inferred. */
         if ((in->mouse_pressed&2u) || key) front_goto(FRONT_CHOOSE);
         break;
     case FRONT_CHOOSE:
@@ -957,7 +1089,13 @@ static void front_render(Framebuffer *fb)
     spot_advance();
     spot_layout();
     fb_clear(fb,0x151322); fb_blit(fb,&background,0,0,-1);
-    if (bio_open) {
+    if (tos_open) {
+        Rect body = { 272, 200, 356, 150 };
+        ui_panel(fb,(Rect){260,180,380,220},"Terms of Service","");
+        font_wrap(fb,body,"This program is provided as is, and you accept the terms shipped in tos.rtf. Decline and the program quits.",0xf0e0bd);
+        label_button(fb,tos_accept,"I Accept");
+        label_button(fb,tos_cancel,"Cancel");
+    } else if (bio_open) {
         front_bio_draw(fb);
     } else if (show_credits) {
         ui_panel(fb,(Rect){80,60,480,360},"Credits","");
@@ -1048,6 +1186,14 @@ void front_dump(DumpEmit emit, void *user)
     for (i = 0; i < HOTSPOT_SLOTS; ++i)
         if (spots[i].state >= 1 && spots[i].state <= 2 && (spots[i].rect.w || spots[i].rect.h))
             ++live;
+    /* DAT_004DF8A4, the state var. The oracle emits this as `front_state`, and it
+     * is the key that tells a script which screen it is actually looking at:
+     * 0 title, 1 menu, 2 "Where Do You Want To Play Today?", 3 world list,
+     * 4 story, 5 Well, 6 scene, 7 join, 8 death, 9/10 editor, 11 web.
+     * Oracle4's live run shows the ORIGINAL parking at 2 for 9 s after Play now
+     * in solo, so this key is how that gets compared rather than guessed at. */
+    dump_emit_int(emit,"front_state",state,user);
+    dump_emit_int(emit,"front.tos_open",tos_open,user);
     dump_emit_int(emit,"front.hotspot_count",live,user);
     dump_emit_int(emit,"front.client_w",PLAT_SCREEN_W,user);
     dump_emit_int(emit,"front.client_h",PLAT_SCREEN_H,user);

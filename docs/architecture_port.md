@@ -72,6 +72,13 @@ placement prompts, the TIMER clock, WEATHER/FX/PARTY) was replaced by the origin
 | Arrow-key walking and keyboard shortcuts for menus and fights | extra input that triggers the same actions as the original's mouse clicks |
 | world.ver signing leaves the 4 bytes at +0x4A4 zero. The original stores a leaked heap address there | not reproducible |
 | A missing music file (Evergreen `lost.mid`, named in music.ini but never shipped) logs `music_error` | the retail data is incomplete |
+| The Terms of Service acceptance (FUN_00402A73) is remembered by a size+hash of tos.rtf in `<save>/legal.ini` [LEGAL] TOS_DATE, where the original stores a ctime() string parsed out of the RTF (FUN_0044BA39) in WIN.INI | the re-prompt rule (ask again when the document changes) and the accept/decline outcomes are the original's; the stored key differs |
+
+### Known open parity items (not deviations; unfinished)
+- Front-end state 2 ("Where Do You Want To Play Today?"): the port leaves it on any click/key. The oracle shows the original staying in state 2, and the decomp has no forward transition there (FUN_0041BDB4 case 2, FUN_0041F699/0x46F). The solo route from Play-now to the world list is not yet identified, so the differential scripts cannot drive the original past it.
+- Palette population (FUN_0043BE95): the colour-table EncInts are built and sealed at boot, but the nine-record palette is not populated from its hex records.
+- The "monsters seen" tally writer (FUN_0043AB20 in FUN_00464DAF's gate arm) and the 144-entry spawn roster (FUN_0047C1E4) are not written by the port.
+- Boot RNG: the port draws 1414 of the original's 1419 calls before the first idle tick (see docs/re/oracle.md); the remaining boot draws are unattributed.
 
 ## RE corrections found during porting
 See REVERSE.md "Corrections to docs/re/*.md".
