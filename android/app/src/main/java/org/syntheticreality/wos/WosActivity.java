@@ -66,7 +66,9 @@ public final class WosActivity extends SDLActivity {
     private void showSupplyOptions() {
         if (isFinishing() || supplyDialog != null) return;
         String[] options = { "Choose installer file…", "Download from URL…", "Cancel" };
-        AlertDialog dlg = new AlertDialog.Builder(this)
+        // Explicit dialog theme: the Activity uses a fullscreen no-titlebar theme, and
+        // inheriting it makes the dialog message and option buttons render invisible.
+        AlertDialog dlg = new AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert)
                 .setTitle("Well of Souls — supply the installer")
                 .setMessage("The game data is not bundled. Supply the original "
                         + "WellOfSouls.exe installer to install the game.")
@@ -99,7 +101,7 @@ public final class WosActivity extends SDLActivity {
         final EditText field = new EditText(this);
         field.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
         field.setHint("https://…/WellOfSouls.exe");
-        new AlertDialog.Builder(this)
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert)
                 .setTitle("Installer URL")
                 .setView(field)
                 .setPositiveButton("Download", (d, which) ->
