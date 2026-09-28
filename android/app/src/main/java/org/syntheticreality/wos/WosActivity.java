@@ -1,8 +1,8 @@
 package org.syntheticreality.wos;
 
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
@@ -16,27 +16,29 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
 import java.net.URL;
 
 /**
  * First-run data supply.
  *
- * The game data is copyrighted and is NOT bundled in the APK. On first launch (no
- * Souls.exe in the internal "data" dir and no installer-supplied.bin) the app asks
- * the user to supply the original installer, either by picking a file (Storage Access
- * Framework) or by downloading a URL. Either way the installer bytes are written to
- * installer-supplied.bin in internal storage; the Activity is then recreated, and the
- * native boot (wos_android_paths) decodes that file in place with the bundled CIC
- * decoder and starts the game.
+ * The game data is copyrighted and is NOT bundled in the APK. On a fresh launch (no
+ * Souls.exe in the internal "data" dir and no installer-supplied.bin) the native boot
+ * (wos_android_paths) blocks waiting for the user to supply the original installer.
+ * This Activity shows the supply UI (pick a file via the Storage Access Framework, or
+ * download a URL), writes the installer bytes atomically to installer-supplied.bin, and
+ * the waiting native thread decodes it in place with the bundled CIC decoder and starts
+ * the game.
  *
- * SDL is only initialised (super.onCreate) once the data is present or a supplied
- * installer is waiting to be decoded, so the game never starts against missing data.
+ * SDL is always brought up (super.onCreate) unconditionally — skipping it leaves the
+ * Activity without a window and crashes. The supply dialog is shown *after* SDL starts,
+ * overlaying the game view while the native thread waits.
  */
 public final class WosActivity extends SDLActivity {
     private static final String TAG = "WosActivity";
     private static final int REQUEST_PICK_INSTALLER = 0x5701;
     private static final String SUPPLIED = "installer-supplied.bin";
+
+    private Dialog supplyDialog;
 
     @Override
     protected String[] getLibraries() {
@@ -47,24 +49,24 @@ public final class WosActivity extends SDLActivity {
         return new File(getFilesDir(), SUPPLIED);
     }
 
-    private boolean readyToBoot() {
+    private boolean dataReady() {
         return new File(getFilesDir(), "data/Souls.exe").isFile() || suppliedFile().isFile();
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // Only bring up SDL (and the native boot) once there is data to boot against.
-        if (readyToBoot()) {
-            super.onCreate(savedInstanceState);
-            return;
+        // Always start SDL; the native thread handles (and waits for) missing data.
+        super.onCreate(savedInstanceState);
+        if (!dataReady()) {
+            // Let SDL start first, then overlay the supply prompt.
+            getWindow().getDecorView().post(this::showSupplyOptions);
         }
-        // No data yet: ask the user to supply the installer instead of booting.
-        showSupplyOptions();
     }
 
     private void showSupplyOptions() {
+        if (isFinishing() || supplyDialog != null) return;
         String[] options = { "Choose installer file…", "Download from URL…", "Cancel" };
-        new AlertDialog.Builder(this)
+        AlertDialog dlg = new AlertDialog.Builder(this)
                 .setTitle("Well of Souls — supply the installer")
                 .setMessage("The game data is not bundled. Supply the original "
                         + "WellOfSouls.exe installer to install the game.")
@@ -72,8 +74,12 @@ public final class WosActivity extends SDLActivity {
                     if (which == 0) launchPicker();
                     else if (which == 1) promptForUrl();
                 })
-                .setOnCancelListener(d -> finish())
-                .show();
+                .create();
+        // On cancel, just leave the game waiting (native times out); do NOT finish(),
+        // which would tear down SDL while the native thread is still waiting.
+        dlg.setOnCancelListener(d -> toast("Waiting for the installer; you can supply it from the launcher."));
+        supplyDialog = dlg;
+        dlg.show();
     }
 
     private void launchPicker() {
@@ -96,7 +102,8 @@ public final class WosActivity extends SDLActivity {
         new AlertDialog.Builder(this)
                 .setTitle("Installer URL")
                 .setView(field)
-                .setPositiveButton("Download", (d, which) -> downloadInBackground(field.getText().toString().trim()))
+                .setPositiveButton("Download", (d, which) ->
+                        downloadInBackground(field.getText().toString().trim()))
                 .setNegativeButton("Cancel", null)
                 .show();
     }
@@ -104,25 +111,17 @@ public final class WosActivity extends SDLActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQUEST_PICK_INSTALLER || !readyToBoot()) return;
+        if (requestCode != REQUEST_PICK_INSTALLER) return;
         if (resultCode == RESULT_OK && data != null && data.getData() != null) {
-            copyUriInBackground(data.getData());
+            final Uri uri = data.getData();
+            new Thread(() -> onSupplied(writeSupplied(() -> getContentResolver().openInputStream(uri))))
+                    .start();
         }
     }
 
-    private void copyUriInBackground(Uri uri) {
-        new Thread(() -> {
-            boolean ok = writeSupplied(() -> getContentResolver().openInputStream(uri));
-            onSupplied(ok, "Installer saved; decoding…");
-        }).start();
-    }
-
     private void downloadInBackground(String url) {
-        if (url.isEmpty()) { toast("Enter a URL."); return; }
-        new Thread(() -> {
-            boolean ok = writeSupplied(() -> new URL(url).openStream());
-            onSupplied(ok, "Downloaded; decoding…");
-        }).start();
+        if (url.isEmpty()) { toast("Enter a URL."); showSupplyOptions(); return; }
+        new Thread(() -> onSupplied(writeSupplied(() -> new URL(url).openStream()))).start();
     }
 
     private interface StreamOp { InputStream open() throws Exception; }
@@ -145,11 +144,13 @@ public final class WosActivity extends SDLActivity {
         return true;
     }
 
-    private void onSupplied(boolean ok, String successMsg) {
+    private void onSupplied(boolean ok) {
         runOnUiThread(() -> {
             if (ok) {
-                toast(successMsg);
-                recreate();           // re-enter onCreate; now boots and decodes
+                // The waiting native thread picks up installer-supplied.bin, decodes it,
+                // and boots the game; drop the prompt so the game is visible.
+                if (supplyDialog != null) { supplyDialog.dismiss(); supplyDialog = null; }
+                toast("Installer saved; decoding…");
             } else {
                 toast("Could not read the installer.");
                 showSupplyOptions();

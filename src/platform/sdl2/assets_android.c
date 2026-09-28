@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define PATH_CAP 4096
 #define MANIFEST_MAX (8 * 1024 * 1024)
@@ -68,6 +69,30 @@ static int copy_asset(const char *root, const char *name, unsigned long long exp
     return -1;
 }
 
+/* Decode a user-supplied installer (installer-supplied.bin) into the data dir. When
+ * wait_ms > 0, poll for the file to appear first: the app's supply UI runs on the UI
+ * thread while this SDL thread blocks, so the user can pick/download the installer and
+ * we pick it up and decode it here. Returns 0 on success, -1 otherwise. */
+static int install_from_supplied(const char *supplied, const char *data, int wait_ms)
+{
+    int waited = 0;
+    for (;;) {
+        FILE *sf = fopen(supplied, "rb");
+        if (sf) {
+            fclose(sf);
+            return wos_install_from_file(supplied, data, NULL, NULL);
+        }
+        if (waited >= wait_ms) return -1;
+        {
+            struct timespec ts;
+            ts.tv_sec = 0;
+            ts.tv_nsec = 250L * 1000L * 1000L;
+            nanosleep(&ts, NULL);
+        }
+        waited += 250;
+    }
+}
+
 /* SDL's Android entry point has established its AssetManager before calling SDL_main. */
 int wos_android_paths(char *data, char *save, size_t capacity)
 {
@@ -82,18 +107,24 @@ int wos_android_paths(char *data, char *save, size_t capacity)
     if (make_path(data, root, "data") || make_path(save, root, "saves") ||
         plat_mkdir(data) || plat_mkdir(save) || make_path(marker, root, "installed-manifest.txt") ||
         make_path(temporary, root, "installed-manifest.part")) return -1;
-    /* The game data is not required to be bundled in the APK. Boot succeeds when the
-     * data is already installed (bundled earlier, or decoded from a supplied installer
-     * on a previous launch). Otherwise, if the user supplied an installer
-     * (WosActivity writes it to installer-supplied.bin via the SAF picker or an HTTP
-     * download), decode it in place with the native CIC decoder. Only if neither is
-     * present do we fall back to extracting the assets bundled in the APK. */
+    /* The game data need not be bundled. Boot succeeds if the data is already
+     * installed, or a user-supplied installer (installer-supplied.bin, written by
+     * WosActivity via the SAF picker or an HTTP download) is present. Only if the APK
+     * bundles a manifest do we fall back to extracting the assets from it. */
     if (wos_data_installed(data)) return 0;
     {
         char supplied[PATH_CAP];
-        if (!make_path(supplied, root, "installer-supplied.bin") &&
-            wos_install_from_file(supplied, data, NULL, NULL) == 0)
-            return 0;
+        int have = make_path(supplied, root, "installer-supplied.bin") == 0;
+        SDL_RWops *probe;
+        if (have && install_from_supplied(supplied, data, 0) == 0) return 0;
+        if (!have) return -1;
+        /* If the APK bundles the data (a manifest asset is present), extract from it
+         * below. Otherwise the data is supplied at runtime: wait for the app to write
+         * installer-supplied.bin (the supply UI runs on the UI thread while this SDL
+         * thread blocks) and decode it. */
+        probe = SDL_RWFromFile("wos-manifest.txt", "rb");
+        if (!probe) return install_from_supplied(supplied, data, 300000);
+        SDL_RWclose(probe);
     }
     rw = SDL_RWFromFile("wos-manifest.txt", "rb");
     if (!rw) return -1;
