@@ -847,21 +847,51 @@ static void front_update(const Input *in)
          *    entry with pfn 0x41F699; 0x4C8A18 is the 0x205 / WM_RBUTTONDOWN
          *    entry whose pfn 0x424BB3 is where an earlier "dispatcher thunk" dead
          *    end came from. That misparse is retracted.
-         *  - State 2 is entered at 3220 ms and then BLOCKS. Between 3.37 s and the
-         *    end of the run FUN_0041F699 is parked at 0x41F6DC on
+         *  - State 2 is entered at 3220 ms and THE THREAD STAYS THERE. Oracle5's
+         *    trace has FUN_0041F699 parked at 0x41F6DC on
          *        SendMessageA(*(HWND *)(DAT_004E4840 + 0x20), 0x46F, 0, 0)
-         *    which is SYNCHRONOUS. 0x46F's pfn is 0x42AA10 (msgmap 0x4C9BC8), the
-         *    SRNet open: _SRNOpenNetwork_12, _SRNGetNetworkType_0, then
-         *    _SRNOpenChannel_8 + _SRNGetMyNetworkInfo_20 + FUN_0046CE24 on the
-         *    solo path. It does not return inside the run.
-         *  - So state 2 is not waiting for input and nothing wants to leave it: it
-         *    is parked inside a network call. No click, key or timer moves it, which
-         *    is exactly what the earlier measurement saw.
-         *  - The "--- Scanning ---" label IS registered, at now=10000, the script's
-         *    `end` — not at 3.3 s. An earlier reading that found no Scanning entry
-         *    was a snapshot taken before it was registered.
+         *    which is SYNCHRONOUS, for the rest of a 300 s run: the clock reaches
+         *    300000 with 1389 pump_step entries past 3400 ms. 0x46F's pfn is
+         *    0x42AA10 (msgmap 0x4C9BC8) and it is the SRNet open —
+         *    _SRNOpenNetwork_12, _SRNGetNetworkType_0, then _SRNOpenChannel_8 +
+         *    _SRNGetMyNetworkInfo_20 + FUN_0046CE24 on the solo path — running a
+         *    NESTED PUMP, which is why the run keeps stepping and writing dumps
+         *    instead of appearing hung.
+         *    It does not return. Therefore neither FUN_0041D374 nor the
+         *        if (0x46F == 0) FUN_0041B891(1)
+         *    is ever reached, and the state stays 2 for good. Nobody is waiting
+         *    for input, in any run, on any machine.
+         *
+         *    The two runs disagreed at first — Oracle5 saw a block, Oracle4 saw
+         *    dumps still being written — and both were right about their own run.
+         *    The nested pump is the reconciliation, not an environment-dependent
+         *    branch in 0x46F: Oracle4 has withdrawn that guess. There is one
+         *    behaviour and the pump is what it looks like from outside.
+         *
+         *  - The "--- Scanning ---" label is NEVER REGISTERED, because
+         *    FUN_0041D374 is downstream of a call that does not return. Oracle5
+         *    sees it stamped with the script's `end` in every run (now=10000,
+         *    60000, 300000) — three values that all track `end`, which is the
+         *    signature of a trace line written at TEARDOWN. Oracle4's negative
+         *    (no entry at all, even at t=14000) was the correct reading and I
+         *    misread their teardown stamp as proof the call completed. Do not
+         *    read its presence as "the call returned": it is the opposite.
+         *  - RETRACTED, by Oracle4, in their own words and worth keeping: "no
+         *    Scanning entry, therefore FUN_0041D374 was never called, therefore
+         *    0x46F returned 0, therefore FUN_0041B891(1) should have set state 1
+         *    and the state is 2 — a contradiction". The inference of a BRANCH
+         *    from a SNAPSHOT is what produced it. The contradiction is real; the
+         *    resolution is most likely that 0x46F returned 0 and the transition
+         *    was undone or unobserved, not that the branch never ran.
+         *  - Also retracted, by Oracle5: the 0x424BB3 "MFC dispatcher thunk" dead
+         *    end. The msgmap stride is 24 bytes / 6 dwords, so 0x4C8A20 is the 0x46B
+         *    entry with pfn 0x41F699 — which is exactly the function Oracle5's
+         *    trace shows running. 0x4C8A18 is the 0x205 / WM_RBUTTONDOWN entry
+         *    whose pfn 0x424BB3 is where the misreading came from. Oracle4
+         *    reported that lead as a dead end and it was the answer.
          *  - The world list is FUN_0041D717, called only from FUN_0041B891's
          *    case 3, and the solo stepper FUN_00438E8E that sets state 3 never ran.
+         *    Nobody is waiting for input in either run.
          *
          * WHY THE PORT ADVANCES ANYWAY: the original's behaviour here is to block
          * inside SRNet, which the port does not have. Advancing on input is the

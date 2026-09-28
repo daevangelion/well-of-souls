@@ -894,7 +894,30 @@ constant, so the port's per-window draws have no counterpart to be tuned towards
   **HWND** at record+0x68, which was the one field it did not emit — an earlier version read
   record+0x70 and called it "target", which is the lParam and is 0 for every entry.
 
-  **State 2 persists, and the click path into it is now proven correct.** With the TOS accepted
+  **State 2's cause, settled by trace rather than by snapshot: the original parks inside a NESTED
+PUMP in `0x46F`.** `FUN_0041F699` (the `0x46B` handler) calls
+`SendMessageA(*(HWND*)(DAT_004E4840 + 0x20), 0x46F, 0, 0)` at `0x41F6DC`; `0x46F`'s handler is the
+SRNet open, and it **runs a nested message pump**. Measured: the clock reached 300000 ms with
+`FUN_0041F699` still parked at `0x41F6DC` and 1389 `pump_step` entries past 3400 ms. It is not
+blocked in a synchronous call — it is spinning a loop, which is why a run keeps stepping and keeps
+writing dumps and never appears stuck. The `if` after that call never executes, so
+`FUN_0041B891(1)` is never reached and the state stays 2.
+
+Three readings of this were wrong before the trace settled it, and all three are recorded because
+each looked reasonable:
+
+* *"No `--- Scanning ---` entry, therefore `FUN_0041D374` was never called, therefore `0x46F`
+  returned 0, therefore the state should be 1 — a contradiction."* There is no contradiction and
+  no branch was taken. The call never RETURNED, so the branch after it never ran. The decomp was
+  right throughout; a snapshot was read as an outcome.
+* *"The `0x46B` map entry's pfn is `0x424BB3`, an MFC dispatcher thunk, not a state-changing
+  handler."* The msgmap stride is 24 bytes; I mis-strided. `0x4C8A20`'s pfn is `0x41F699` —
+  `FUN_0041F699` itself, which is the function that parks. The lead was the answer, read as a
+  dead end.
+* *"`0x46F`'s behaviour is environment-dependent."* Wrong. The nested pump explains both runs, and
+  the difference between them was only that one of them I had not understood.
+
+**State 2 persists, and the click path into it is proven correct.** With the TOS accepted
   and `WOS_MSGLOG=1`: `0x046B` — the message `FUN_00405765` posts for "Play now" — is posted
   **3 times**, and **6 of 6** `WM_LBUTTONDOWN` messages land on `hwnd 0001007A`, the front view.
   Yet `front_state` is 2 at t=1000, 2000, 5000 and 9000 after the click, and clicks, RETURN,

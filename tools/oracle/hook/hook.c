@@ -2772,12 +2772,24 @@ static BOOL WINAPI hook_SetCursorPos(int x, int y)
  */
 static const char *g_front_name[16];
 static volatile LONG g_front_n;
+static int g_front_hot[16];
+static DWORD g_front_hot_at[16];
 
 /* NOT static: the hand-written assembly below calls it by its C name, and a static
  * function has internal linkage, so the assembler reference is an undefined symbol at
  * link time. */
 void front_log_c(int idx, void *self, void *ret, int arg)
 {
+    /* Two of the traced functions run at 20 Hz and would write a line every 50 ms for
+     * the whole run, which buries the handful of lines that matter.  They are logged on
+     * their first call and then once a second, which is enough to show that they are
+     * running at all and how their argument changes; the state transitions and the
+     * label registrars are all low-frequency and are logged in full. */
+    if (g_front_hot[idx]) {
+        DWORD t = (DWORD)vnow();
+        if (t - g_front_hot_at[idx] < 1000u) return;
+        g_front_hot_at[idx] = t;
+    }
     tr("front %ld %s this=%08X ret=%08X arg=%d now=%u",
        (long)InterlockedIncrement(&g_front_n),
        g_front_name[idx] ? g_front_name[idx] : "?",
@@ -2881,6 +2893,7 @@ static void install_front_trace(void)
         { 0x0042AA10u, "srnet_open_46F",   5 },  /* mov eax,1F50h */
         { 0x0046CE24u, "network_info",      5 },  /* push esi / mov esi,[esp+8] */
         { 0x0042B06Au, "quit_game",         5 },  /* push ebx / push esi / push edi / mov ebx,ecx */
+        { 0x0042AF38u, "channel_close",    5 },  /* sub esp,FA0h / push ebx */
     };
     unsigned i;
     for (i = 0; i < sizeof T / sizeof T[0] && i < 16; i++) {
@@ -2895,6 +2908,10 @@ static void install_front_trace(void)
         g_front_name[i] = T[i].name;
         if (!th || !patch_text((uintptr_t)p, th, 6)) tr("front: %s NOT traced", T[i].name);
     }
+    /* the two 20 Hz entries are rate-limited to one line a second inside the logger;
+     * every other traced function is low-frequency and is logged in full. */
+    g_front_hot[8] = 1;   /* frame_20hz */
+    g_front_hot[9] = 1;   /* per_frame  */
     tr("front: %u entry traces installed", (unsigned)(sizeof T / sizeof T[0]));
 }
 

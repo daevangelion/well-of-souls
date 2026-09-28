@@ -29,4 +29,18 @@ for ev in boot_menu hero_ready map_enter hero_move battle_start battle_won; do
         exit 1
     fi
 done
+# --script must deliver input to the screen update. A regression here made every
+# front@* label in the diff suite report as 22 front-end mismatches when it was
+# one broken input path: the script branch applied the op and then continued past
+# screen->update(), so input_begin() cleared the edges on the next iteration.
+si_log="$work/script_input.log"
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy "$build/wos" --data "$data" --save "$work/save" \
+    --headless --seed 1 --time 1234567890 --script "$root/tests/replay/script_input.dsc" \
+    --log "$si_log" >/dev/null 2>&1
+if ! grep -q "EVT front_state state=1" "$si_log"; then
+    echo "FAIL: --script dropped input; a scripted click did not advance front_state 0->1"
+    grep -E 'front_state' "$si_log" || true
+    exit 1
+fi
+
 echo "PASS: offline play-through"
