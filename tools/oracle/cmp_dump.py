@@ -95,6 +95,12 @@ ORACLE_ONLY_PREFIX = "oracle."
 NO_SOURCE_PREFIXES = ("map.", "scene.", "battle.", "panels.", "items.",
                       "minigame.", "options.", "world.", "chat.", "editors.",
                       "missions.", "html.", "front.")
+#: `scene.` and `panels.` are in that list for a structural reason, not a temporary one:
+#: the original keeps that state in CDialog children at fixed offsets inside the
+#: CSoulsView and in stack frames, not in globals. See docs/re/oracle.md 5.4.4. A label
+#: whose real keys are all in here is a WEAK OK -- see the real-count test below. When a
+#: module grows a genuine oracle read-out, its prefix comes OUT of this list, or real
+#: differences will be classified as unobserved and silently pass.
 
 
 def main():
@@ -122,6 +128,7 @@ def main():
             [k for k in oracle if not k.startswith("rng.")] + \
             [k for k in port if k not in oracle]
     bad, nosrc, extra = [], [], 0
+    real = 0          # keys genuinely compared on both sides, for the weak-OK test
     for k in order:
         if k.startswith(ORACLE_ONLY_PREFIX):
             extra += 1
@@ -137,6 +144,8 @@ def main():
                 bad.append("  %-22s only in oracle: %s" % (k, oracle[k][:60]))
         elif oracle[k] != port[k]:
             bad.append("  %-22s oracle=%s port=%s" % (k, oracle[k][:60], port[k][:60]))
+        else:
+            real += 1
     label = oracle.get("label", sys.argv[1])
     tail = ""
     if extra:
@@ -148,6 +157,17 @@ def main():
               % (label, len(order) - extra - len(nosrc), tail))
         if nosrc:
             print("    no oracle source for: %s" % ", ".join(sorted(set(nosrc))[:12]))
+        # WEAK OK. A label whose comparison is dominated by keys only one side can supply
+        # is not coverage, and counting it in a green tally flatters the suite. Three
+        # `scene.*` labels report OK while comparing exactly one incidental key, because
+        # all 40 of their real keys are port-only. That is the same failure as a missing
+        # label wearing a disguise: a missing label is visible, a port-only key silently
+        # ignored is not. So a label is only real coverage when it actually compared
+        # something, and the caller is told which it was.
+        if len(set(nosrc)) > real:
+            print("    WEAK OK: %d key(s) really compared against %d with no oracle source;"
+                  " this label is dominated by keys the original cannot supply, so it is"
+                  " not coverage" % (real, len(set(nosrc))))
         return 0
     print("%s: MISMATCH (%d of %d keys%s)"
           % (label, len(bad), len(order) - extra, tail))

@@ -727,10 +727,21 @@ the suite report success:
 
 The full suite is **16 scripts, 97 labels**, `labels=97 equal=4 mismatched=94`. (The count grew
 from 86 when `front@tos` was added to all eleven translated scripts, to make the Terms of Service
-window observable rather than assumed.) The four green
-labels are `front_hotspots/options` (34 keys compared, all equal — every numbered option read live
-out of `DAT_006840D0`) and `quest_timer_cookies/scene@{enter,mid,timers}`, which are a *weak*
-green: all 40 `scene.*` keys are port-only per 5.4.4, so only one key is really compared on each.
+window observable rather than assumed.)
+
+**Only ONE of those four greens is real coverage.** `front_hotspots/options` compares equal on 34
+keys — every numbered option read live out of `DAT_006840D0`, including option 7 (waypoints,
+default 1 = ON) and option 9 (no record, stays 0).
+
+The other three, `quest_timer_cookies/scene@{enter,mid,timers}`, are a **WEAK OK**, and
+`cmp_dump.py` now says so on its own output: 1 key really compared against 40 with no oracle
+source, because all 40 `scene.*` keys are port-only per 5.4.4. The tool prints `WEAK OK` whenever
+the no-source count exceeds the really-compared count, on the rule that a label dominated by keys
+the original cannot supply is not coverage. A missing label is visible; a port-only key silently
+ignored is the same failure wearing a disguise, and a green tally that counts it flatters the
+suite. `options` passes that test; the `scene` labels do not.
+
+So the honest figure is **one real pass out of 97 labels**, not four. Quote that one.
 
 **Eleven of the sixteen scripts do not reach their target in the original.** They stop in the front
 end, and section 7 says why. The `battle.*` and `items.*` mismatches they produce are therefore

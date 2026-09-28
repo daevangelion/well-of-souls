@@ -2752,6 +2752,122 @@ static BOOL WINAPI hook_SetCursorPos(int x, int y)
     return real_SetCursorPos(x, y);
 }
 
+/* ------------------------------------------------- front-end state machine trace
+ *
+ * WOS_DETOURS=front traces the front end's own functions, which no IAT can reach:
+ * they are in Souls.exe and every one of them is called by address from a vtable or
+ * a message map, never through an import.  patch_text() is the same six-byte
+ * `push imm32; ret` the module detours use, and the thunks below rebuild the
+ * displaced prologue in fresh memory so the original still runs.
+ *
+ * What it answers, in one line each:
+ *   0x0041B891  FUN_0041b891(state)  -- every state transition, with the caller VA,
+ *                so "state 2 is never left" becomes "nobody CALLS the state that
+ *                would leave it" rather than an inference from a dump.
+ *   0x0041D31F  the state-2 title label
+ *   0x0041D374  the "*** Scanning ***" label
+ *   0x0041D3CC  the world-list rows (0x472/0x473/0x474 hotspots)
+ *   0x0041D717  the world-list init (enumerates worlds\*)
+ *   0x0043E8E8  the solo stepper FUN_00438e8e
+ */
+static const char *g_front_name[16];
+static volatile LONG g_front_n;
+
+static void front_log(int idx)
+{
+    unsigned *sp;
+    void *ret, *self = 0;
+    int arg = 0;
+    __asm__ __volatile__("movl %%esp, %0" : "=r"(sp));
+    /* The stack here is the THUNK's, not the caller's, and the offsets are the ones
+     * that makes that true:
+     *   [esp+0x00] return address into the thunk        (call rel32)
+     *   [esp+0x04] the pushed slot index                (push imm32)
+     *   [esp+0x08..0x28] pushad's eight registers: EDI at +0x08, ESI +0x0C,
+     *                   EBP +0x10, (pushed ESP) +0x14, EBX +0x18, EDX +0x1C,
+     *                   ECX +0x20, EAX +0x24
+     *   [esp+0x2C] the ORIGINAL return address
+     *   [esp+0x30] the original first stack argument
+     * `self` is ECX for a __thiscall callee, which pushad saved at [esp+0x20]. */
+    ret  = (void *)sp[0x2C / 4];
+    self = (void *)sp[0x20 / 4];
+    arg  = (int)sp[0x30 / 4];
+    tr("front %ld %s this=%08X ret=%08X arg=%d now=%u",
+       (long)InterlockedIncrement(&g_front_n),
+       g_front_name[idx] ? g_front_name[idx] : "?",
+       (unsigned)(uintptr_t)self, (unsigned)(uintptr_t)ret,
+       arg, (unsigned)vnow());
+}
+
+/* The trampoline.  `call front_log` is __cdecl and must not clobber the callee's
+ * registers, so every register the displaced prologue needs is pushed first and the
+ * ESP is realigned back to exactly what the original prologue expects.  The displaced
+ * bytes are COPIED into the same block, not re-executed in place, because the entry
+ * is overwritten. */
+static void *front_make_thunk(int idx, uintptr_t resume, unsigned char *prologue, int plen)
+{
+    unsigned char *p;
+    intptr_t here, target;
+    int call_at, jmp_at, out_at, base;
+    /* pushad(1) push imm32(5) call rel32(5) add esp,4(3) popad(1) jmp rel32(5) = 20 */
+    unsigned char head[] = { 0x60, 0x68, 0, 0, 0, 0, 0xE8, 0, 0, 0, 0, 0x83, 0xC4, 0x04, 0x61, 0xE9 };
+    p = (unsigned char *)VirtualAlloc(NULL, 128, MEM_COMMIT | MEM_RESERVE,
+                                      PAGE_EXECUTE_READWRITE);
+    if (!p) return NULL;
+    memcpy(p, head, sizeof head);
+    memcpy(p + 1, &idx, 4);
+    call_at = 7; out_at = 15; base = 24;
+    here   = (intptr_t)(p + call_at + 4);
+    target = (intptr_t)front_log;
+    memcpy(p + call_at, &(int32_t){ (int32_t)(target - here) }, 4);
+    /* the displaced prologue, RELOCATED, then a jump back into the rest of the
+     * function.  It has to be copied: patch_text() overwrites the bytes it is copied
+     * from, and the thunk is built before patch_text() runs, so the copy is intact. */
+    memcpy(p + base, prologue, (size_t)plen);
+    memcpy(p + base + plen, "\xE9\0\0\0\0", 5);
+    jmp_at = base + plen + 1;
+    here   = (intptr_t)(p + jmp_at + 4);
+    target = (intptr_t)resume;
+    memcpy(p + jmp_at, &(int32_t){ (int32_t)(target - here) }, 4);
+    /* the jmp at offset 15 is the LAST thing head[] does: it goes to base, and base is
+     * 24 so it clears head[]'s own rel32 field. */
+    here   = (intptr_t)(p + out_at + 5);
+    target = (intptr_t)(p + base);
+    memcpy(p + out_at, &(int32_t){ (int32_t)(target - here) }, 4);
+    tr("front: thunk[%d] at %p prologue=%d bytes resume=%08lX", idx, (void *)p, plen,
+       (unsigned long)resume);
+    return p;
+}
+
+static void install_front_trace(void)
+{
+    /* (VA, name, prologue length) -- the length is a whole number of instructions and
+     * is read off the file, not guessed: overrunning one would replay part of the
+     * next instruction inside the trampoline. */
+    static const struct { unsigned va; const char *name; int plen; } T[] = {
+        { 0x0041B891u, "front_state_set", 12 },  /* sub esp,104h / push ebx,esi,edi / mov ecx,ebx / push ebp */
+        { 0x0041D31Fu, "state2_label",     7 },  /* sub esp,10h / lea eax,[esp] */
+        { 0x0041D374u, "scanning_label",   7 },
+        { 0x0041D3CCu, "worldlist_rows",   7 },  /* push ebp / mov eax,[esp+0Ch] / mov ebp,esp */
+        { 0x0041D717u, "worldlist_init",   6 },  /* push ebp / mov eax,11C0h */
+        { 0x00438E8Eu, "solo_stepper",     6 },  /* push ebp / mov eax,1FBCh */
+    };
+    unsigned i;
+    for (i = 0; i < sizeof T / sizeof T[0] && i < 16; i++) {
+        unsigned char *p = (unsigned char *)(g_base + (T[i].va - IMAGE_BASE));
+        /* the thunk is built BEFORE patch_text, so the copy of the prologue it takes
+         * is the original code.  patch_text then overwrites p[0..5] with
+         * `push thunk; ret`, and the thunk replays p[0..plen-1] out of its own memory
+         * and jumps to p+plen -- p+plen, not p+6+plen: the six overwritten bytes are
+         * part of the copy, so resuming after them would skip six bytes of the
+         * function and the run would diverge from the unpatched one. */
+        void *th = front_make_thunk((int)i, (uintptr_t)(p + T[i].plen), p, T[i].plen);
+        g_front_name[i] = T[i].name;
+        if (!th || !patch_text((uintptr_t)p, th, 6)) tr("front: %s NOT traced", T[i].name);
+    }
+    tr("front: %u entry traces installed", (unsigned)(sizeof T / sizeof T[0]));
+}
+
 static void install_detours(void)
 {
     HMODULE k32 = GetModuleHandleA("kernel32.dll");
@@ -2895,6 +3011,8 @@ static void install_detours(void)
         DETOUR("msvcrt.dll", "mktime",        hook_mktime);
         DETOUR("msvcrt.dll", "_mktime64",     hook_mktime);
     }
+
+    if (grp("front")) install_front_trace();
 
     tr("install: %d detours installed; base=%08lX realPeek=%p realGet=%p",
        g_detoured, (unsigned long)g_base, (void *)real_PeekMessageA, (void *)real_GetMessageA);

@@ -14,6 +14,7 @@
 #define WOS_BOOT_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* The CRT indices we have identified. Anything not listed is deliberately
  * unregistered rather than guessed at a wrong index. */
@@ -39,6 +40,13 @@ unsigned long long boot_rng_calls(void);
 /* Registers the Core-owned steps (currently only table A). Call once, before
  * boot_run(). Safe to call more than once. */
 void boot_register_core(void);
+/* Set before boot_run(): --seed pins the time() VALUE the seed step uses. It does
+ * not move the step -- FUN_004269AF's srand pair runs at CRT index 41, after both
+ * EncInt tables, because the 1408 table draws precede it and run on the CRT's
+ * default holdrand of 1. */
+extern uint32_t boot_seed_pin;
+extern int boot_seed_have_pin;
+void boot_seed_step(void);
 
 /* Table A, CRT index 2. The eh-vector-constructor thunk at 0x00401101 (inside
  * FUN_00401051) walks ASCENDING over 100 elements of 0x120 bytes based at

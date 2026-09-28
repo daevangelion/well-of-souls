@@ -247,21 +247,6 @@ static void usage(void)
  * The second seed wins, but the single rand() between them is a real consumer,
  * so the port does exactly: seed, draw once, seed again. --seed pins the
  * `time()` value so a replay reproduces; otherwise it is the virtual time(). */
-static void seed_crt(uint32_t pin, int have_pin)
-{
-    uint32_t t = have_pin ? pin : clock_time_s();
-    crt_srand(t);
-    /* The one draw between the two boot seeds. It places the hero block, so the
-     * value is kept rather than discarded: DAT_004E4870 = (this & 0x3FFF & ~15) + block,
-     * and DAT_0067FBF8 = DAT_004E4870 + 0x1560A5C. See rng.h for the derivation. */
-    {
-        int draw = crt_rand();
-        crt_boot_base_offset_set((uint32_t)(draw & 0x3fff) & ~0xfu);
-    }
-    t = have_pin ? pin : clock_time_s();
-    crt_srand(t);
-    wos_log_event("rng_seeded", "seed=%lu", (unsigned long)t);
-}
 
 /* The 20 Hz idle work of FUN_0040A7C7 (0x0040A7C7). Its four callees are the
  * SRNet perf graph FUN_0042895C, a heap probe FUN_00416CD3, a sound poke
@@ -534,7 +519,12 @@ int game_main(int argc, char **argv)
     fb_init(&fb,pixels,PLAT_SCREEN_W,PLAT_SCREEN_H);
     clock_reset();
     if(have_epoch) clock_set_time_base(epoch);
-    seed_crt(seed,have_seed);
+    /* The seed step is a BOOT STEP now, at CRT index 41, because the 1408 EncInt
+     * draws precede it (Oracle3's trace: calls 1..1408 are the tables, call 1409 is
+     * 0x00426B27). Seeding before boot put every table draw on the wrong side of
+     * the re-seed. --seed still pins the time() value the step uses. */
+    boot_seed_pin = have_seed ? seed : 0;
+    boot_seed_have_pin = have_seed;
     options_load();
     if (!clock_date_check(clock_time_s())) {
         /* The original blocks here on a modal MessageBoxA and then continues into the
@@ -547,6 +537,7 @@ int game_main(int argc, char **argv)
      * this runs the _initterm steps, table A first. */
     boot_register_core();
     scene_boot_register();
+    if (have_seed) crt_srand(seed);   /* --seed pins the value, not the position */
     boot_run();
     if (!clock_date_check(clock_time_s())) {
         /* The original blocks here on a modal MessageBoxA and then continues into
