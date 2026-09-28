@@ -11,3 +11,4 @@ __pycache__/
 
 # Stray per-directory harness config; the tracked project config is /.omp/config.yml.
 /src/.omp/
+/randtrace.txt
