@@ -7,7 +7,7 @@ file(GLOB WOS_PLATFORM_SOURCES CONFIGURE_DEPENDS "${WOS_ROOT}/src/platform/sdl2/
 # The game entry point is src/game_main.c (game_main()); main_sdl2.c forwards SDL startup to it.
 # cic_unpack.c (the runtime installer decoder) lives here but is NOT part of the game
 # target: it links the miniz/bzip2 codecs and is built only into the decoder/test.
-list(FILTER WOS_PLATFORM_SOURCES EXCLUDE REGEX "cic_unpack\\.c$")
+list(FILTER WOS_PLATFORM_SOURCES EXCLUDE REGEX "(cic_unpack|install)\\.c$")
 set(WOS_SOURCES ${WOS_ENGINE_SOURCES} ${WOS_GAME_SOURCES} ${WOS_PLATFORM_SOURCES})
 # The game links only the root third-party sources (stb_image, TinySoundFont). The
 # Clickteam-packer codecs (miniz deflate + bzip2) live in third_party/codec and are

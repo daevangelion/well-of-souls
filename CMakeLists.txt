@@ -107,4 +107,19 @@ if(WOS_BUILD_TESTS)
     foreach(source ${WOS_CODEC_SOURCES})
         set_property(SOURCE ${source} APPEND PROPERTY COMPILE_OPTIONS -w -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE)
     endforeach()
+
+    # install_selftest additionally exercises the orchestration layer (file/URL/memory
+    # obtain + decode + install). It links SDL2 for the URL reader.
+    add_executable(install_selftest tests/install_selftest.c
+        src/platform/sdl2/install.c src/platform/sdl2/cic_unpack.c
+        src/platform/sdl2/files_sdl2.c ${WOS_CODEC_SOURCES})
+    target_include_directories(install_selftest PRIVATE
+        src src/platform/sdl2 src/third_party/codec)
+    foreach(source src/platform/sdl2/install.c tests/install_selftest.c)
+        set_property(SOURCE ${source} APPEND PROPERTY COMPILE_OPTIONS -Wall -Wextra -Wno-unused-function)
+        if(WOS_WERROR)
+            set_property(SOURCE ${source} APPEND PROPERTY COMPILE_OPTIONS -Werror)
+        endif()
+    endforeach()
+    target_link_libraries(install_selftest PRIVATE m)
 endif()
