@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The developer's official installer is served over plain HTTP; Android blocks
+     cleartext by default (targetSdk 34). Permit it only for that one host — every other
+     destination (including the HTTPS soundfont) stays on the secure default. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">www.synthetic-reality.us</domain>
+    </domain-config>
+</network-security-config>

@@ -71,10 +71,11 @@ unpacking but never links the codecs into the game binary.
 **Runtime setup (one form).** A single "WoS Setup" launcher screen handles both inputs:
 the game installer (pick or download a URL; stored as `installer-supplied.bin` and
 decoded on-device) and, optionally, a soundfont (pick or download; stored as
-`user-soundfont.sf2`). The soundfont URL is pre-filled with the official upstream
-TimGM6mb bank. `find_soundfont()` prefers the supplied bank over the bundled one. The
-game installer is a commercial title with no official free-download URL, so that field
-is left for you to fill with a source you have the right to use.
+`user-soundfont.sf2`). Both URLs are pre-filled with official sources: the developer's
+installer (`http://www.synthetic-reality.us/WellOfSouls.exe`) and the upstream TimGM6mb
+soundfont bank. `find_soundfont()` prefers a supplied bank over the bundled one. Because
+the developer's installer is served over plain HTTP, a network-security-config permits
+cleartext for that host only (the soundfont stays HTTPS).
 
 ## Tests
 

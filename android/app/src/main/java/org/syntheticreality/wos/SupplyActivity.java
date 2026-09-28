@@ -28,9 +28,8 @@ import java.net.URL;
  *   - Soundfont (optional): pick or download a SoundFont2 bank, stored as
  *     user-soundfont.sf2; find_soundfont() prefers it over the built-in bank.
  *
- * The soundfont URL is pre-filled with the official upstream TimGM6mb bank. The game
- * installer is a commercial title with no official free-download URL, so that field is
- * left empty for the user to paste a source they have the right to use.
+ * Both URLs are pre-filled with official sources: the developer's own installer and the
+ * upstream TimGM6mb soundfont bank.
  */
 public final class SupplyActivity extends Activity {
     private static final String TAG = "SupplyActivity";
@@ -41,6 +40,8 @@ public final class SupplyActivity extends Activity {
     private static final String TIMGM6MB_URL =
         "https://raw.githubusercontent.com/arbruijn/TimGM6mb/"
         + "d6ad4ed72dce1fd3d67f17b74e08cd7ae7941a96/TimGM6mb.sf2";
+
+    private static final String INSTALLER_URL = "http://www.synthetic-reality.us/WellOfSouls.exe";
 
     private TextView dataStatus, soundStatus;
     private ProgressBar dataProgress;
@@ -63,7 +64,8 @@ public final class SupplyActivity extends Activity {
         gameButton = findViewById(R.id.gameButton);
         final EditText installerUrl = findViewById(R.id.installerUrl);
         final EditText soundfontUrl = findViewById(R.id.soundfontUrl);
-        soundfontUrl.setText(TIMGM6MB_URL);   // official upstream bank, pre-filled
+        installerUrl.setText(INSTALLER_URL);   // developer's official installer
+        soundfontUrl.setText(TIMGM6MB_URL);    // official upstream bank
 
         findViewById(R.id.pickInstallerButton).setOnClickListener(v -> pick(REQUEST_PICK_INSTALLER));
         findViewById(R.id.downloadInstallerButton).setOnClickListener(v -> {
