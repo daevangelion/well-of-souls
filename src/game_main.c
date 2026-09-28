@@ -277,7 +277,7 @@ static void usage(void)
  * reading it as 0 throughout is seeing its own virtualised GetTickCount return 0, not
  * a missing tick. */
 #define MAIN_FRAME_TIMER_ID 0x16   /* 22 */
-static int frame_timer_owner;
+static int frame_timer_owner, frame_timer_armed;
 static int world_tick_pending;
 /* The 20 Hz tick and the 25 ms world tick, i.e. the real shape of
  * FUN_0040A7C7 (0x0040A7C7) -> FUN_0042895C (0x0042895C) -> FUN_0041BDB4
@@ -523,8 +523,9 @@ int game_main(int argc, char **argv)
      * draws precede it (Oracle3's trace: calls 1..1408 are the tables, call 1409 is
      * 0x00426B27). Seeding before boot put every table draw on the wrong side of
      * the re-seed. --seed still pins the time() value the step uses. */
-    boot_seed_pin = have_seed ? seed : 0;
-    boot_seed_have_pin = have_seed;
+    /* --seed no longer touches the CRT seed: the original seeds from time(NULL),
+     * and --time is the faithful pin. Leave holdrand at the CRT default of 1 so
+     * the 1408 EncInt draws match, and let boot_seed_step() seed from the clock. */
     options_load();
     if (!clock_date_check(clock_time_s())) {
         /* The original blocks here on a modal MessageBoxA and then continues into the
@@ -547,7 +548,6 @@ int game_main(int argc, char **argv)
     /* FUN_00428360, the main frame's id-0x16 100 ms timer, armed at the original's
      * point. It is what actually drives FUN_0040A7C7's gate. */
     frame_timer_owner = 0;
-    clock_set_timer(&frame_timer_owner, MAIN_FRAME_TIMER_ID, 100u, main_frame_timer, NULL);
     if(game_boot()) { result=1; goto cleanup; }
     if(!replay && !script) clock_attach_realtime();
 
@@ -559,18 +559,26 @@ int game_main(int argc, char **argv)
      * 1000/60 ms virtual step so the existing .rpl acceptance tests are
      * bit-identical. */
     while(!quitting) {
-        PlatEvent event; const Screen *screen;
+        PlatEvent event; const Screen *screen; int delivered = 0;
         input_begin(&input);
         while(plat_poll_event(&event)) if(!replay || event.type==PLAT_EV_QUIT) input_event(&input,&event);
         if(input.quit) break;
 
         if(script) {
             /* INPUT first: at an equal timestamp a scheduled event is dispatched
-             * before a timer that is also due, which is the original's order. */
+             * before a timer that is also due, which is the original's order.
+             *
+             * A delivered op MUST be seen by the screen update in THIS iteration.
+             * The world step is gated on the 100 ms timer, so without `delivered`
+             * forcing it the loop would `continue` past screen->update(), the next
+             * iteration's input_begin() would clear the pressed/released edges, and
+             * every scripted event would be dropped -- a --script run with no input
+             * at all, which is exactly what the diff suite was measuring. */
             for(;;) {
                 const DscriptOp *op = dscript_take(script, clock_ms());
                 if(!op) break;
                 apply_script_op(op,&input);
+                delivered = 1;
             }
             {
                 uint32_t next = dscript_next_time(script, clock_ms());
@@ -597,10 +605,23 @@ int game_main(int argc, char **argv)
          * FUN_0041BDB4). The world step runs once per 25 ms of virtual time in
          * --script mode, which is the original's rate; the legacy --replay mode
          * keeps its per-frame step so the .rpl acceptance tests are unchanged. */
+        /* FUN_00428360 arms the main frame's id-0x16 100 ms timer during
+         * InitInstance, and the oracle's trace records its FIRST delivery at
+         * t=150, not t=100. So the port arms it 50 ms into the run rather than at
+         * boot: with a 100 ms period that puts the first WM_TIMER at 150 and the
+         * first FUN_0042895C draw there, which is what the original does. Arming at
+         * t=0 drew at t=100 and cost one spurious draw in every boot-only run. */
+        if (!frame_timer_armed && clock_ms() >= 50u) {
+            clock_set_timer(&frame_timer_owner, MAIN_FRAME_TIMER_ID, 100u,
+                            main_frame_timer, NULL);
+            frame_timer_armed = 1;
+        }
         dialog_retry_pending();
         if (capped && frame >= max_frames) { result = 3; break; }
-        if (script) {
-            /* The 100 ms timer enters the gate; a step happens only when it fired. */
+        if (script && !delivered) {
+            /* The 100 ms timer enters the gate; a step happens only when it fired,
+             * unless this iteration delivered a scheduled input event, which must be
+             * consumed by the update now rather than discarded. */
             if (!world_tick_pending) continue;
             world_tick_pending = 0;
         }

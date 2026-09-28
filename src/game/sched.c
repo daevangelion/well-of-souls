@@ -77,14 +77,18 @@ void srn_mix(void)
     uint32_t fold;
     unsigned draws = 0;
     do {
+        /* FOUR draws, not five. The oracle's trace has exactly four buckets in this
+         * function -- 0x42B4EA / 0x42B4F5 / 0x42B4FC / 0x42B50E -- and the
+         * GetTickCount at 0x42B504 returns to 0x42B50A, which is NOT one of them, so
+         * the clock read is not a draw. The decompilation's five `rand()` calls are
+         * Ghidra's reading; the trace is the authority on the count. */
         uint32_t a = (uint32_t)crt_rand();
         uint32_t b = (uint32_t)crt_rand();
         uint32_t c = (uint32_t)crt_rand();
+        uint32_t t = clock_ms();               /* GetTickCount, not a draw */
         uint32_t d = (uint32_t)crt_rand();
-        uint32_t t = clock_ms();               /* GetTickCount */
-        uint32_t e = (uint32_t)crt_rand();
-        fold = ((((a << 4) ^ b) << 4 ^ c) << 4 ^ (d << 16) ^ t ^ e) & 0x3FFFFFFFu;
-        draws += 5;
+        fold = ((((a << 4) ^ b) << 4 ^ c) ^ t ^ d) & 0x3FFFFFFFu;
+        draws += 4;
     } while (fold == 0);
     wos_log_event("srn_mix", "draws=%u fold=%lu", draws, (unsigned long)fold);
 }

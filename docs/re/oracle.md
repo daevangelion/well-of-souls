@@ -743,6 +743,34 @@ suite. `options` passes that test; the `scene` labels do not.
 
 So the honest figure is **one real pass out of 97 labels**, not four. Quote that one.
 
+**THE PORT'S `--script` PATH DOES NOT DELIVER INPUT (measured 2026-09-28, Core's to fix).** Until
+it does, every port-side number in this section is a measurement of a stationary port, and the
+`front@*` labels below are not measuring the port's front end at all. Reproduced in one line each:
+
+    --script : at 100 click 320 240 / at 800 dump / at 1000 key RETURN / at 1600 dump
+               -> front_state = 0, 0        neither the click nor a key advances anything
+    --replay : expect boot_menu 900 / key RETURN / wait 30
+               -> front_state = 0, then 1   the SAME key advances the front end
+
+The port reads `front_state=0` at every `front` label in every script. Both paths call the same
+`input_event(&input, ...)` — `apply_script_op()` at `src/game_main.c:397` for `--script`, the
+`replay_step` loop at `src/game_main.c:588` for `--replay` — so the divergence is in the loop around
+them. The comment above `clock_dispatch_timers()` notes that `--script` runs the world step at the
+original's 25 ms rate "while the legacy --replay mode keeps its per-frame step", and the replay
+branch additionally calls `clock_advance(phase / 60)`; if the front end's per-frame work is only
+invoked on the replay branch that would explain it, but that is a hypothesis and the reproduction
+above is the fact.
+
+**This is what the 22 differing keys in `front@title` actually are.** With no input delivered the
+port still shows the TITLE screen's entries from `FUN_0041D01E`, and every `spot_add` in that
+function passes message 0 (all.c:21985-22003) — so `msg=0` and `clickable=0` are one cause wearing
+22 costumes, not 22 differences. It is also why `options` is the one real green: a table dump needs
+no input.
+
+**The assertion that would have caught it, and does not exist:** `front_state == 1` after a
+`click 320 240` on a `--script` run. Every `.dsc` here would then have failed with one clear message
+instead of producing a page of front-end mismatches.
+
 **Eleven of the sixteen scripts do not reach their target in the original.** They stop in the front
 end, and section 7 says why. The `battle.*` and `items.*` mismatches they produce are therefore
 *not* evidence about the battle and items modules: at those points the original is in a fight and

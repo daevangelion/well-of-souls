@@ -832,67 +832,47 @@ static void front_update(const Input *in)
         }
         break;
     case FRONT_WHERE:
-        /* OPEN ITEM, deliberately not "fixed" - the solo exit from state 2 is
-         * UNRESOLVED, and both readings of it have been measured wrong once
-         * already. What is established:
+        /* OPEN ITEM, deliberately not "fixed" — and SOLVED as to CAUSE, with the
+         * port's policy still a choice. Oracle5 traced it with a WOS_DETOURS=front
+         * group on six front entries (0x41B891, 0x41D31F, 0x41D374, 0x41D3CC,
+         * 0x41D717, 0x438E8E). A title -> I Accept -> Play now run gives:
+         *     front_state_set ret=00428823 arg=0 now=0
+         *     front_state_set ret=0041C20A arg=1 now=230
+         *     front_state_set ret=0041F6CB arg=2 now=3220
+         *     state2_label    ret=0041BAC0 now=3370
+         *     scanning_label  ret=0041F6ED now=10000
          *
-         *  - The original does NOT leave this state on any input. Oracle4 ran
-         *    the original headless (script in their message, dumps front@t1000,
-         *    t2000, t5000, t9000 after clicking Play now) and front_state stayed
-         *    2 for the full nine seconds. Clicks at 240/200/300/400, RETURN,
-         *    ESC, SPACE and idle were all measured to do nothing.
-         *  - FUN_0041BDB4 case 2 (all.c:21253) is
-         *        iVar5 = FUN_004057D3(); if (iVar5 < 1) goto default;
-         *        InvalidateRect(...);
-         *    It repaints while hotspots are live and otherwise does nothing:
-         *    there is no transition in it. Cases 1 and 3 (all.c:21249) are bare
-         *    repaints. So the tick is not the route.
-         *  - FUN_0041B891(3) has EXACTLY ONE caller in the binary:
-         *    FUN_00428D43 (all.c:30698), the abort/back handler, which sets
-         *    DAT_004df8a4 = -1 first. State 3 is therefore reached via ABORT,
-         *    not as state 2's forward destination.
-         *  - FUN_0041F699, the 0x46B handler (all.c:23549), does
-         *        FUN_0041B891(2);
-         *        if (SendMessageA(frame, 0x46F, 0, 0) == 0) FUN_0041B891(1);
-         *        else { FUN_0041D374(); FUN_00429C9C("MainMenu.wav"); }
-         *    0x46F's only posters are the REGISTRATION dialog's DoModal path
-         *    (all.c:7308, 7325, 7336 in FUN_0040930D), wParam 1/2/3/4 for
-         *    ok/retry/needs-serial/gold. Read literally, solo returns 0 here and
-         *    FUN_0041F699 bounces to state 1 -- but the measured state is 2, and
-         *    Oracle4's WOS_MSGLOG trace shows WHY that reading fails: FUN_0041D374
-         *    (the "--- Scanning ---" label, all.c:16956) was NOT called, so the
-         *    else branch did not run, so 0x46F DID return 0. So 0x46F returned 0
-         *    AND the state is 2, which cannot both follow from FUN_0041F699.
-         *    The likely conclusion is that FUN_0041F699 is not the handler the
-         *    0x46B entry actually reaches: that entry is at 0x4C8A20 and its pfn
-         *    0x424BB3 disassembles to `call 0x4C4E08; ret 0xC`, an MFC dispatcher
-         *    thunk rather than a state-changing handler. Unresolved, and the
-         *    next thing to look at.
-         *  - What is SOLID, all measured, and is the whole of what we know:
-         *    the original stays at front_state 2 for nine seconds after Play now;
-         *    clicks at 240/200/300/400, RETURN, ESC, SPACE and idle do nothing;
-         *    0x046B is posted three times and its LBUTTONDOWN reaches the front
-         *    view (6 of 6 hits, hwnd 0001007A), so the click path is intact and
-         *    the TOS modal was the blocker; and the state-2 hotspot table holds
-         *    only the non-clickable "Where Do You Want To Play Today?" label
-         *    with no Scanning entry.
-         *  - The online route is MFC WM_COMMAND via a message map, not a switch,
-         *    so it does not appear as a comparison in the decomp and I have not
-         *    decoded it. I have NOT been able to find the state 2 -> 3 route by
-         *    reading, and I stopped guessing: the decomp is authoritative about
-         *    the code and silent about which state the code reaches, so this can
-         *    only be settled by running the original.
+         *  - 0x46B DOES reach FUN_0041F699 (the ret=0041F6CB on the arg=2 call).
+         *    The msgmap stride is 24 bytes / 6 dwords, so 0x4C8A20 is the 0x46B
+         *    entry with pfn 0x41F699; 0x4C8A18 is the 0x205 / WM_RBUTTONDOWN
+         *    entry whose pfn 0x424BB3 is where an earlier "dispatcher thunk" dead
+         *    end came from. That misparse is retracted.
+         *  - State 2 is entered at 3220 ms and then BLOCKS. Between 3.37 s and the
+         *    end of the run FUN_0041F699 is parked at 0x41F6DC on
+         *        SendMessageA(*(HWND *)(DAT_004E4840 + 0x20), 0x46F, 0, 0)
+         *    which is SYNCHRONOUS. 0x46F's pfn is 0x42AA10 (msgmap 0x4C9BC8), the
+         *    SRNet open: _SRNOpenNetwork_12, _SRNGetNetworkType_0, then
+         *    _SRNOpenChannel_8 + _SRNGetMyNetworkInfo_20 + FUN_0046CE24 on the
+         *    solo path. It does not return inside the run.
+         *  - So state 2 is not waiting for input and nothing wants to leave it: it
+         *    is parked inside a network call. No click, key or timer moves it, which
+         *    is exactly what the earlier measurement saw.
+         *  - The "--- Scanning ---" label IS registered, at now=10000, the script's
+         *    `end` — not at 3.3 s. An earlier reading that found no Scanning entry
+         *    was a snapshot taken before it was registered.
+         *  - The world list is FUN_0041D717, called only from FUN_0041B891's
+         *    case 3, and the solo stepper FUN_00438E8E that sets state 3 never ran.
          *
-         * WHY THE PORT ADVANCES ANYWAY: the original's behaviour here is to park,
-         * and a front end that cannot leave state 2 is unreachable for every
-         * other test. This advance is the port's escape hatch and is NOT a claim
-         * about the original. It stays until the route is known.
+         * WHY THE PORT ADVANCES ANYWAY: the original's behaviour here is to block
+         * inside SRNet, which the port does not have. Advancing on input is the
+         * port's escape hatch and is NOT a claim about the original; it stays
+         * until someone decides the port's policy for a state the original cannot
+         * leave either. The click/key branch below is that policy and nothing
+         * more.
          *
-         * The thing that made this look settled when it was not: the TOS modal
-         * was covering the main menu and swallowing every click aimed at "Play
-         * now", so the scripts were stopping at state 1 for an unrelated reason
-         * and state 2 was never actually reached. front_dump emits front_state so
-         * that the next attempt is compared rather than inferred. */
+         * NOTE for whoever reads front_state=0 in a diff: `--script` does not
+         * deliver input to the front end while `--replay` does (Oracle4), so a
+         * stationary port in a .dsc run is a harness fact, not a front-end one. */
         if ((in->mouse_pressed&2u) || key) front_goto(FRONT_CHOOSE);
         break;
     case FRONT_CHOOSE:

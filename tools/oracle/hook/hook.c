@@ -2773,25 +2773,11 @@ static BOOL WINAPI hook_SetCursorPos(int x, int y)
 static const char *g_front_name[16];
 static volatile LONG g_front_n;
 
-static void front_log(int idx)
+/* NOT static: the hand-written assembly below calls it by its C name, and a static
+ * function has internal linkage, so the assembler reference is an undefined symbol at
+ * link time. */
+void front_log_c(int idx, void *self, void *ret, int arg)
 {
-    unsigned *sp;
-    void *ret, *self = 0;
-    int arg = 0;
-    __asm__ __volatile__("movl %%esp, %0" : "=r"(sp));
-    /* The stack here is the THUNK's, not the caller's, and the offsets are the ones
-     * that makes that true:
-     *   [esp+0x00] return address into the thunk        (call rel32)
-     *   [esp+0x04] the pushed slot index                (push imm32)
-     *   [esp+0x08..0x28] pushad's eight registers: EDI at +0x08, ESI +0x0C,
-     *                   EBP +0x10, (pushed ESP) +0x14, EBX +0x18, EDX +0x1C,
-     *                   ECX +0x20, EAX +0x24
-     *   [esp+0x2C] the ORIGINAL return address
-     *   [esp+0x30] the original first stack argument
-     * `self` is ECX for a __thiscall callee, which pushad saved at [esp+0x20]. */
-    ret  = (void *)sp[0x2C / 4];
-    self = (void *)sp[0x20 / 4];
-    arg  = (int)sp[0x30 / 4];
     tr("front %ld %s this=%08X ret=%08X arg=%d now=%u",
        (long)InterlockedIncrement(&g_front_n),
        g_front_name[idx] ? g_front_name[idx] : "?",
@@ -2799,7 +2785,38 @@ static void front_log(int idx)
        arg, (unsigned)vnow());
 }
 
-/* The trampoline.  `call front_log` is __cdecl and must not clobber the callee's
+/* The stack offsets are read HERE, in hand-written assembly, because a C function
+ * cannot be relied on to be entered at its first instruction: the compiler may push
+ * registers and open a frame before the first statement, and every offset below would
+ * then be off by that frame.  The layout on entry, with E = the thunk's ESP:
+ *   [E+0x00] return address back into the thunk          (call rel32)
+ *   [E+0x04] the slot index                              (push imm32)
+ *   [E+0x08..0x28] pushad's eight dwords, ascending: EDI, ESI, EBP, the pushed ESP,
+ *                  EBX, EDX, ECX, EAX -- so ECX, which is the `this` of a
+ *                  __thiscall callee, is at E+0x20
+ *   [E+0x28] the ORIGINAL return address
+ *   [E+0x2C] the original first stack argument
+ * After `push ebp; mov esp,ebp; sub esp,8` those become ebp+0x28, +0x2c and +0x30.
+ * This is cdecl, so the thunk's `popad` puts every register back and the ESP is
+ * exactly what the relocated prologue expects. */
+__asm__(
+    ".text\n"
+    ".globl _front_log_asm\n"
+    "_front_log_asm:\n"
+    "  pushl %ebp\n"
+    "  movl  %esp, %ebp\n"
+    "  subl  $8, %esp\n"
+    "  pushl 0x30(%ebp)\n"        /* original first stack argument */
+    "  pushl 0x2c(%ebp)\n"        /* original return address        */
+    "  pushl 0x24(%ebp)\n"        /* ECX, i.e. `this`               */
+    "  pushl 0x08(%ebp)\n"        /* slot index                     */
+    "  call _front_log_c\n"
+    "  addl  $16, %esp\n"
+    "  leave\n"
+    "  ret\n");
+void front_log_asm(void);
+
+/* The trampoline.  `call front_log_asm` is cdecl and must not clobber the callee's
  * registers, so every register the displaced prologue needs is pushed first and the
  * ESP is realigned back to exactly what the original prologue expects.  The displaced
  * bytes are COPIED into the same block, not re-executed in place, because the entry
@@ -2815,25 +2832,35 @@ static void *front_make_thunk(int idx, uintptr_t resume, unsigned char *prologue
                                       PAGE_EXECUTE_READWRITE);
     if (!p) return NULL;
     memcpy(p, head, sizeof head);
-    memcpy(p + 1, &idx, 4);
+    /* `push imm32` is a 0x68 opcode plus FOUR immediate bytes, so the index goes at
+     * p+2.  Writing it at p+1 overwrites the opcode with a displacement, the thunk
+     * then executes whatever instruction that happens to decode to, and the game dies
+     * on the first traced call with nothing logged -- which is exactly what a patch
+     * that logs its own installation and then nothing else looks like. */
+    memcpy(p + 2, &idx, 4);
     call_at = 7; out_at = 15; base = 24;
     here   = (intptr_t)(p + call_at + 4);
-    target = (intptr_t)front_log;
+    target = (intptr_t)front_log_asm;
     memcpy(p + call_at, &(int32_t){ (int32_t)(target - here) }, 4);
     /* the displaced prologue, RELOCATED, then a jump back into the rest of the
      * function.  It has to be copied: patch_text() overwrites the bytes it is copied
      * from, and the thunk is built before patch_text() runs, so the copy is intact. */
     memcpy(p + base, prologue, (size_t)plen);
     memcpy(p + base + plen, "\xE9\0\0\0\0", 5);
+    /* A rel32 field starts ONE PAST its opcode, and `here` is the END of the whole
+     * instruction, i.e. field+4.  Writing the field AT the opcode offset instead
+     * overwrites the opcode and leaves the trailing displacement as whatever the
+     * template held -- which is a jump into the middle of nowhere, and the game dies
+     * at the first call instead of logging anything. */
     jmp_at = base + plen + 1;
     here   = (intptr_t)(p + jmp_at + 4);
     target = (intptr_t)resume;
     memcpy(p + jmp_at, &(int32_t){ (int32_t)(target - here) }, 4);
-    /* the jmp at offset 15 is the LAST thing head[] does: it goes to base, and base is
-     * 24 so it clears head[]'s own rel32 field. */
-    here   = (intptr_t)(p + out_at + 5);
+    /* the jmp at offset 15 is the LAST thing head[] does: it goes to base, which is 24
+     * so it clears head[]'s own rel32 field at 16..19. */
+    here   = (intptr_t)(p + out_at + 1 + 4);
     target = (intptr_t)(p + base);
-    memcpy(p + out_at, &(int32_t){ (int32_t)(target - here) }, 4);
+    memcpy(p + out_at + 1, &(int32_t){ (int32_t)(target - here) }, 4);
     tr("front: thunk[%d] at %p prologue=%d bytes resume=%08lX", idx, (void *)p, plen,
        (unsigned long)resume);
     return p;
@@ -2851,6 +2878,9 @@ static void install_front_trace(void)
         { 0x0041D3CCu, "worldlist_rows",   7 },  /* push ebp / mov eax,[esp+0Ch] / mov ebp,esp */
         { 0x0041D717u, "worldlist_init",   6 },  /* push ebp / mov eax,11C0h */
         { 0x00438E8Eu, "solo_stepper",     6 },  /* push ebp / mov eax,1FBCh */
+        { 0x0042AA10u, "srnet_open_46F",   5 },  /* mov eax,1F50h */
+        { 0x0046CE24u, "network_info",      5 },  /* push esi / mov esi,[esp+8] */
+        { 0x0042B06Au, "quit_game",         5 },  /* push ebx / push esi / push edi / mov ebx,ecx */
     };
     unsigned i;
     for (i = 0; i < sizeof T / sizeof T[0] && i < 16; i++) {

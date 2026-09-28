@@ -16,6 +16,7 @@
 #include "../engine/text.h"
 #include "../engine/log.h"
 #include "../engine/dump.h"
+#include "../engine/rng.h"
 #include "../platform/platform.h"
 #include <string.h>
 #include <stdlib.h>

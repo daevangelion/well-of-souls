@@ -71,9 +71,22 @@ uint32_t boot_seed_pin;
 int boot_seed_have_pin;
 void boot_seed_step(void)
 {
-    uint32_t t = boot_seed_have_pin ? boot_seed_pin : clock_time_s();
+    /* The original is `srand(time(NULL))` -- the seed IS the wall clock, and the
+     * wall clock is what --time pins. The legacy --seed flag is the .rpl replay
+     * pin and must NOT override this: with --seed 1 --time 1234567890 the port was
+     * seeding from 1 while the oracle seeded from 1234567890, which is why the boot
+     * COUNT matched and the state did not. */
+    uint32_t t = clock_time_s();
     crt_srand(t);
+    /* 1409: 0x00426B27, the base-offset draw. abs(draw) & 0x3FFF & ~15 is 0..0x3FF0;
+     * DAT_004E4870 adds a malloc block and DAT_0067FBF8 is that + 0x1560A5C. Only
+     * the masked draw is comparable, since the block is a heap address. */
     { int draw = crt_rand(); crt_boot_base_offset_set((uint32_t)(draw & 0x3fff) & ~0xfu); }
+    /* 1410: 0x0048E1CF, inside FUN_0048E19A, which FUN_00427D89 calls before
+     * allocating hero slot 0. It is the SAME boot draw, not a second one --
+     * FrontHero-2 had it in hero_allocate_slot(), which runs in game_boot() after
+     * boot_run(), so it was being taken a step too late as well as duplicated. */
+    (void)crt_rand();
     crt_srand(t);
     wos_log_event("rng_seeded", "seed=%lu", (unsigned long)t);
 }
