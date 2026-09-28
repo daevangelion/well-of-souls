@@ -66,6 +66,14 @@ int enc_valid(const EncInt *e) { return verify(e); }
 int enc_cheat_flag(void) { return cheat_flag; }
 void enc_cheat_clear(void) { cheat_flag = 0; }
 
+void enc_construct_array(void *base, size_t offset, size_t stride, int count)
+{
+    int i;
+    unsigned char *p = (unsigned char *)base;
+    if (!base || !stride) return;
+    for (i = 0; i < count; ++i) enc_clear((EncInt *)(p + (size_t)i * stride + offset));
+}
+
 const char *enc_dump_keys(const EncInt *e, char *out, size_t cap)
 {
     if (!out || !cap) return "";

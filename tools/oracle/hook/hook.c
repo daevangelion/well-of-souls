@@ -151,13 +151,171 @@ static void trace_line(const char *fmt, ...)
     WriteFile(g_traceh, buf, n + 2, &n, NULL);
 }
 
+/* ---------------------------------------------- the EncInt seal, FUN_0049B6C7
+ *
+ * 1408 of the 1420 boot rands are this one function: the anti-cheat "encrypted int"
+ * setter, which writes three verification doubles and then draws four key ints.  It
+ * lives in Souls.exe's own .text, so it cannot be reached with an IAT hook -- there is
+ * no import slot anywhere on the path -- and the caller address in the rand trace says
+ * only that "something" called it 352 times, not which of the half-dozen construction
+ * routines did it or in what order.
+ *
+ * The prologue is `SUB ESP,4 ; PUSH ESI ; PUSH EDI` (0x49B6C7..0x49B6CC, six bytes), so
+ * the same six-byte push-imm32/ret trampoline the IAT hooks use lands exactly on an
+ * instruction boundary, and those three instructions are replayed in the hook before it
+ * jumps back to 0x49B6CC.  `this` is ECX (__fastcall); the caller's return address is
+ * the word at the top of the stack on entry.
+ *
+ * The four-deep chain is a STACK SCAN, not an EBP walk: MSVC /O2 omits frame pointers in
+ * nearly everything here, so the EBP chain dies at the first leaf.  Anything in
+ * [0x401000,0x500000) on the stack is a return address into the game's .text, which is
+ * a filter with no false positives worth worrying about -- the only other things on a
+ * 32-bit stack in that range are the vtable pointers and constants the game pushes.
+ */
+#define VA_ENC_SEAL  0x0049B6C7u
+#define ENC_SEAL_RESUME 0x0049B6CCu
+static volatile LONG g_enc_trace;
+static volatile LONG g_enc_n;
+
+static void enc_log(const void *self, const void *ret);
+extern uintptr_t g_base;
+
+/* The thunk is emitted rather than written in a top-level asm block: it is nine
+ * instructions, two of which carry a rel32 that is only known once the image base and
+ * the compiled addresses are, and building it here keeps the displacement honest without
+ * a separate .s file.  Layout:
+ *
+ *   83 EC 04            subl   $4,%esp        <- the first displaced instruction, and
+ *                                              the 4-byte alignment the call needs
+ *   8B 44 24 04         movl   4(%esp),%eax   <- the caller's return address
+ *   50                  pushl  %eax
+ *   51                  pushl  %ecx           <- `this`
+ *   E8 <rel32>          call   enc_log
+ *   83 C4 08            addl   $8,%esp
+ *   56                  pushl  %esi           <- the other two displaced instructions
+ *   57                  pushl  %edi
+ *   E9 <rel32>          jmp    0x0049B6CC     <- back into the real body, ESP exact
+ */
+static void *enc_make_thunk(void)
+{
+    static const unsigned char head[] = {
+        0x83, 0xEC, 0x04,             /* subl  $4,%esp   */
+        0x8B, 0x44, 0x24, 0x04,       /* movl  4(%esp),%eax */
+        0x50,                         /* pushl %eax      */
+        0x51,                         /* pushl %ecx      */
+        0xE8, 0, 0, 0, 0,             /* call  enc_log   */
+        0x83, 0xC4, 0x08,             /* addl  $8,%esp   */
+        0x56,                         /* pushl %esi      */
+        0x57,                         /* pushl %edi      */
+        0xE9, 0, 0, 0, 0              /* jmp   resume    */
+    };
+    unsigned char *p;
+    /* the rel32 fields start one past their E8/E9 opcode: call at index 9, jmp at 19 */
+    int call_at = 10, jmp_at = 20;
+    intptr_t here, target;
+    p = (unsigned char *)VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE,
+                                      PAGE_EXECUTE_READWRITE);
+    if (!p) return NULL;
+    memcpy(p, head, sizeof head);
+    here   = (intptr_t)(p + call_at);
+    target = (intptr_t)enc_log;
+    memcpy(p + call_at, &(int32_t){ (int32_t)(target - here) }, 4);
+    here   = (intptr_t)(p + jmp_at);
+    target = (intptr_t)(g_base + (ENC_SEAL_RESUME - IMAGE_BASE));
+    memcpy(p + jmp_at, &(int32_t){ (int32_t)(target - here) }, 4);
+    tr("enc: thunk at %p, enc_log=%p, resume=%08lX", (void *)p, (void *)enc_log,
+       (unsigned long)target);
+    return p;
+}
+
+static void enc_log(const void *self, const void *ret)
+{
+    unsigned *sp;
+    char line[192];
+    int n, i, got;
+    if (!g_enc_trace) return;
+    n = snprintf(line, sizeof line, "enc %ld this=%08X ret=%08X chain",
+                 (long)InterlockedIncrement(&g_enc_n),
+                 (unsigned)(uintptr_t)self, (unsigned)(uintptr_t)ret);
+    __asm__ __volatile__("movl %%esp, %0" : "=r"(sp));
+    got = 0;
+    for (i = 0; i < 64 && n < (int)sizeof line - 12; i++) {
+        unsigned v = sp[i];
+        if (v >= 0x00401000u && v < 0x00500000u) {
+            if (v == (unsigned)(uintptr_t)ret) continue;
+            n += snprintf(line + n, sizeof line - n, " %08X", v);
+            if (++got == 4) break;
+        }
+    }
+    trace_line("%s", line);
+}
+
+/* The six-byte trampoline: push <addr> ; ret.  Nothing of the original prologue runs at
+ * the patch site, so there is no length disassembler and no copied code. */
+static int patch_text(uintptr_t va, void *target)
+{
+    unsigned char *p = (unsigned char *)va;
+    DWORD old = 0;
+    if (!VirtualProtect(p, 8, PAGE_EXECUTE_READWRITE, &old)) {
+        tr("enc: VirtualProtect(%08lX) failed, err=%lu", (unsigned long)va, GetLastError());
+        return 0;
+    }
+    p[0] = 0x68;                                  /* push imm32 */
+    memcpy(p + 1, &target, 4);
+    p[5] = 0xC3;                                  /* ret */
+    VirtualProtect(p, 8, old, &old);
+    tr("enc: FUN_0049B6C7 at %08lX -> %p", (unsigned long)va, target);
+    return 1;
+}
+
+/* g_base is the reloaded image base; it is declared here because the module-base
+ * machinery further down has not been reached at this point in the file. */
+extern uintptr_t g_base;
+
+
+static void install_enc_trace(void)
+{
+    uintptr_t va = (uintptr_t)(g_base + (VA_ENC_SEAL - IMAGE_BASE));
+    if (patch_text(va, enc_make_thunk())) g_enc_trace = 1;
+}
+
+/* A bounded set of "already reported" return addresses, so the chain scan reports each
+ * distinct caller once for the whole run instead of on all 1420 calls. */
+static unsigned g_sites[512];
+static int g_nsites;
+static int site_seen(unsigned v)
+{
+    int i;
+    for (i = 0; i < g_nsites; i++) if (g_sites[i] == v) return 1;
+    if (g_nsites < 512) g_sites[g_nsites++] = v;
+    return 0;
+}
+
 static int __cdecl hook_rand(void)
 {
     g_holdrand = g_holdrand * 214013u + 2531011u;
     InterlockedIncrement(&g_rand_calls);
-    if (g_rand_trace)
-        trace_line("%d %08X", (int)g_rand_calls,
-                   (unsigned)(uintptr_t)__builtin_return_address(0));
+    if (g_rand_trace) {
+        /* The site alone cannot separate a 4-call routine from a 352-iteration loop, and
+         * it cannot say WHICH construction routine ran.  A stack scan for the first
+         * unseen caller gives both, once per site, which is the whole boot-rand table. */
+        unsigned *sp;
+        void *ra = __builtin_return_address(0);
+        char chain[80];
+        int i, got = 0, cn = 0;
+        __asm__ __volatile__("movl %%esp, %0" : "=r"(sp));
+        chain[0] = 0;
+        for (i = 0; i < 64 && got < 4; i++) {
+            unsigned v = sp[i];
+            if (v >= 0x00401000u && v < 0x00500000u && v != (unsigned)(uintptr_t)ra &&
+                !site_seen(v)) {
+                site_seen(v);
+                cn += snprintf(chain + cn, sizeof chain - cn, " %08X", v);
+                if (++got == 4) break;
+            }
+        }
+        trace_line("%d %08X%s", (int)g_rand_calls, (unsigned)(uintptr_t)ra, chain);
+    }
     return (int)((g_holdrand >> 16) & 0x7FFFu);
 }
 static void __cdecl hook_srand(unsigned seed)
@@ -290,7 +448,7 @@ static BOOL  __stdcall hook_WinHelpA(HWND h, LPCSTR f, UINT c, DWORD x)
 { (void)h; (void)f; (void)c; (void)x; return 1; }
 
 static void tr(const char *fmt, ...);
-static uintptr_t g_base;
+uintptr_t g_base;
 
 /* --- WOS_DETOURS group "probe": a one-shot introspection of the live process. ---
  * The options table DAT_004F2A58 lives in .bss and is filled by a start-up constructor,
@@ -521,7 +679,7 @@ static int     g_finished, g_quit_posted;
 static HWND    g_main;
 static int     g_resize_tries;
 static char    g_outdir[512] = ".";
-static uintptr_t g_base = IMAGE_BASE;
+uintptr_t g_base = IMAGE_BASE;
 static int     g_dump_seq;
 
 static const struct { const char *name; int vk; } g_vk[] = {
@@ -1097,6 +1255,7 @@ hero_done: ;
 static void script_init(void);
 static int pump_step_inner(void);
 static volatile LONG g_pump_depth;
+static uint32_t g_last_gate = 0xFFFFFFFFu;
 
 /* Re-entrancy guard.  Everything pump_step does runs on the app's own thread inside a
  * message-pump call, and several of those calls (RedrawWindow with RDW_UPDATENOW,
@@ -1157,9 +1316,14 @@ static int pump_step_inner(void)
     t_in = (idx < g_nev) ? g_ev[idx].t : 0xFFFFFFFFu;
     t_tim = timer_next_deadline();
 
-    if (InterlockedCompareExchange(&g_steps, 0, 0) < 60)
+    /* The 20 Hz stamp is a parity key in its own right, so log it whenever it MOVES as
+     * well as for the first minute of steps: a stamp that never moves is the whole
+     * answer to "why does the tick lag". */
+    if (InterlockedCompareExchange(&g_steps, 0, 0) < 60 || gate != g_last_gate) {
+        g_last_gate = gate;
         tr("pump_step: now=%u t_in=%u t_tim=%u t_idle=%u gate=%08lX",
            now, t_in, t_tim, t_idle, (unsigned long)gate);
+    }
 
     if (t_in == 0xFFFFFFFFu && t_tim == 0xFFFFFFFFu) {
         if (now < g_end_ms) { vadvance(g_end_ms); return 0; }   /* run the clock out */
@@ -1224,14 +1388,58 @@ static int pump_step_inner(void)
 static volatile LONG g_msglog;
 static volatile LONG g_msglog_n;
 static volatile LONG g_idle_pass;
+static uint32_t       g_msglog_until;   /* virtual ms; 0 = no bound */
 static void msglog(LPMSG m, const char *fn, UINT rm, BOOL got)
 {
     if (!g_msglog) return;
-    tr("msglog %s %s rm=%u id=%04X hwnd=%p w=%08lX l=%08lX idle=%ld n=%ld",
-       fn, got ? "GOT" : "EMPTY", rm, got ? m->message : 0u, got ? (void *)m->hwnd : 0,
+    if (g_msglog_until && vnow() > g_msglog_until) return;
+    tr("msglog now=%u %s %s rm=%u id=%04X hwnd=%p w=%08lX l=%08lX idle=%ld n=%ld",
+       vnow(), fn, got ? "GOT" : "EMPTY", rm, got ? m->message : 0u, got ? (void *)m->hwnd : 0,
        got ? (unsigned long)m->wParam : 0ul, got ? (unsigned long)m->lParam : 0ul,
        (long)g_idle_pass, (long)InterlockedIncrement(&g_msglog_n));
 }
+/* A message id alone does not say which window class produced it, and under Wine the
+ * private ids (0x0360..0x03FF) are posted by MFC42 and by user32 itself, neither of
+ * which is in the game's import table.  Naming the window once per hwnd is the cheapest
+ * way to tell "the game posted this" from "the toolkit did". */
+static void msglog_win(HWND h)
+{
+    char cls[128], txt[128];
+    static HWND seen[64];
+    static int nseen;
+    int i;
+    if (!h || !g_msglog) return;
+    for (i = 0; i < nseen; i++) if (seen[i] == h) return;
+    if (nseen < 64) seen[nseen++] = h;
+    cls[0] = txt[0] = 0;
+    GetClassNameA(h, cls, sizeof cls);
+    GetWindowTextA(h, txt, sizeof txt);
+    tr("msglog window hwnd=%p class=%s text=%s", (void *)h, cls, txt);
+}
+
+/* ...and this one answers "who put it there".  A module-level PostMessage/SendMessage
+ * detour with the caller's return address is the only place a message's origin is
+ * visible: the queue itself keeps no sender, and under Wine no IAT slot of the game
+ * sits on the path of a message Wine posts itself. */
+static BOOL (WINAPI *real_PostMessageA)(HWND, UINT, WPARAM, LPARAM);
+static BOOL (WINAPI *real_SendMessageA)(HWND, UINT, WPARAM, LPARAM);
+static BOOL WINAPI hook_PostMessageA(HWND h, UINT msg, WPARAM w, LPARAM l)
+{
+    if (g_msglog)
+        tr("post now=%u ra=%08lX Post id=%04X hwnd=%p w=%08lX l=%08lX",
+           vnow(), (unsigned long)(uintptr_t)__builtin_return_address(0), msg, (void *)h,
+           (unsigned long)w, (unsigned long)l);
+    return real_PostMessageA(h, msg, w, l);
+}
+static BOOL WINAPI hook_SendMessageA(HWND h, UINT msg, WPARAM w, LPARAM l)
+{
+    if (g_msglog)
+        tr("post now=%u ra=%08lX Send id=%04X hwnd=%p w=%08lX l=%08lX",
+           vnow(), (unsigned long)(uintptr_t)__builtin_return_address(0), msg, (void *)h,
+           (unsigned long)w, (unsigned long)l);
+    return real_SendMessageA(h, msg, w, l);
+}
+
 
 static volatile LONG g_peeks;
 static BOOL WINAPI hook_PeekMessageA(LPMSG m, HWND h, UINT a, UINT b, UINT rm)
@@ -1242,6 +1450,7 @@ static BOOL WINAPI hook_PeekMessageA(LPMSG m, HWND h, UINT a, UINT b, UINT rm)
     pump_step();
     r = real_PeekMessageA(m, h, a, b, rm);
     if (!r) InterlockedIncrement(&g_idle_pass);
+    if (r) msglog_win(m->hwnd);
     msglog(m, "Peek", rm, r);
     return r;
 }
@@ -1288,6 +1497,13 @@ static void script_init(void)
     n = GetEnvironmentVariableA("WOS_OUT", g_outdir, sizeof g_outdir);
     if (!n || n >= sizeof g_outdir) strcpy(g_outdir, ".");
     tr("script_init: WOS_OUT=%s randtrace=%d parsing %s", g_outdir, (int)g_rand_trace, v);
+    n = GetEnvironmentVariableA("WOS_MSGLOG", g_scratch, sizeof g_scratch);
+    if (n && n < sizeof g_scratch) {
+        g_msglog = atol(g_scratch);
+        n = GetEnvironmentVariableA("WOS_MSGLOG_MS", g_scratch, sizeof g_scratch);
+        g_msglog_until = (n && n < sizeof g_scratch) ? (uint32_t)atol(g_scratch) : 0u;
+        tr("script_init: msglog=%d until=%u", (int)g_msglog, g_msglog_until);
+    }
     if (!parse_script(v)) { tr("script_init: FATAL parse failed"); return; }
     tr("script_init: parsed %d events, end=%u", g_nev, g_end_ms);
     InterlockedExchange(&g_ready, 1);
@@ -1724,6 +1940,15 @@ static int grp(const char *name)
     return in_list(buf, name) || in_list(buf, "all");
 }
 
+static BOOL (WINAPI *real_SetCursorPos)(int, int);
+static BOOL WINAPI hook_SetCursorPos(int x, int y)
+{
+    if (g_msglog)
+        tr("post now=%u ra=%08lX SetCursorPos %d,%d", vnow(),
+           (unsigned long)(uintptr_t)__builtin_return_address(0), x, y);
+    return real_SetCursorPos(x, y);
+}
+
 static void install_detours(void)
 {
     HMODULE k32 = GetModuleHandleA("kernel32.dll");
@@ -1756,13 +1981,19 @@ static void install_detours(void)
                              GetProcAddress(u32, "CreateDialogIndirectParamW");
     real_MessageBoxA = (int (WINAPI *)(HWND, LPCSTR, LPCSTR, UINT))GetProcAddress(u32, "MessageBoxA");
     real_MessageBoxW = (int (WINAPI *)(HWND, LPCWSTR, LPCWSTR, UINT))GetProcAddress(u32, "MessageBoxW");
+    real_PostMessageA = (BOOL (WINAPI *)(HWND, UINT, WPARAM, LPARAM))GetProcAddress(u32, "PostMessageA");
+    real_SendMessageA = (BOOL (WINAPI *)(HWND, UINT, WPARAM, LPARAM))GetProcAddress(u32, "SendMessageA");
 
     if (grp("pump")) {
         DETOUR("user32.dll", "PeekMessageA",         hook_PeekMessageA);
         DETOUR("user32.dll", "PeekMessageW",         hook_PeekMessageA);
         DETOUR("user32.dll", "GetMessageA",          hook_GetMessageA);
         DETOUR("user32.dll", "GetMessageW",          hook_GetMessageA);
+        DETOUR("user32.dll", "PostMessageA",         hook_PostMessageA);
+        DETOUR("user32.dll", "SendMessageA",         hook_SendMessageA);
     }
+    real_SetCursorPos = GetProcAddress(u32, "SetCursorPos");
+    if (real_SetCursorPos) DETOUR("user32.dll", "SetCursorPos", hook_SetCursorPos);
 
     /* The modal loop Wine keeps on the far side of its own imports. */
     if (grp("modal")) {
@@ -1869,6 +2100,12 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r)
          * call, so it stays off unless the variable is set. */
         g_rand_trace = GetEnvironmentVariableA("WOS_RANDTRACE", g_scratch, sizeof g_scratch) != 0;
         if (g_rand_trace) trace_open();
+        if (GetEnvironmentVariableA("WOS_ENC_TRACE", g_scratch, sizeof g_scratch)) {
+            g_enc_trace = 1;              /* install_enc_trace also sets it; the write here
+                                         * covers the rands that happen before DllMain
+                                         * returns, which is all 1408 of the boot ones */
+            install_enc_trace();
+        }
         install_detours();
     }
     return 1;

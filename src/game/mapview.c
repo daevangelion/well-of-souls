@@ -100,8 +100,8 @@ static int wander_speed;               /* DAT_004f2190 */
 static uint32_t wander_legs;           /* _DAT_004f219C */
 
 /* --- encounter state (FUN_0046260E) -------------------------------------- */
-static uint32_t enc_a;                 /* _DAT_004f2220 */
-static uint32_t enc_b;                 /* _DAT_004f2224 */
+static uint32_t cool_a;                 /* _DAT_004f2220 */
+static uint32_t cool_b;                 /* _DAT_004f2224 */
 static uint32_t battle_end_tick;       /* DAT_004e70a8, set when a fight ends */
 static int no_monsters_here;           /* DAT_004f2228 */
 static int hunt_recent;                /* DAT_004e70ac */
@@ -633,7 +633,7 @@ static void map_reset_runtime(int link)
      * when the hero is not standing in a link, so the map entry does not touch it either. */
     nearest_link_idx = hit_link_idx = -1;
     no_monsters_here = 0;
-    enc_a = enc_b = 0;
+    cool_a = cool_b = 0;
     face_x = face_y = 1;
     minimap = 0;
     battle_end_tick = clock_ms();
@@ -749,14 +749,14 @@ static int encounter_roll(int nearest, int moving, uint32_t now)
     level = hunting_level(g_hero.hunting);
     r = crt_rand();
     hit = (uint32_t)(r % 10000) < (uint32_t)base * 3u / (uint32_t)(level + 3) &&
-          (uint32_t)(now - enc_a) > ENC_COOL_MS && moving;
+          (uint32_t)(now - cool_a) > ENC_COOL_MS && moving;
     if (!hit) {
         r = crt_rand();
         hit = ((uint32_t)(r % 10000) < (uint32_t)g_hero.hunting || hunt_recent > 10) &&
-              ((uint32_t)(now - enc_b) > ENC_COOL_MS) && battle_grace(now, 0);
+              ((uint32_t)(now - cool_b) > ENC_COOL_MS) && battle_grace(now, 0);
     }
     if (!hit) return 0;
-    enc_a = now; enc_b = now;
+    cool_a = now; cool_b = now;
     hunt_recent = 0;
     wos_log_event("encounter_roll", "nearest=%d base=%d level=%d", nearest, base, level);
     return 2;
@@ -1065,8 +1065,8 @@ void map_dump(DumpEmit emit, void *user)
     dump_emit_int(emit, "map.nearest", nearest_link_idx, user);
     dump_emit_int(emit, "map.hit", hit_link_idx, user);
     dump_emit_int(emit, "map.latched", link_latched, user);
-    dump_emit_int(emit, "map.enc_a", (long long)(now - enc_a), user);
-    dump_emit_int(emit, "map.enc_b", (long long)(now - enc_b), user);
+    dump_emit_int(emit, "map.enc_a", (long long)(now - cool_a), user);
+    dump_emit_int(emit, "map.enc_b", (long long)(now - cool_b), user);
     dump_emit_int(emit, "map.enc_grace", battle_end_tick ? (long long)(now - battle_end_tick) : -1, user);
     dump_emit_int(emit, "map.no_monsters", no_monsters_here, user);
     dump_emit_int(emit, "map.wander", wander_speed != 0, user);

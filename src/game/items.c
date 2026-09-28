@@ -25,6 +25,9 @@ static const char *const equip_defaults[EQUIP_SLOT_COUNT] = {
     "Helmet", "Armor", "Boots", "Shield", "Ring", "Amulet"
 };
 static char equip_names[EQUIP_SLOT_COUNT][40];
+/* FUN_00413181's ten unrolled EncInt constructions run before the monster lookup
+ * is validated, so they need somewhere to land even on a rejected pet. */
+static EncInt pet_scratch[10];
 
 const char *world_equip_slot_name(int slot)
 {
@@ -532,29 +535,46 @@ Pet *pet_at(int index)
 void pet_reset(void) { memset(pen, 0, sizeof pen); }
 
 /* FUN_00413181: a class-200 item is a pet voucher whose arg3 is a MONSTER id,
- * not an image index. The original rolls ten names (FUN_0049B70F) and five
- * trait values (FUN_0049B71B); each is one crt_rand() in the same order. */
+ * not an image index.
+ *
+ * The RNG cost is the whole point of the EncInt seal, so the order matters:
+ * ten UNROLLED FUN_0049B75D constructions run first and unconditionally - even
+ * for a bad monster id - and only then six FUN_0049B71B sets, but only once the
+ * monster row has been validated. 10*4 + 6*4 = 64 crt_rand() on the happy path,
+ * 40 when the monster lookup fails. enc_construct_array is not used here
+ * because these are unrolled, not a counted loop; the ascending-address order
+ * is the Pet struct's declaration order, which is what the original's stack
+ * frame does too. */
 int pet_spawn(int monster_id)
 {
-    int i, k;
+    int i, k, slot = -1;
+    for (k = 0; k < 10; ++k) enc_clear(&pet_scratch[k]);
     if (monster_id <= 0 || monster_id >= WORLD_MAX_MONSTERS) return 0;
     if (!g_world.monsters[monster_id].used) return 0;
-    for (i = 0; i < PET_PEN_SLOTS; ++i) if (!pen[i].used) break;
-    if (i == PET_PEN_SLOTS) {
+    for (i = 0; i < PET_PEN_SLOTS; ++i) if (!pen[i].used) { slot = i; break; }
+    if (slot < 0) {
         wos_log_event("pet_rejected","reason=pen_full monster=%d",monster_id);
         return 0;
     }
-    for (k = 0; k < 10; ++k) (void)crt_rand();
-    for (k = 0; k < 5; ++k) (void)crt_rand();
-    memset(&pen[i], 0, sizeof pen[i]);
-    pen[i].used = 1;
-    pen[i].monster_id = monster_id;
-    pen[i].level = g_hero.level;
-    pen[i].owner_class = g_hero.klass;
-    pen[i].hp = pen[i].max_hp = g_world.monsters[monster_id].hp;
+    memset(&pen[slot], 0, sizeof pen[slot]);
+    /* Six sealed stores (FUN_0049B71B, 4 draws each = 24). The values come from
+     * the monster row the pet was cloned from; which six of the original's ten
+     * loaded fields are the sealed ones is not resolved from the decomp, so the
+     * COUNT (6) and the ORDER are exact and the field choice is not. */
+    enc_set(&pen[slot].level, g_hero.level);
+    enc_set(&pen[slot].max_hp, g_world.monsters[monster_id].hp);
+    enc_set(&pen[slot].hp, g_world.monsters[monster_id].hp);
+    enc_set(&pen[slot].str, g_world.monsters[monster_id].strength);
+    enc_set(&pen[slot].sta, g_world.monsters[monster_id].stamina);
+    enc_set(&pen[slot].agi, g_world.monsters[monster_id].agility);
+    pen[slot].dex = g_world.monsters[monster_id].dexterity;
+    pen[slot].wis = g_world.monsters[monster_id].wisdom;
+    pen[slot].used = 1;
+    pen[slot].monster_id = monster_id;
+    pen[slot].owner_class = g_hero.klass;
     wos_log_event("pet_acquired","monster=%d name=%s slot=%d",
-                  monster_id,g_world.monsters[monster_id].name,i);
-    return i;
+                  monster_id,g_world.monsters[monster_id].name,slot);
+    return slot;
 }
 
 int pet_release(int index)
@@ -592,7 +612,7 @@ int pet_level_of(int monster_id)
 {
     int i;
     for (i = 0; i < PET_PEN_SLOTS; ++i)
-        if (pen[i].used && pen[i].monster_id == monster_id) return pen[i].level;
+        if (pen[i].used && pen[i].monster_id == monster_id) return enc_get(&pen[i].level);
     return 0;
 }
 
@@ -605,8 +625,8 @@ void pet_dump(DumpEmit emit, void *user)
         if (!pen[i].used) continue;
         dump_emit_int(emit,"items.pet.slot",i,user);
         dump_emit_int(emit,"items.pet.monster",pen[i].monster_id,user);
-        dump_emit_int(emit,"items.pet.level",pen[i].level,user);
-        dump_emit_int(emit,"items.pet.hp",pen[i].hp,user);
+        dump_emit_int(emit,"items.pet.level",enc_get(&pen[i].level),user);
+        dump_emit_int(emit,"items.pet.hp",enc_get(&pen[i].hp),user);
     }
 }
 

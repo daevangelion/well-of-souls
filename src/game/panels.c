@@ -349,7 +349,7 @@ static void pen_render(Framebuffer *fb)
             fb_fill(fb,r,i==panel.pen_selected?0x57482b:0x18191c);
             fb_rect(fb,r,i==panel.pen_selected?0xffd477:0x74613e);
             snprintf(text,sizeof text,"%s  L%d  %d/%d",g_world.monsters[p->monster_id].name,
-                     p->level,p->hp,p->max_hp);
+                     enc_get(&p->level),enc_get(&p->hp),enc_get(&p->max_hp));
             font_draw(fb,r.x+8,r.y+14,text,INK);
             ++n;
         }

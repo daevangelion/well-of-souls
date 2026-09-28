@@ -17,6 +17,7 @@
  *   trophy bag size cookie           FUN_0046FED9
  *   trophy bag dialog (resource 0xE7) FUN_0046FF98, cell 0x28 px
  *   pet spawn from a class-200 item  FUN_00413181 (arg3 = MONSTER id)
+ *   pet EncInt construction          FUN_00413181 (10 x FUN_0049B75D then 6 x FUN_0049B71B)
  *   pet pen file                     FUN_0040FBFD (0xC5A4 bytes, 32 slots of 0x608)
  *   pet pen dialog art               FUN_00412716 (petButtons.bmp, petPen.jpg)
  *   equip slot names                 FUN_004823C4 / FUN_00482431 / FUN_004824B4
@@ -31,6 +32,7 @@
 #include "hero.h"
 #include "world.h"
 #include "../engine/dump.h"
+#include "../engine/encint.h"
 
 /* items.txt arg2 item classes. FUN_00482FC1 stores arg2 at record +0x88 and the
  * class decides how the item can be used (items.txt header, "arg 2 Class"). */
@@ -122,17 +124,18 @@ int  trophy_bag_award_kill(int monster_id);
 
 /* ---- pets (class 200, FUN_00413181 / FUN_0040FBFD) ---- */
 #define PET_PEN_SLOTS 32        /* 0xC100 / 0x608 */
-
 typedef struct {
     int used;
     int monster_id;             /* the MONSTER row the pet was cloned from */
-    int level;
-    int name;                   /* the original's random-name seed, FUN_0049B70F */
-    int owner_class;            /* the class that owns the pen slot (0x224) */
+    /* The pet's sealed stat block. FUN_00413181 costs 10 EncInt constructions
+     * (FUN_0049B75D, unconditional, before the monster lookup is validated) and
+     * then 6 sealed stores (FUN_0049B71B): 10*4 + 6*4 = 64 crt_rand(). Exactly
+     * six fields are EncInt because exactly six stores are sealed. */
+    EncInt level, hp, max_hp, str, sta, agi;
+    int dex, wis;                 /* loaded from the monster row, not sealed */
+    int owner_class;            /* 0x224, the class that owns the pen slot */
     int token;                  /* 0x228, negative hero serial by default */
     int flags;
-    int xp;
-    int hp, max_hp;
 } Pet;
 
 int  pet_count(void);

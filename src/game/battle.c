@@ -10,6 +10,7 @@
 #include "items.h"
 #include "scene.h"
 #include "../engine/clock.h"
+#include "../engine/encint.h"
 #include "../engine/font.h"
 #include "../engine/log.h"
 #include "../engine/rng.h"
@@ -54,6 +55,12 @@ typedef struct {
     int rating;            /* rec[0x6D8], FUN_00491bb7's derived attack rating */
     int owner;             /* rec[+4]: -1 monster, >0 player account */
     int turn;             /* rec[+0x38C] */
+    /* FUN_0049b71B/FUN_0049b734/FUN_0049b73F sealed companions. The original stores these fields
+     * as encrypted ints: a plain int is the value (enc_get is free) and the EncInt beside it is
+     * the seal, and every SET or ADD spends exactly 4 crt_rand() in the order k0,k1,k2,k3. The
+     * site counts below are the original's own - see each call. */
+    EncInt enc_hp, enc_max_hp, enc_mp, enc_level, enc_offense, enc_defense, enc_rating;
+    EncInt enc_participation; /* rec[0x11A], FUN_0048b0c7 */
     int fled;             /* rec[+0x1B4]: already walking off, never re-rolled */
     int participation;    /* rec[0x11A] */
     uint32_t last_turn;   /* rec[+0x45C], GetTickCount() of the last turn */
@@ -89,6 +96,14 @@ static int pending_pets;
 static int clamp(int64_t n, int low, int high)
 {
     return n < low ? low : n > high ? high : (int)n;
+}
+/* FUN_0049b71B: seal `value` into `e` (4 crt_rand) and publish it to the plain mirror the rest
+ * of the port reads. The original's writes go through the encrypted object and its reads go
+ * through FUN_0049b70F, which costs no rand, so the plain int is the authoritative value. */
+static void enc_put(EncInt *e, int *mirror, int value)
+{
+    enc_set(e,value);
+    *mirror = value;
 }
 /* Every rand() in the original is exactly one crt_rand() here, in the same order
  * (docs/re/rng_calls.md section 2.3). */
@@ -127,10 +142,15 @@ static void monster_stats(Combatant *a, const MonsterDef *m)
     a->element = m->element;
     /* Assembly 004808e5..0048091e: these are 1162,513,567,834 / 100,
      * not the decimal multipliers transcribed in battle.md section 2. */
-    a->max_hp = a->hp = derived(m->hp, a->level, 1162, s->hp);
-    a->mp = derived(m->mp, a->level, 513, s->mp);
-    a->offense = derived(m->offense, a->level, 567, s->offense);
-    a->defense = derived(m->defense, a->level, 834, s->defense);
+    /* FUN_00480499 sets rec[0xAA]/[0xAB] (HP/maxHP), [0x3E] (MP), [0x40] (offense) and [0x3F]
+     * (defense) through FUN_0049b71B - 5 seals, 20 rands, at 0x480593/5B0/5CA/5DB/604 - and then
+     * FUN_0049b71b(rec[0x3B]) seals the level. Order matters: HP, MP, offense, defense, level. */
+    enc_put(&a->enc_hp,&a->hp,derived(m->hp, a->level, 1162, s->hp));
+    enc_put(&a->enc_max_hp,&a->max_hp,a->hp);
+    enc_put(&a->enc_mp,&a->mp,derived(m->mp, a->level, 513, s->mp));
+    enc_put(&a->enc_offense,&a->offense,derived(m->offense, a->level, 567, s->offense));
+    enc_put(&a->enc_defense,&a->defense,derived(m->defense, a->level, 834, s->defense));
+    enc_put(&a->enc_level,&a->level,a->level);
     /* 00480e82..00481094, each stat clamped to 255 after row-0 scaling. */
     a->ability[ABIL_STR] = clamp(derived(m->strength,a->level,197,s->strength),0,255);
     a->ability[ABIL_STA] = clamp(derived(m->stamina,a->level,212,s->stamina),0,255);
@@ -226,8 +246,16 @@ static void spawn(int signed_id)
      * spends both randoms, which is what parity needs; drawing them off-screen instead would
      * trip FUN_0048f913's `x < -10` removal and the flee checks on every monster. */
     roll(64);
-    if (a->ally) roll(32);
-    a->x = a->ally ? 55 + (ordinal % 3) * 36 : 210 + (ordinal % 3) * 48;
+    if (a->ally) {
+        /* FUN_00480499's `param_2 == 1` arm: a second rand for the entry offset, then
+         * rec[0x114] = 0x7FFFFFFF and the ally's own two sealed writes. This is the branch the
+         * original takes for every mercenary and pet, so allies pay two extra sets - 8 rands -
+         * that enemies do not. */
+        roll(32);
+        a->x = 55 + (ordinal % 3) * 36;
+        enc_put(&a->enc_offense,&a->offense,a->offense);
+        enc_put(&a->enc_defense,&a->defense,a->defense);
+    } else a->x = 210 + (ordinal % 3) * 48;
     a->y = 152 + (ordinal / 3) * 40;
     a->last_turn = tick_now();
     a->sheet_index = -1;
@@ -340,10 +368,12 @@ void battle_begin_ex(const int *ids, int count, int difficulty, int distance_pct
     distance_pct = clamp(distance_pct,0,100);
     hero = &fight.actors[0];
     hero->ally = 1;
-    hero->hp = clamp(g_hero.hp,0,g_hero.max_hp);
-    hero->max_hp = g_hero.max_hp;
-    hero->mp = g_hero.mp;
-    hero->level = clamp(g_hero.level,1,65535);
+    /* FUN_00491E45 seals rec[0xAA], [0xAC], [0xAD] and rec[0x3B] at 0x00491F35/41/4D/59 - four
+     * seals, 16 rands - for the hero combatant. */
+    enc_put(&hero->enc_hp,&hero->hp,clamp(g_hero.hp,0,g_hero.max_hp));
+    enc_put(&hero->enc_max_hp,&hero->max_hp,g_hero.max_hp);
+    enc_put(&hero->enc_mp,&hero->mp,g_hero.mp);
+    enc_put(&hero->enc_level,&hero->level,clamp(g_hero.level,1,65535));
     for (i = 0; i < HERO_ABILITIES; ++i) hero->ability[i] = hero_ability(&g_hero,i);
     hero->ailments = g_hero.ailments;
     hero->x = 80; hero->y = 204;
@@ -441,6 +471,9 @@ static void finish(BattleResult result)
             wos_log_event("battle_share","participation=%d total=%d gold=%d xp=%d",
                           fight.actors[0].participation,fight.participation_total,share_gold,share_xp);
         }
+        /* FUN_0042bb5c seals the hero's XP (hero[0x68]), gold (hero[0x6C]) and the level
+         * (hero[0x64]) through FUN_0049b71b at 0x0042BF75/0x0042C0AB/0x0042C0B9 - 3 seals, 12
+         * rands - before the trophy roll's three. */
         hero_award(&g_hero,xp,gold);
         victory_trophy_roll();
         battle_music("victory");
@@ -468,6 +501,8 @@ static void hero_died(void)
                   g_hero.level,(long long)g_hero.xp,tenths,fight.scene_kills,fight.killer_id,
                   fight.auto_resurrect);
     if (fight.killer_id > 0) hero_killed_by_monster(fight.killer_id);
+    /* FUN_00494fcd seals the hero's XP at 0x004950B8 (FUN_0049b71b) - one seal, 4 rands. */
+    enc_put(&fight.actors[0].enc_level,&fight.actors[0].level,g_hero.level);
     if (fight.auto_resurrect) {
         /* FUN_0042b765: the XP interpolated at the fractional level the hero had reached, so
  * the progress toward the next level is what is lost. */
@@ -508,6 +543,12 @@ static int physical_damage(Combatant *a, Combatant *b, int monster)
     }
     raw = power*8000/((int64_t)(b->level+40)*(ability(b,ABIL_STA)+200));
     raw = raw*200/(b->defense+200);
+    /* FUN_004a7794 writes the two attacker's combat abilities and the two derived stats through
+     * FUN_0049b71B at 0x004A7915/959/9A6/9F8 - four seals, 16 rands, before the variance roll. */
+    enc_put(&a->enc_offense,&a->offense,a->offense);
+    enc_put(&a->enc_defense,&a->defense,a->defense);
+    enc_put(&a->enc_hp,&a->hp,a->hp);
+    enc_put(&a->enc_max_hp,&a->max_hp,a->max_hp);
     d = clamp(raw,1,32000);
     base = clamp((int64_t)d*9/10,1,32000);
     /* FUN_004a6974: variance is one rand, the crit gate is `rand()%param_5 == 0`, and the crit
@@ -786,6 +827,11 @@ static int spell_damage(int actor, int target, int spell, int targets)
         raw = raw*25/35;
     }
     raw = raw*200/(b->defense/2+200);
+    /* FUN_004a7794's spell branch seals the same four fields, 0x004A7915/959/9A6/9F8. */
+    enc_put(&a->enc_offense,&a->offense,a->offense);
+    enc_put(&a->enc_defense,&a->defense,a->defense);
+    enc_put(&a->enc_hp,&a->hp,a->hp);
+    enc_put(&a->enc_max_hp,&a->max_hp,a->max_hp);
     d = clamp(raw,1,32000); base = clamp((int64_t)d*9/10,1,32000);
     /* FUN_004a6974, same rand shape as the physical branch. */
     if (d > 1) d = roll(d)/5+base;
@@ -875,7 +921,9 @@ static void apply_spell(void)
             int miss = spell_helpful(s) ? 0 : clamp(ability(b,ABIL_AGI)-ability(&fight.actors[actor],ABIL_DEX),0,50);
             if (miss && roll(100) < miss) { b->damage = INT_MIN; b->floating = (int)tick_now(); continue; }
             damage = spell_damage(actor,i,fight.spell,targets);
-            b->hp = clamp((int64_t)b->hp-damage,0,b->max_hp);
+            /* FUN_004a6255 applies the delta through FUN_0049b71b - one seal, 4 rands, at
+             * 0x004A6285 - after clamping to [0, max]. */
+            enc_put(&b->enc_hp,&b->hp,clamp((int64_t)b->hp-damage,0,b->max_hp));
         }
         b->damage = damage; b->floating = (int)tick_now();
         if (!i) { g_hero.hp = b->hp; g_hero.ailments = b->ailments; }
@@ -982,13 +1030,22 @@ static void start_attack(int actor, int target)
         }
         fight.damage = physical_damage(a,&fight.actors[target],actor != 0);
     }
-    a->rating = compute_rating(a);   /* FUN_00491bb7, rec[0x6D8] */
+    /* FUN_0048FE80 seals rec[0x6D8] at 0x00490499 (4 rands) and FUN_0048b0c7 ADDs to rec[0x11A]
+     * and DAT_00502830, which is a get followed by a set, so 4 more. */
+    enc_put(&a->enc_rating,&a->rating,compute_rating(a));
     /* FUN_0048fe80 rec[0x428]++ (the attack count) and FUN_0048b0c7, which credits an actor only
      * when it has an owner - in solo that is the hero alone, so it always takes the whole pot. */
     a->last_turn = a->last_action = fight.tick;
     a->turn = TURN_DONE; a->ready = 0; ++a->attacks;
     if (actor && !fight.actors[actor].ally) fight.killer_id = fight.actors[actor].id;
-    if (!actor) { a->participation = a->attacks; fight.participation_total = a->participation; }
+    if (!actor) {
+        /* FUN_0048b0c7: rec[0x11A] and DAT_00502830 both take the actor's participation. */
+        /* FUN_0048b0c7: rec[0x11A] += the actor's rating and DAT_00502830 takes the same value.
+         * The ADD is a get followed by a set, so it costs 4 rands like any other write. */
+        a->participation = enc_add(&a->enc_participation,1);
+        a->attacks = a->attacks;   /* rec[0x10A] is a plain counter, not an EncInt */
+        fight.participation_total = a->participation;
+    }
     fight.attacker = actor; fight.victim = target; fight.animation = 0;
     fight.anim_start = tick_now();
     fight.state = ROUND_DAMAGE; fight.cursor = (actor+1)%fight.count;
@@ -1212,6 +1269,14 @@ BattleResult battle_update(const Input *in)
             c->ready = c->hp > 0 && !c->fled;
             c->turn = c->ready ? TURN_READY : TURN_DONE;
         }
+        /* FUN_00490E7C case 5 runs FUN_00491bd1 (the desync check) on every combatant, and that
+         * seals twice - 0x00491D2E and 0x00491D4E, 8 rands. */
+        for (i = 0; i < fight.count; ++i) {
+            enc_put(&fight.actors[i].enc_rating,&fight.actors[i].rating,
+                    fight.actors[i].rating);
+            enc_put(&fight.actors[i].enc_defense,&fight.actors[i].defense,
+                    fight.actors[i].defense);
+        }
         fight.round_start = fight.tick;
         fight.state = ROUND_ACT;
     } else if (fight.state == ROUND_DAMAGE) {
@@ -1223,7 +1288,9 @@ BattleResult battle_update(const Input *in)
                 victim->floating = (int)tick_now();
                 wos_log_event("battle_hit","ms=%u attacker=%d target=%d dmg=%d",
                               (unsigned)(tick_now()-fight.anim_start),fight.attacker,fight.victim,fight.damage);
-                if (fight.damage >= 0) victim->hp = clamp((int64_t)victim->hp-fight.damage,0,victim->max_hp);
+                if (fight.damage >= 0)   /* FUN_004a6255, 0x004A6285 - one seal, 4 rands */
+                    enc_put(&victim->enc_hp,&victim->hp,
+                            clamp((int64_t)victim->hp-fight.damage,0,victim->max_hp));
                 if (fight.victim == 0) g_hero.hp = victim->hp;
                 if (victim->hp <= 0) kill_payout(victim);
                 items_spend_throw();   /* FUN_0048f667 */

@@ -154,6 +154,17 @@ static const Screen scene_screen;
 
 /* ------------------------------------------------------------------ helpers */
 static int eq(const char *a, const char *b) { return text_casecmp(a,b)==0; }
+/* _strnicmp(s, lit, n): at most n characters, case-insensitive. */
+static int eq_n(const char *s,const char *lit,int n)
+{
+    int i;
+    for(i=0;i<n;i++) {
+        int a=tolower((unsigned char)s[i]),b=tolower((unsigned char)lit[i]);
+        if(a!=b) return 0;
+        if(!a) return 1;
+    }
+    return 1;
+}
 /* _strnicmp: case-insensitive prefix compare, the original's cookie-name test. */
 static int prefix(const char *s,const char *pfx,size_t n)
 {
@@ -465,9 +476,29 @@ static int atom(const char *term)
     if(len>2) n2=atoi(work+2);
     if(code=='A') return g_hero.hp>0;                          /* ALIVE  */
     if(code=='D') return g_hero.hp<=0;                         /* DEAD   */
-    if(code=='W'||code=='L') return 0;                         /* won/lost this fight */
-    if(code=='X') return vm.outcome==BATTLE_WON;
-    if(code=='Y') return vm.outcome==BATTLE_LOST||vm.outcome==BATTLE_FLED;
+    /* FUN_004851F1 cases 0x4C ('L') and 0x57 ('W') both call FUN_0048FD90, which sums
+     * FUN_0049B70F (enc_get) over the scene's actor slots and is < 0 only in circumstances
+     * the port does not reproduce, so both are false offline. Note this is NOT the fight
+     * outcome: despite what docs/re/script.md 3.1 says, `IF WIN` / `IF LOSE` land here. */
+    if(code=='W'||code=='L') return 0;
+    /* Case 0x58 ('X'): the COUNTDOWN has expired. `IF XP` is this case, since 'X' is the
+     * leading letter and atoi("P") is 0 (DAT_004FA850 / DAT_004FA854, all.c:97720). */
+    if(code=='X') return vm.countdown_start==0
+                    || (clock_ms()-vm.countdown_start)>vm.countdown_length;
+    /* Case 0x59 ('Y'): the last ASK reply (DAT_0054C7F8) against seven fixed words, all
+     * case-insensitive. Six are _strnicmp at a fixed length and one ("DA") is a full
+     * _stricmp. `IF -YES, @saidNo` in Evergreen scene 3 depends on this (quest.txt:1608). */
+    if(code=='Y') {
+        static const char *const yes[] = {"YES","YEAH","SURE","SI","OK","DA","JA"};
+        static const int nlen[] = {3,4,4,2,2,-1,2}; /* -1 = compare the whole string */
+        int k;
+        for(k=0;k<7;k++) {
+            int m=nlen[k];
+            if(m<0 ? text_casecmp(vm.ask,yes[k])==0
+                   : eq_n(vm.ask,yes[k],m)==0) return 1;
+        }
+        return 0;
+    }
     if(code=='#') return g_hero.map==n1;
     if(code=='C') return g_hero.klass==n1-1;                   /* FUN_004851F1: class == n-1 */
     if(code=='E') { int i;

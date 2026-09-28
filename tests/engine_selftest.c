@@ -1,5 +1,6 @@
 #include "../src/engine/clock.h"
 #include "../src/engine/encint.h"
+#include "../src/engine/rng.h"
 #include "../src/engine/dscript.h"
 #include "../src/engine/replay.h"
 #include "../src/engine/ini.h"
@@ -138,7 +139,10 @@ static void test_clock(void)
     uint32_t idle20;
     clock_reset();
     assert(clock_ms() == 0);
-    assert(clock_time_s() == 0);
+    /* clock_time_s() is the WALL CLOCK, not the virtual one: the original derives
+     * none of its time() reads from GetTickCount. With the clock pinned, it is the
+     * pin; unpinned, it follows the host. */
+    assert(clock_time_s() == plat_time_s());
     /* The gate is the original's `GetTickCount() - last > 19`: 20 ms, not 16.7. */
     assert(!clock_idle_due());
     clock_advance(19);
@@ -231,11 +235,14 @@ static void test_clock(void)
 
     /* time() tracks the virtual clock and the epoch base. */
     clock_reset();
-    clock_set_time_base(1000);
-    clock_advance(2500);
-    assert(clock_time_s() == 1002);
+    clock_set_time_base(1234567890);
+    assert(clock_time_s() == 1234567890);
+    clock_advance(2500);        /* the virtual clock must NOT drag time() with it */
+    assert(clock_time_s() == 1234567890);
+    assert(clock_ms() == 2500);
     clock_set_now(1);           /* never rewinds */
     assert(clock_ms() == 2500);
+    clock_set_time_base(0);     /* unpin: back to the host wall clock */
     puts("PASS clock: 20 ms gate (one tick per stall, one per 20 ms stepped boundary), timers");
 }
 

@@ -417,9 +417,156 @@ the magic sits elsewhere in them. The class name is not beside the vtable either
 +/-0x600 bytes around `PTR_LAB_004D0E28` (file offset 0xD0028) contain no ASCII at all.
 Where the 352 objects come from is still open; see section 8.3.
 
+**`rng.calls` in map mode is pending the pump model, not permanently incomparable.** The
+encounter roll `FUN_0046260E` is MapView-2's only rand site and it runs **per map tick** — 40
+times a second at the 25 ms sub-gate while the hero is moving — drawing 1 or 2 rands per tick
+depending on which clause short-circuits. So it is sensitive to the idle rate in 2.1, and a
+host that idles more often than the port burns more of that stream. **That is a bug to fix,
+not a property to accept:** identical behaviour is the goal, so the idle rate has to be ONE
+deterministic model that both sides share. The Oracle is measuring what keeps the original's
+queue non-empty — which messages, when — and when that model lands it gets implemented in the
+port's pump so both sides idle on the same boundaries. Until then `rng.calls` is a
+diagnostic in map mode and an assertion everywhere the pump is quiescent.
+
 **Port rule.** The trace is byte-identical across runs, so this is a **boot constant, not a
-per-frame rule**: the right shape is a 352-entry table filled by four draws each in order at
-load, not 1408 burned rands. WorldData owns it.
+per-frame rule**: the right shape is 352 EncInt constructions drawing four each in
+construction order, not 1408 burned rands.
+
+### 8.2a The CRT initialiser table — the construction ORDER
+
+Entry point VA `0x004C5AF0`. It makes **two** `_initterm` calls, both through the thunk
+`0x004C5CB0` (`jmp *0x00D8B570`). cdecl pushes right-to-left, so read the FIRST pushed value
+as `first`:
+
+| site | first | last | entries |
+|---|---|---|---|
+| `0x004C5B8F` | `0x004DC0D4` | `0x004DC0D8` | 1, and its slot holds `0x00000000` — effectively empty |
+| `0x004C5BC8` | `0x004DC000` | `0x004DC0D0` | **52**, the real table |
+
+The 52, **in call order** (this order is what `rng.state after boot` depends on):
+
+```
+ 0 00000000  (null)                     26 0041DC1C
+ 1 004C5D59                              27 0041DC61
+ 2 00401101  <-- the 99-element EncInt vector ctor   28 0041DCA6
+ 3 00404FC5                              29 0041DCEB
+ 4 00405EC2                              30 0041DD30
+ 5 004089FF                              31 0041DD75
+ 6 0040AD26                              32 0041DDBA
+ 7 0040FADB                              33 0041DDFF
+ 8 0040FB0D                              34 0041DE22
+ 9 0040FB51                              35 0041DE67
+10 0040FB51                              36 00421EBD
+11 00410851                              37 00427D89
+12 00410D9A                              38 0043BB8A  <-- calls FUN_0043BBD1, the 7-EncInt group
+13 00415786                              39 00441534
+14 00416CD3                              40 00441B5A
+15 00419584                              41 0045ACA3
+16 0041AD11                              42 00463258
+17 0041D717                              43 00463604
+18 0041D984                              44 004676D4
+19 0041D9BF                              45 0046BAF9
+20 0041DA04                              46 0046BAF9
+21 0041DA49                              47 00472B74
+22 0041DB00                              48 0048282E
+23 0041DB2B                              49 0049E230
+24 0041DB70                              50 004A3813
+25 0041DBB5                              51 004A383E
+```
+
+Two things follow immediately, and the first is the important one:
+
+* **The 99-element EncInt array is initialiser #2** — the second thing the CRT constructs,
+  before essentially every other object in the program. So 396 of the 1408 boot draws happen
+  almost at the very front of the stream, not wherever the owning module's initialiser happens
+  to sit. The port cannot get this right by making each module build its own EncInts in its
+  own initialiser; the order is global.
+* The 7-EncInt group `FUN_0043BBD1` is initialiser **#38** (the thunk `0x0043BB8A` sits in
+  `FUN_0043BBAE` and calls it directly at `0x0043BBC3`).
+
+Two of the other groups are **not** in the table at all, which corrects my own earlier
+framing of them as boot costs:
+
+* `FUN_00413181` (the 10-EncInt pets group) is called from `0x00484FDB`, inside
+  `FUN_00484E72` — the hero message-log routine — with zero direct callers of its own. So it
+  is reached by **virtual dispatch at run time from the log path**, not by the CRT. Those 40
+  draws are therefore *not* part of a fixed boot sequence; they happen when that code first
+  runs, which may be during boot (it logs) or during play.
+* `FUN_00444D64` (the 14-EncInt group, the largest) is called from `0x0043482C` inside
+  `FUN_004347D6`, which also has zero direct callers and is not in the table — also runtime.
+
+So the honest split is: **the 99-element vector array and the `FUN_0043BBD1` group are ordered
+boot costs and are now placed; `FUN_00444D64` and `FUN_00413181` are runtime costs whose
+trigger point is a virtual call I have not identified.** The boot total of 352 cannot be
+reconciled against a static sum until the runtime ones are separated out, and I am not going
+to assert a number I cannot show.
+
+### 8.2b The 352 constructions: counts, and what is still missing
+
+The count is solid. The **order is not**, and `rng.state after boot` depends on the order, so
+this is the live blocker. What the binary gives:
+
+* `FUN_00401125` is the `eh vector constructor iterator` element thunk (calls `FUN_0049B75D`,
+  returns the pointer). One call site, `0x0040111A`, inside the MSVC thunk at `0x00401101`
+  (`jmp 0x401106`) in `FUN_00401051`: base `DAT_0052C978`, count `0x63` = 99, stride `0x120`
+  = 288 bytes. `FUN_00401137` memsets `0x7080` = 100 x 288 at the same address, so the region
+  is one element larger than the 99 constructed. The element is a 288-byte class holding the
+  EncInt plus ~232 bytes of other fields.
+* The three `new` sites are **single constructions, not loops**: `FUN_00415EC4` (`0x00415F5B`),
+  `FUN_00449EA3` (`0x00449EE5`), `FUN_004766EE` (`0x00476731`). 3 objects.
+* The bulk is **unrolled groups**, not arrays. All 33 direct `FUN_0049B75D` call sites, by
+  containing function: `FUN_00444D64` 14, `FUN_00413181` 10 (pets), `FUN_0043BBD1` 7,
+  `FUN_00401125` 1, `FUN_0043380F` 1. **Note that the two largest, `FUN_00444D64` and
+  `FUN_00413181`, are runtime rather than CRT costs** — see 8.2a.
+
+99 + 3 = 102 accounted for; the other **250 come from those five routines being called more
+than once each**, and the multipliers live in the callers, which dispatch through tables and
+jumps rather than counted loops. **Not read, and not guessed.** Two routes remain, and the
+second is the cheap one:
+
+1. Walk the CRT initialiser table from the entry point (VA `0x004C5AF0`, `_initterm` at IAT
+   `0x00D8B570`) and read the construction order directly.
+2. Detour `FUN_0049B6C7` itself and log its first argument (the object pointer, ECX under
+   `__fastcall`) on every call. It is in `Souls.exe`'s own `.text` with a fixed prologue, so
+   it is patchable — it is not an export, which is why IAT patching cannot reach it. One run
+   yields the 352 object addresses **in construction order**, confirms the 99/0x120 array from
+   the live process, and turns each routine's multiplier from inferred into counted. Two
+   cautions: the trampoline must execute the original prologue, and the trace handle must be
+   opened in `DllMain` on an absolute path, because `InitInstance` does
+   `SetCurrentDirectory(install root)`.
+
+**Until the order is known, the port cannot get this right by construction, only by copying a
+sequence I would be guessing at.** I would rather record that than ship a boot loop that draws
+1408 numbers in an invented order and then reads as a match.
+
+### 8.2b Boot rands with no identified owner
+
+Recorded as **unowned** as of 2026-09-28; none of these VAs belongs to any module or to the
+harness (`tools/oracle/**` has never touched a game VA in `src/`).
+
+| calls | caller | what it is | owner |
+|---|---|---|---|
+| 4 | `0x00456BCC` (`FUN_00456B87`) | a **timed schedule**: appends into a 0x80-entry table at `+0x08`, stamps `GetTickCount()` at `+0x20C`, stores `(rand() % (param_3*2)) * 1000` at `+0x60C` — a random delay in whole seconds, so the one bucket that can consume RNG again *during* play | **unowned** |
+| 4 | `0x0042B4EA` `0x0042B4F5` `0x0042B4FC` `0x0042B50E` | one function, four `rand()` in a row — the same 4-rands-per-object shape as the EncInt seal at n=1 | **unowned** |
+| 1 | `0x0048E1CF` | singleton | **unowned** |
+| 1 | `0x00426B27` | the `0x00426xxx` global-constructor neighbourhood, next to both `srand` sites | **unowned** |
+| 99 | the 288-byte-element array at `0x0052C978` | stride `0x120`, count `0x63` | **unowned** |
+| 14 / 10 / 7 / 1 | `FUN_00444D64` / `FUN_00413181` / `FUN_0043BBD1` / `FUN_0043380F` | unrolled EncInt construction groups | `FUN_00413181` is Panels-2's; the rest **unowned** |
+
+**Caveat on that table, from Panels-2's read of `FUN_00413181`'s body** (all.c:13558-13630):
+the 10 `FUN_0049B75D` constructions are only half the cost. There are also **six
+`FUN_0049B71B` sets**, interleaved with the monster-field loads at record indices
+0x47/0x43/0x44/0x45/0x46, 0x41/0x3C/0x3A, 0x3D and 0x3E, so a pet spawn is
+**10 + 6 = 64 draws, not 40**. The pet holds six EncInt fields — level, hp, max_hp, str,
+sta, agi — and dex/wis are plain ints because they are loaded rather than sealed. The 64 are
+spent **unconditionally, before the monster-id validation**, so a rejected pet still burns
+them. So the 33-site count of direct constructors is a correct count of *constructors* and
+was the wrong basis for a per-invocation total; the same error will apply to the other
+unrolled groups until their bodies are read the same way.
+
+**Not EncInt**, recorded as a negative result so nobody re-checks them: the trophy bag words
+(`FUN_0046F726` / `FUN_0046F779`) are a plain XOR `0x1D43E217`, and items.txt plus heroes'
+inventories are plain bytes.
 
 ## 8.3 The EncInt object, and the 352 that are still unnamed
 

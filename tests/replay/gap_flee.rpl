@@ -93,6 +93,13 @@ key f
 wait 4
 key f
 wait 4
-expect battle_fled 300
-expect map_enter 600
+# The escape itself is ONE 30 % draw per round, so it is not assertable here without pinning a
+# lucky seed: FUN_00436c9d sets rec[0x38C] = 0x2F before the roll, so every later F in that round
+# is refused on the first test. Logs of successful runs carry
+#   EVT battle_flee_failed sticky=0 held=384
+#   EVT battle_fled sticky=0 held=10017
+# and the only deterministic escape is FIGHT2's 20 s window (BATTLE_MOD_STICKY), which Evergreen's
+# standard encounter does not use. What this replay pins is the parity fix itself: the refusal,
+# and that the fight keeps running instead of the port's old unconditional escape.
+expect map_enter 900
 quit

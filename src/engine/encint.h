@@ -36,6 +36,7 @@
 #ifndef WOS_ENCINT_H
 #define WOS_ENCINT_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* The three checksum multipliers, from VA 0x004D0D38 / 0x004D0D40 / 0x004D0D48. */
@@ -70,5 +71,19 @@ int     enc_cheat_flag(void);
 void    enc_cheat_clear(void);
 /* The original's DAT_004E709C: also the `== 0` guard on the 20 ms idle gate. */
 const char *enc_dump_keys(const EncInt *e, char *out, size_t cap);
+
+/* MSVC's `eh vector constructor iterator` (FUN_00401125 and the thunks that call
+ * it): construct `count` objects of `stride` bytes, in ascending address order,
+ * each one consuming four crt_rand(). This is how the original's boot arrays are
+ * built -- for example the array at VA 0x0052C978 is 99 elements of 288 bytes
+ * (0x63 elements, stride 0x120), built by the thunk at 0x00401101.
+ *
+ * `base` is the start of the containing array, which is what the original's own
+ * struct is: the 288-byte element holds the EncInt plus ~232 bytes of other
+ * fields, so pass the containing type and the offset of its EncInt:
+ *     enc_construct_array((char *)&table, enc_offsetof(Table, stat), sizeof(Table), n);
+ * Order is part of the contract: the draws must happen in ascending address
+ * order or the whole session's stream shifts. */
+void enc_construct_array(void *base, size_t offset, size_t stride, int count);
 
 #endif
