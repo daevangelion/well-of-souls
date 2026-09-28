@@ -47,6 +47,18 @@
 # is the screen rect (123,7,46,12) and its centre is (146,13). The spin charges 10 GP
 # (0x466BC6 refuses under 10) and settles by itself, which is what logs
 # minigame_slots_result.
+#
+# MEASURED on this binary (seed 1, fresh build): the whole leg chain runs to
+#   EVT link_used map=0 link=9 / EVT link_used map=2 link=3 / EVT scene_enter scene=1005 /
+#   EVT minigame_arm game=1 label=' Try your luck! /
+#   EVT minigame_slots_open spins=0 won=0 bet=0 / EVT minigame_open game=1 ok=1 /
+#   EVT minigame_slots_spin ok=1 bet=10 gold=492 /
+#   EVT minigame_slots_result matches=3 symbol=7 pay=100 gold=592 /
+#   EVT minigame_disarm game=0
+# The SPIN click works because scene.c:1364 hands minigame_click the port's left-button
+# bit `(in->mouse_pressed&(1u<<1))`, the same mask `hit()` uses for the armed GAME slot at
+# 1379 - the slot-6 dispatch that arms the button and the dialog control that spends it
+# are now the same device bit.
 expect boot_menu 900
 key RETURN
 wait 30

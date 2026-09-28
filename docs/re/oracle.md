@@ -822,6 +822,37 @@ constant, so the port's per-window draws have no counterpart to be tuned towards
   which is the next thing to trace: whether the front view's message map has an entry for 0x046B
   at all, or whether the "Play now" transition is meant to come from somewhere else entirely.
 
+  **THE TERMS OF SERVICE DIALOG IS WHAT WAS COVERING THE MENU, and dismissing it is what
+  unblocked the main menu.** A *separate top-level* window, not a child: class `#32770`, caption
+  "Terms of Service", at screen (244,174)-(664,555), with `Button "I Accept"` at main-client
+  (356,371)-(431,394) and `Button "Cancel"` at (442,371)-(517,394). It appears a second or two
+  after the menu is entered — after the first two front-end dumps, so a script that dumps early
+  never sees it — and it covers the point "Play now" is drawn at. `WindowFromPoint` finds it
+  and real hit-testing delivers to it, so the click never reached the front view: measured with
+  `WOS_MSGLOG=1`, the click at (215,141) was delivered to `hwnd 000203AC`/`000203AA`, class
+  `RICHEDIT` text "TERMS OF SERVICE", and `0x046B` — the message `FUN_00405765` posts for
+  "Play now" — was posted **zero** times in the whole run.
+
+  With `click 393 382` ("I Accept") before the "Play now" click, the front state goes **1 → 2**,
+  verified. "Cancel" does not: it leaves the front end stuck with no dumps at all.
+  `WOS_WINTREE=1` now enumerates top-level windows as well as the main window's children,
+  precisely because a top-level window covering the client is invisible to a child-only walk and
+  steals clicks.
+
+  Two smaller fixes in the same area, both needed for the above to be measurable:
+  `deepest_at` now asks each candidate with `WM_NCHITTEST` and skips a window that answers
+  `HTTRANSPARENT`, which is what real hit-testing does; and `dump_hotspots` emits the entry's
+  **HWND** at record+0x68, which was the one field it did not emit — an earlier version read
+  record+0x70 and called it "target", which is the lParam and is 0 for every entry.
+
+  **State 2 is still stuck, and now demonstrably so rather than mysteriously.** It registers
+  exactly one hotspot, `state=1 rect=39,60,533,102 clickable=0 msg=0000 hwnd=0`, label "Where Do
+  You Want To Play Today?" — a pure label with **no action, no message and no window**, so
+  `FUN_00405765` cannot fire for it. A click at (320,240), RETURN, ESCAPE and SPACE each leave
+  the state at 2, and it is still 2 after 17 seconds of virtual time. So the transition out of
+  state 2 is not a click, not a key, not the `FUN_004057D3` timed gate on any timescale this
+  suite can reach, and it is the single remaining blocker on the eleven translated scripts.
+
   **Past the main menu the original cannot be driven at all by this suite's means.** The
   "Where Do You Want To Play Today?" screen (state 2) registers exactly ONE hotspot, and it
   is a non-clickable label — `state=1`, `rect=39,60,533,102`, `msg=0000`, `clickable=0`,

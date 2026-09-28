@@ -3,45 +3,88 @@
 # requires-match: spell_cast caster=hero
 # requires-match: spell_cast caster=monster
 #
-# STATUS: the route is authored and verified end to end up to the Spell Training master
-# (SCENE 291, reached, spoken to and left); the three spell assertions are NOT yet met.
-# Everything below is measured on the pinned binary, not inferred.
+# STATUS: spell_learn and `spell_cast caster=hero` are both produced and verified on this
+# binary. `spell_cast caster=monster` is NOT reachable from a level-1 hero in retail
+# Evergreen; the evidence is at the bottom of this header. The requires line is left
+# exactly as inherited - do not weaken it.
 #
-# The Gateway of Dreams is answered, not walked past. quest.txt:1774 is `ASK 30` - the golden
-# rule - and an ASK suspends the scene until the player answers, so the script answers it the
-# way a player does, with Y (scene.c's ST_ASK sets the reply to "YES"). The Soul Brother hands
-# over L1 / H5000 / M5000, opens the `OFFER2 0,10` shop and sizes the trophy bag to 4x3, and
-# music.ini [evergreen] gives the map_enter music_play.
+# THE ROUTE
+#   Pick-a-Soul -> class 7 "Book-User" -> the Gateway of Dreams (map 0 link 0, scene 3,
+#   answer the golden-rule `ASK 30` with `key y`, buy nothing, leave) -> the random
+#   encounter the walk out triggers -> map 0 link 9 "Macgyver Castle" (151,275) -> map 2
+#   link 12 "Hand Training" (QuestScenes200.txt:1173, SCENE 290).
 #
-# PP IS THE WHOLE PROBLEM, and the floor is exact. FUN_0047FCED (world.c complete_spells)
-# seeds pp at 5000 and grows it 1.5x per required-affinity level, then FUN_0047FCF7 divides by
-# 20: the cheapest spell in retail Evergreen is spell 1 "Dirt" at affinity 0, so 5000/20 =
-# 250 PP, and spells.txt gives no spell an explicit lower price (every row checked: the ppCost
-# column is 0 = auto everywhere except the unlearnable -1s). PP is earned at battle.c:1270,
-# `hero_add_pp(hero, WIS*200/255+5)` once per committed hero action. Six `key DOWN` in the
-# Pick-a-Soul window pick class 7, whose levels.txt START_ABILITY gives WIS 10, so 12 PP an
-# action and 21 actions for one spell; the default class 1 Sword-User has `hero.abil.wis=0` in
-# the dump, so 5 PP an action and 50 actions. No scene in the world does `GIVE P<n>` (grep
-# over every extracted/worlds/Evergreen script finds none), and the only scripted PP is
-# missions.ini [1] "Jelly Bellies" (RewardPP=1000), which needs 5x trophy 1 "Green Jelly
-# Pigment" at a 5 % drop.
+# WHY CLASS 7. PP is paid at battle.c:1270, `hero_add_pp(hero, WIS*200/255+5)`, once per
+# committed hero action. Every class's `START_ABILITY` in levels.txt was read: the maximum
+# starting WIS in the whole world is 10, and only three classes have it. Class 7 pays
+# 10*200/255+5 = 12 PP an action against class 1 Sword-User's WIS 0 -> 5. Cheapest
+# learnable spell is 250 PP (see PP FLOOR), so 21 actions instead of 50.
+# The six `key DOWN` presses are in the Pick-a-Soul panel (front.c:855-857,
+# `selected_class`), not on the map: `EVT new_soul_created name=SpellStudent class=7`.
 #
-# The deterministic PP farm the retail data offers is the training masters, because their loss
-# branches heal and re-fight with no walking:
-#     map 2 link 12 -> SCENE 290 "Hand Training"  (QuestScenes200.txt:1173)
-#         @1 MOVE / FIGHT 1 / IF ALIVE,@2 / 22 `'` lines / @3 MOVE / FIGHT 1, 4 / IF ALIVE,@4
-#         / on a loss six `'` lines / GIVE L1 H5000 M5000 / GOTO @3
-#     map 2 link 11 -> SCENE 291 "Spell Training" (QuestScenes200.txt:1317)
-#         IF T2,@1 ... @1 FIGHT 1 / IF ALIVE,@2 / eight `'` lines / GIVE L1 H5000 M5000 /
-#         GOTO @1 ... and on a win `GIVE S207`, a free known spell to cast with.
-# Both links are reached below. Measured on the binary, a caster (class 7) walking SCENE 290's
-# `FIGHT 1, 4` loss loop banks 24 PP an iteration - two committed hero actions - so 250 PP is
-# about eleven iterations of [press A, take the six dialogue lines, get healed, fight again].
-# The loop measured only 108 PP over nine iterations before the hero stopped committing
-# actions, so the remaining work is to find the iteration count that actually reaches 250 and
-# then to survive a fight long enough to cast. SCENE 291 is gated on T2, the token at the end
-# of the whole Hand Training chain, so its `GIVE S207` route is the fallback for
-# `spell_cast caster=hero` once the chain is finished.
+# PP FLOOR. FUN_0047FCED (world.c:642 complete_spells) seeds pp at 5000 and grows it 1.5x
+# per required-affinity level, then FUN_0047FCF7 divides by 20, so the cheapest spell in
+# Evergreen is 5000/20 = 250 PP. spells.txt gives no spell an explicit price: the ppCost
+# column is 0 (=auto) on every learnable row. Only nine spells are learnable at
+# element-affinity 0, and the first is spell 1 "Dirt" (element 3); spell 201 "Health
+# Weave" (element 0) is index 7 of the nine. Both cost exactly 250 PP.
+# No scene in the world does `GIVE P<n>` - `grep -rhoE "GIVE [A-Z][0-9]+"` over every
+# extracted/worlds/Evergreen script returns no P at all - so the only scripted PP is
+# missions.ini RewardPP, and the only affordable mission ([1] Jelly Bellies, 1000 PP) needs
+# 5x trophy 1 at a 5 % drop.
+#
+# THE PP FARM IS SCENE 290's OWN LOSS LOOP, and it is deterministic:
+#     @3 MOVE 1,45,75 / FIGHT 1, 4 / IF ALIVE, @4
+#     on a loss six `'` lines / GIVE L1 / GIVE H5000 / GIVE M5000 / GOTO @3
+# `L` is the resurrect opcode (scene.c:746), so the loop re-enters the same two-monster
+# fight (Green Jelly id 1 + Flesh Crab id 4) forever with no walking. hero_died()
+# (battle.c:709) halves only the XP progress, never the PP wallet, so the PP accumulates:
+# measured 12 PP per committed hero action, 384 PP after 18 iterations of the loop.
+#
+# LEARN, THEN CAST.
+#   * `click 358 32` is button_rect(5) = {640-48-3-51*5, 8, 48, 48} = (334,8,48,48), the
+#     Spell slot (scene.c:1384). The scene VM is suspended while a panel is active
+#     (scene.c:1367), so the click lands mid-dialogue and does not also advance the script.
+#   * Seven `key DOWN` walk the selection to index 7 = spell 201 "Health Weave", then `l`
+#     (panels.c:426-431) calls hero_learn_spell. `EVT spell_learn spell=201 pp=134`
+#     (384 - 250 = 134).
+#   * `key s` opens the in-fight spell chooser (battle.c:1605), `2` picks slot 1, RETURN
+#     confirms (battle.c:1473), `a` commits: `EVT spell_cast caster=hero spell=201
+#     target=0 dmg=-50`.
+#   * Health Weave rather than Dirt is deliberate, and it is not a workaround for a port
+#     bug. FUN_004904EB (battle.c:1212) is the original's pre-cast fizzle: it is DEX of
+#     the TARGET minus DEX of the CASTER, and a positive difference fizzes at that many
+#     per cent. Class 7 starts with DEX 0, every monster derives at least level*175/100
+#     DEX, so an attack spell aimed at a monster always fizzles and logs nothing - the
+#     early `if (fight.fizzle) return;` at battle.c:1106 is silent. A heal has no enemy
+#     to aim at: spell_target() picks the caster's own slot, the DEX difference is exactly
+#     0, and the cast-success roll at battle.c:1172 is gated on `element > 0`. So a heal
+#     is the spell a WIS-10/DEX-0 class can actually land.
+#
+# WHY `spell_cast caster=monster` IS NOT REACHABLE HERE.
+# monsters.txt arg 20 (the optional pet AI string) is empty in all 163 rows - that part is
+# true - but it is not the column that gates monster spellcasting. monsters.txt:277-289
+# documents arg 16 `wisdom` as the cast gate ("0 = Monster has NO wisdom and casts NO
+# spells.. EVER", "-1 = by algorithm (based on level)"), and FUN_0048e810's ring walk
+# (battle.c:948-976) selects from arg 16 alone. Column census of all 163 monster rows:
+# 21 have wisdom 0, 136 have wisdom -1, 4 have wisdom 255 (ids 2000-2003, the level-80
+# Element Masters); monsters.txt:524 (id 211 "Tri Wyrm") is short a column and its
+# arg-16 slot holds "growl2.wav".
+# Two independent walls stop a level-1 hero from ever seeing a caster:
+#   1. Reachability. Every monster this replay can meet is id 1-4 - Green Jelly, Archer
+#      Fish, Archer Fish, Flesh Crab - and all four have wisdom 0. Measured over 40 seeds
+#      (1..40), the random encounter triggered by walking out of the Gateway only ever
+#      rolls ids 1-3. SCENE 290's `@1 FIGHT 1` and `@3 FIGHT 1, 4` use ids 1 and 4. The
+#      first fight in the world a level-1 hero could reach that contains a caster-capable
+#      monster is SCENE 290's `@5 FIGHT 5` (Slobber, id 5, wisdom -1), and @5 is gated
+#      behind WINNING `@3 FIGHT 1, 4` - the Flesh Crab hits for 22 and a fresh Book-User
+#      has 20 max HP, so that branch is unreachable.
+#   2. Frequency. FUN_0048e810's closing gate (battle.c:970-976) cancels a monster's
+#      chosen spell unless `rand()%500 < wisdom` AND `rand()%1000 < wisdom`. Slobber is
+#      level 4, so `derived(-1, 4, 231, 100)` gives it wisdom 9, and both gates pass
+#      together 9/500 * 9/1000 = 0.016 % of the time. Only the wisdom-255 Element Masters
+#      (245/500 * 745/1000 = 36 %) cast at a rate a replay can rely on, and they are
+#      level-80 bosses.
 expect boot_menu 900
 key RETURN
 wait 30
@@ -51,6 +94,18 @@ key RETURN
 wait 30
 key n
 wait 5
+key DOWN
+wait 3
+key DOWN
+wait 3
+key DOWN
+wait 3
+key DOWN
+wait 3
+key DOWN
+wait 3
+key DOWN
+wait 3
 text SpellStudent
 key RETURN
 expect hero_ready 300
@@ -116,54 +171,710 @@ key RETURN
 wait 20
 key RETURN
 wait 20
-key RETURN
-wait 20
-key RETURN
-wait 20
-key RETURN
-wait 20
-key RETURN
-wait 20
-key RETURN
-wait 20
-key RETURN
-wait 20
-key RETURN
-wait 20
-key RETURN
-wait 20
-key RETURN
-wait 20
-key RETURN
-wait 20
 expect map_enter 2000
-# East out of the Gateway, south-west toward the castle, until the encounter roll fires.
 click 19 40
 expect battle_start 4000
 key a
-wait 60
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
 expect battle_won 4000
 expect map_enter 4000
-# (151,275) is map 0 link 9 "Macgyver Castle", eleven units south of where the fight left him.
 click 183 184
 expect map_enter 3000
-# Macgyver Castle, (158,322). castle1.ter is an 82x87 grid over a 328x350 jpg, so a cell is
-# 4x4 pixels; the flood fill of that grid from the Main Gate to the Spell Training link 11 at
-# (190,231) is two straight runs, east 32 then north 91.
-hold RIGHT 130
+hold LEFT 160
 hold UP 300
 expect scene_enter 2000
-shot /tmp/wos-gap-spellmaster.bmp
-# Greetings, %2. / I feel my teachings will be more effective if first you meet with my
-# brother, Master of The Hand. / Go now. Return to me after learning the ways of the HAND.
 key RETURN
 wait 40
 key RETURN
 wait 40
 key RETURN
 wait 40
+expect battle_start 3000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 4000
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key RETURN
+wait 40
+key RETURN
+wait 40
+click 358 32
+expect panel_open 400
+key DOWN
+wait 3
+key DOWN
+wait 3
+key DOWN
+wait 3
+key DOWN
+wait 3
+key DOWN
+wait 3
+key DOWN
+wait 3
+key DOWN
+wait 3
+key l
+expect spell_learn 400
 key ESCAPE
+wait 20
+key RETURN
 wait 40
-# music.ini [evergreen] midi1=scrn_overworld, logged on every map_enter.
-expect music_play 600
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect battle_start 4000
+key s
+wait 10
+key 2
+wait 10
+key RETURN
+wait 10
+key a
+wait 60
+key a
+wait 60
+key a
+wait 60
+shot /tmp/wos-gap-spell-learned.bmp
+wait 200
+shot /tmp/wos-gap-spell-cast.bmp
 quit

@@ -29,9 +29,11 @@
 end 5800
 at 100 click 320 240
 at 1200 dump front@title
-at 2200 dump front@menu
-at 2600 click 215 141
-at 3000 dump front@entered
+at 1400 click 393 382
+at 1800 dump front@tos
+at 2400 dump front@menu
+at 2800 click 215 141
+at 3200 dump front@entered
 at 4000 dump hero@before
 at 5000 dump hero@loaded
 at 5400 dump items@loaded

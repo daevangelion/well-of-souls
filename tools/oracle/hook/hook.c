@@ -1011,6 +1011,31 @@ static void wintree_dump(int once)
     tr("wintree MAIN hwnd=%p class=%s text=%s client=%ldx%ld",
        (void *)g_main, cls, txt, (long)(mc.right - mc.left), (long)(mc.bottom - mc.top));
     wintree_walk(g_main, 0);
+    /* Top-level windows of this process too, not just the main window's children. A
+     * SEPARATE top-level window sitting over the client steals clicks -- WindowFromPoint
+     * finds it and real hit-testing delivers to it -- and it does not appear in the main
+     * window's child list at all. Measured: the main menu's "Play now" hotspot was
+     * unreachable because a top-level RICHEDIT captioned "TERMS OF SERVICE", with a
+     * Cancel button, was covering the point the button was drawn at; 0x046B was posted
+     * zero times in the whole run. */
+    {
+        HWND top = NULL;
+        while ((top = (HWND)FindWindowExA(NULL, top, NULL, NULL)) != NULL) {
+            DWORD pid = 0;
+            char cls[80], txt[160];
+            RECT rc;
+            GetWindowThreadProcessId(top, &pid);
+            if (pid != GetCurrentProcessId() || top == g_main) continue;
+            if (!IsWindowVisible(top)) continue;
+            GetClassNameA(top, cls, sizeof cls);
+            GetWindowTextA(top, txt, sizeof txt);
+            GetWindowRect(top, &rc);
+            tr("wintree TOP hwnd=%p class=%s text=%s win=(%ld,%ld)-(%ld,%ld)",
+               (void *)top, cls, txt, (long)rc.left, (long)rc.top,
+               (long)rc.right, (long)rc.bottom);
+            wintree_walk(top, 1);
+        }
+    }
 }
 
 /* ------------------------------------------------------------------- the input */
@@ -1041,18 +1066,41 @@ static HWND deepest_at(POINT screen)
         h = (HWND)GetParent(h);
     }
     if (!pick) return NULL;
-    /* descend to the deepest visible descendant that still contains the point */
-    for (;;) {
-        HWND ch = (HWND)GetWindow(pick, GW_CHILD), next = NULL;
+    /* Descend to the deepest visible descendant that still contains the point, and ASK
+     * EACH CANDIDATE whether it wants the click. This is the missing half of input
+     * dispatch and it is not cosmetic.
+     *
+     * Measured with WOS_MSGLOG=1: the title click at (320,240) is delivered to the front
+     * view 0001007A as it should be, but the "Play now" click at (215,141) -- inside the
+     * settled hotspot rect (79,120,352,162) -- is delivered to hwnd 000203AC, a window
+     * created late in the run whose client origin sits at main-client (126,69). So the
+     * click lands on a different window than the one that draws the button, FUN_00405765
+     * is never reached, and 0x046B is never posted: measured, zero occurrences of id=046B
+     * in the whole run. That is why the main menu appears unclickable.
+     *
+     * The reason is that hit-testing is not "the deepest visible window". Win32 asks each
+     * candidate with WM_NCHITTEST and a window that answers HTTRANSPARENT (-1) passes the
+     * click to whatever is beneath it; WS_EX_TRANSPARENT windows are skipped for the same
+     * reason. An overlay pane that draws nothing at that point must not swallow clicks,
+     * and a static geometric descent cannot tell that from a button.
+     *
+     * So: walk the candidates as before, and accept the first one that both contains the
+     * point and does NOT answer HTTRANSPARENT. Falling back to the geometric answer if
+     * every candidate declines keeps a click working for a window that ignores the
+     * message, which is better than dropping it. */
+    {
+        HWND ch = (HWND)GetWindow(pick, GW_CHILD);
         while (ch) {
             if (IsWindowVisible(ch) && IsWindowEnabled(ch)) {
                 GetWindowRect(ch, &rc);
-                if (PtInRect(&rc, screen)) { next = ch; break; }
+                if (PtInRect(&rc, screen)) {
+                    LPARAM lp = (LPARAM)MAKELPARAM(screen.x, screen.y);
+                    LRESULT ht = SendMessageA(ch, WM_NCHITTEST, 0, lp);
+                    if ((int)ht != HTTRANSPARENT) { pick = ch; break; }
+                }
             }
             ch = (HWND)GetWindow(ch, GW_HWNDNEXT);
         }
-        if (!next) break;
-        pick = next;
     }
     (void)root;
     return pick;
@@ -1125,7 +1173,6 @@ static BOOL CALLBACK search_toplevel(HWND h, LPARAM p)
     int *found = (int *)p;
     HWND r;
     GetWindowThreadProcessId(h, &pid);
-    if (pid != GetCurrentProcessId()) return TRUE;
     r = search_wnd(h, found[1], 0);
     if (r) { found[0] = (int)(intptr_t)h; return FALSE; }
     return TRUE;
