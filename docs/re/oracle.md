@@ -12,6 +12,81 @@ to split.
 
 ---
 
+## 0. Status, and the one thing that still blocks a run (measured 2026-09-28)
+
+`tools/oracle/run.sh <dsc> <outdir>` still produces **no dumps**. Everything below is
+from live runs of the injected original, with the evidence in the log lines quoted.
+
+**What now works** (all measured, not inferred):
+
+* The hook loads, and 59 IAT patches land across `Souls.exe`, `MFC42.DLL`
+  (0x5F400000), `SHELL32.dll` (0x7A820000), `COMCTL32.dll`, `msvcrt.dll` and
+  `SRNET.dll` (0x10000000 — it imports `rand`, `time`, `GetTickCount` and
+  `MessageBoxA` too, so an SRNet-only call site is *not* evidence about the game).
+  The module list is dumped by `log_modules()` at every start.
+* The MSVC6 LCG is intercepted and counted (`rng=1419` calls by the time the game
+  reaches its first frame).
+* `WOS_DETOURS` now selects groups; the default is the core set
+  (`pump,timer,key,tick,wall,clock,rng,help,modal,watch`). `probe` (the live
+  options-table dump) and `trace` (failing `_access`/`fopen`/`CreateFileA`, now
+  with the caller's VA) are opt-in, because they cost seconds of wall time per run.
+* **Wine's `DialogBox` is not the game's loop, and that was the first blocker.**
+  Under Wine the modal loop of a dialog lives *inside* user32 and is entered on
+  win32u's `NtUserGetMessage`; no import slot of any game module is on that path,
+  so IAT patching cannot see it. Worse, MFC42 does not even import
+  `DialogBoxIndirectParamA` — its 195 user32 imports contain
+  `CreateDialogIndirectParamA` + `EndDialog` + `GetMessageA` and *no*
+  `DialogBox*`. The hook now owns the loop: `DialogBoxParam[IndirectParam][AW]`
+  and `EndDialog` are replaced with the same call Win32 makes (disable owner,
+  `CreateDialogIndirectParam`, `GetMessage`/`IsDialogMessage`/`Translate`/
+  `Dispatch` until `EndDialog` or `WM_QUIT`), with `pump_step()` first on every
+  iteration so the virtual clock still only moves while the queue is empty. It
+  also reads the live `DLGTEMPLATE`/`DLGTEMPLATEEX` and logs the resource id, the
+  caption and every control id, which is a better source for `.dsc` `dialog` ops
+  than the `.rsrc` scan.
+* Message boxes are logged verbatim and answered `IDOK`. A headless run cannot
+  survive one, and the text is the evidence.
+* `run.sh` no longer tries to `rm` a `Z:\` path (it could never work, which is why
+  the hook log looked stale), and it prints the tail of the hook log when a run
+  produces nothing.
+
+**What is still blocking, precisely:**
+
+1. At boot, before the first frame, the game puts up
+   `MessageBoxA(owner=00010374, type=0x30) caption="Souls" text="Z:\...\wos-oracle-run\<N> was not found."`,
+   where **N is the elapsed run time in seconds** (15, 20, 30, 40, 45, 60, 90, 240
+   and 300 have all been observed, each in the run whose timeout was that many
+   seconds). The file open is `CreateFileA(..., 0x80000000)` (a *read*), issued
+   from **MFC42+0x10040B, which is `CFile::Open`**, from an MFC wrapper that first
+   does `GetModuleFileNameA` + `strrchr('\\')` to resolve the name against the
+   install root. Nothing named `<number>` exists in a retail install directory,
+   so this is a duration-named file the game expects to read, and it is the last
+   thing the game does before it stops.
+2. After that box is answered, the game **never reaches its message loop**: the
+   watchdog thread reports `steps=0 peeks=0 gets=0 modal=0 ready=0` for the whole
+   run. No `PeekMessageA`, no `GetMessageA`, and not even one `GetTickCount` call
+   reaches a hook, although all of those IAT slots are patched in `Souls.exe`
+   itself. The main thread is asleep in one syscall (`/proc/<pid>/task/*/wchan` =
+   `anon_pipe_read`, `State: S`, one thread, 0% CPU) and the `+relay` trace shows
+   its last activity as `NtUserMessageCall`/`NtUserPeekMessage`/`NtUserGetMessage`
+   called from inside the 64-bit user32 — i.e. it is parked in a Wine-internal
+   wait that no IAT patch can reach, and the harness is not the thing driving it.
+3. The `MessageBoxA` call chain, filtered to real return addresses
+   (`looks_like_ret`), is only two frames deep: `5F409CCB` (MFC42) and
+   `7BF1C628` (ntdll). **There is no game frame above it**, so the box is raised
+   by MFC on behalf of a caller that has already returned, or by a path that never
+   comes from `Souls.exe` at all — `SRNET.dll` imports `MessageBoxA` and is the
+   remaining suspect. That is the next thing to settle.
+
+The practical consequence for the diff scripts: `tests/diff/*.dsc` and
+`tests/diff_oracle.sh` are **not** written, because a script that cannot get past
+boot cannot produce a label to compare, and inventing twelve scripts against a
+harness that emits nothing would be twelve untested guesses. `cmp_dump.py` also
+still compares the oracle's `hero.hex.XXXX` form against the port's
+`hero.record`; the port emits the whole 0x16CC record as one lowercase hex key
+(`src/game/hero.c:1001`), so the oracle must emit `hero.record` in that exact form
+and keep the 64-byte lines as a debug extra.
+
 ## 1. What the oracle is
 
 | piece | where | what |
@@ -427,28 +502,72 @@ port carries no path the original does not, that named form is a stopgap: it mus
 replaced by the real resource id and checkbox ids once the dialog is found. Do not build
 a differential expectation on it.
 
-### The user-options array is never loaded from the profile
+### The user-options table: INITIALISED .data, and I was wrong about it
 
-Established by scanning the image for the little-endian encodings of both addresses:
-`58 2a 4f 00` (0x4F2A58) has 4 occurrences, at VA 0x466F07, 0x4670C8, 0x46737E, 0x467413;
-`d8 2b 4f 00` (0x4F2BD8) has 6, at 0x466F00, 0x466F48, 0x4670C1, 0x467106, 0x46740C,
-0x467458. **Every one is a read** (`cmp %esi,0x4f2bd8`, `mov $0x4f2a58,%ebx`,
-`mov 0x4f2a58(%eax),%ebx`); there is no store to either anywhere in `.text`, and both
-sit in the zero-filled tail of `.data` (raw data ends at RVA 0xE0C00; these are at RVA
-0xF2A58 and 0xF2BD8). So both are 0 for the whole life of the process.
+I reported that `DAT_004F2A58` and its count `DAT_004F2BD8` were never written and that the
+numbered-option load in `FUN_00466EF3` (0x00466EF3) therefore never runs. **That was
+wrong, and the Oracle's live probe of the running original is what settled it**: the count
+is 32 and the table is fully populated. Waypoints (id 7) default to **1**, i.e. ON in
+retail, not off.
 
-`FUN_00466EF3` guards its numbered-option load with `if (0 < DAT_004f2bd8)`, so **the
-loop never runs** and the original never reads `option N` from the profile.
-`DAT_006840D0` therefore starts entirely zero, every numbered option is OFF in retail,
-and the only writer is `FUN_0046732B` (0x0046732B) from the dialog's checkbox handler.
+The table is **initialised `.data` in the image, not something a constructor builds**.
+Read with pefile:
 
-**Harness consequence: the Wine prefix must not contain any `option N` key, and the port
-must not read one either.** Seeding `option 7=1` in the registry to make a replay's
-pathfinder run would be testing a state the original cannot be put into from a file. The
-only faithful way is to drive the dialog op, i.e. click the checkbox.
+| | RVA | file offset | value |
+|---|---|---|---|
+| `DAT_004F2A58` | 0xF2A58 | 0xF0E58 | 32 records of 12 bytes: `{int id; int default; char *label;}` |
+| `DAT_004F2BD8` | 0xF2BD8 | 0xF0FD8 | 32 |
 
-The nine **named** scalars *are* read, each by its own unguarded
-`GetProfileIntA("Preferences", <key>, <default>)` in `FUN_00466EF3`:
+My earlier scan missed this because the throwaway section-mapping helper I used in that
+shell snippet was itself buggy (it returned `None` for both addresses), so "no references
+found" became "never written". The lesson for anyone repeating it: resolve the address with
+pefile's `get_offset_from_rva`, and treat a hand-rolled RVA table as unverified. The
+byte-pattern search for `58 2a 4f 00` was not wrong about the *code* -- there genuinely is
+no store in `.text` -- but I drew the wrong conclusion from it, because the data was never
+supposed to be stored by code at all.
+
+**The table, verbatim** (id, default, label). Cross-checked row for row against the live
+probe, and the port's `--dump` now reproduces the probe's 33 live values exactly:
+
+    13, 1, "Don't let me use cheat codes."                1, 1, "Use High-Resolution world maps. (very slow)."
+    30, 1, "Improve jpeg image quality in scenes and maps. (slowish)."
+     2, 1, "Auto-Smooth Low-Resolution world maps (slow)."
+     3, 1, "Notify me when other players learn spells."
+     4, 1, "Notify me about which spells are cast in fights."
+    20, 1, "Notify me when my character changes deciLevel."
+     5, 1, "Enable Player Chat Bubbles while in scenes."
+    12, 1, "Make non-player character chat bubbles pop faster."
+    24, 1, "In wide scenes, center camera on player chat bubbles."
+     8, 0, "Don't pick up low-level junk from dead monsters."
+    19, 1, "Hide Spells I can't learn yet"
+    17, 1, "Show monster radar during hunts. (Golden Soul/Demo)"
+     0, 0, "Show Hot-Key popup window while in scenes."
+    32, 1, "Show Hot-Key button bar while in scenes."
+    21, 1, "Show an icon when NPCs are waiting for an answer."
+     6, 0, "Show Pet's Owner Tags"
+    25, 1, "Show character index numbers in scenes."
+    22, 1, "Show HTML pages in scenes, when scripted."
+    14, 0, "Auto-open an IM window when people whisper to me."
+    11, 0, "Log all chat to disk (warning - uses lots of disk)."
+    27, 0, "Log all battles to disk (warning - uses lots of disk)."
+    28, 1, "Log all death sentences to disk."
+    10, 1, "My computer is slow, cut animations during dialogs."
+    23, 1, "Stop all web page stuff on return to game."
+    16, 1, "Remember changes to window size and positions."
+    18, 1, "Confirm link images when adding new links."
+     7, 1, "Enable automatic Way Point calculations."     <-- ON in retail
+    15, 1, "Show 3D outline around button bar buttons."
+    26, 0, "Don't use 100% cpu on WoS"
+    29, 0, "Don't allow cheat characters when I host scenes."
+    31, 1, "Zoom in on WoS Tactics attacks"
+
+**`DAT_006840D0` has 33 slots (ids 0..32) but only 32 records: id 9 has none.** So option 9
+is never named, never given a default and never loaded; it stays 0. Any script or harness
+that wants option 9 cannot get it.
+
+`FUN_00466EF3` loads each record as `GetProfileInt("Preferences", "option <id>", <default>)`,
+so the default applies when the key is absent. The nine **named** scalars are read the same
+way, each by its own unguarded call:
 
     worldLocation=0   seanceInProgress=0   enableMusic=1   enableEnvironmentalSounds=1
     enableSFX=1       enableSoundCard=1    askForSkins=1   enableHowDoYou=1  eavesdropEnabled=1

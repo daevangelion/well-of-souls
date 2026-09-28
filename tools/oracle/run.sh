@@ -51,11 +51,15 @@ winpath() { "$WINE_DIR/bin/winepath" -w "$1" 2>/dev/null; }
 export WOS_DSC="$(winpath "$DSC")"
 export WOS_OUT="$(winpath "$OUT")"
 export WOS_RANDTRACE="${WOS_RANDTRACE:-}"
-export WOS_LOG="$(winpath "${WOS_LOG:-/tmp/wos-oracle-hook.log}")"
+# The hook is a 32-bit Windows process: every path it is handed has to be a
+# Windows path.  WINE_LOG is the same file as LOG, in Unix form, because `rm`
+# is the only thing that has to delete it and it does not speak "Z:\".
+LOGPATH="${WOS_LOG:-/tmp/wos-oracle-hook.log}"
+export WOS_LOG="$(winpath "$LOGPATH")"
 
 LOG=/tmp/wos-oracle-run.log
 : > "$LOG"
-rm -f "$WOS_LOG" 2>/dev/null || true
+rm -f "$LOGPATH"
 
 # Xvfb: Wine needs an X display even with no window manager.  A private one is started per
 # run so parallel scripts cannot interfere.
@@ -78,6 +82,12 @@ fi
 n=$(ls -1 "$OUT"/*.txt 2>/dev/null | wc -l || true)
 if [ "$n" -eq 0 ]; then
     echo "run.sh: no dumps were produced; see $LOG" >&2
+    if [ -s "$LOGPATH" ]; then
+        echo "run.sh: ---- last 30 lines of $LOGPATH ----" >&2
+        tail -30 "$LOGPATH" >&2
+    else
+        echo "run.sh: $LOGPATH is empty: the hook never loaded" >&2
+    fi
     exit 1
 fi
 echo "run.sh: $n dump(s) in $OUT"

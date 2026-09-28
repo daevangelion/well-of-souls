@@ -68,11 +68,14 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    /* target command line: argv[targ] plus everything after the hook dll */
+    /* target command line: argv[targ] plus everything after the hook dll, minus the launcher's
+     * own --timeout pair. Passing it through made MFC's ParseCommandLine treat the number as a
+     * document to open ("<N> was not found") and left the app off its message loop. */
     cmd[0] = 0;
     strncat(cmd, argv[targ] + (strrchr(argv[targ], '\\') ? (size_t)(strrchr(argv[targ], '\\') - argv[targ] + 1) : 0), sizeof cmd - strlen(cmd) - 1);
     for (i = dll + 1; i < argc; i++) {
         if (!strcmp(argv[i], "--")) continue;
+        if (!strcmp(argv[i], "--timeout")) { ++i; continue; }
         strncat(cmd, " ", sizeof cmd - strlen(cmd) - 1);
         strncat(cmd, argv[i], sizeof cmd - strlen(cmd) - 1);
     }

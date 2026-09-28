@@ -45,6 +45,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdarg.h>
+#include <tlhelp32.h>
 
 #define IMAGE_BASE     0x00400000u
 #define VA_GATE_STAMP  0x004DD510u
@@ -395,11 +396,6 @@ static int patch_iat(HMODULE mod, const char *wantdll, const char *wantfn, void 
     return 0;
 }
 
-static int detour(HMODULE mod, const char *name, void *hook)
-{
-    (void)mod;
-    return 0;                                         /* kept only for the DETOUR macro */
-}
 
 /* detour(module, "user32.dll", "PeekMessageA", hook): patch that function in that
  * module's IAT.  The macro takes (dllname, fnname, hook) for readability at the call
@@ -1182,9 +1178,301 @@ static void script_init(void)
     InterlockedExchange(&g_ready, 1);
 }
 
+/* --------------------------------------------------------- the modal dialog loop */
+
+/* WHY THIS EXISTS.  Under Wine the modal loop of a dialog is NOT a call the game
+ * makes: `DialogBoxIndirectParam` is implemented inside user32, and it enters its
+ * own loop on win32u's NtUserGetMessage/NtUserPeekMessage.  No import slot of
+ * Souls.exe, MFC42.DLL or any other module is on that path, so the pump hooks --
+ * which are IAT patches -- are never reached, and the game sits in the box
+ * forever with a frozen virtual clock.  (Measured: the game's main thread parks
+ * in `anon_pipe_read` on the console pipe inside `NtUserGetMessage`, one thread,
+ * 0% CPU, no `hook_PeekMessageA` line ever logged.)
+ *
+ * The fix is to own the loop.  MFC reaches the dialog through
+ * `CDialog::DoModal` -> `::DialogBoxParam`/`::DialogBoxIndirectParam`, which ARE
+ * IAT slots, so the hook replaces them with the same call Win32 makes: disable
+ * the owner, create the dialog, then run GetMessage/IsDialogMessage/
+ * TranslateMessage/DispatchMessage until `EndDialog` or WM_QUIT.  The only
+ * difference from Wine's loop is that `pump_step()` runs first on every
+ * iteration, so the virtual clock advances and scripted input is delivered
+ * while a dialog is up.  That is the same rule as the main loop
+ * (docs/re/oracle.md section 3.1): the clock only moves while the queue is
+ * empty.
+ *
+ * `EndDialog` is hooked for the same reason -- it is what tells the loop to
+ * stop, and the real one has no way to reach a loop we own. */
+
+/* This toolchain's winuser.h predates DLGTPROCW (the ANSI/Unicode pair was still
+ * behind UNICODE macros), and the W entry points are exactly the ones the W
+ * dialog path needs.  Same prototype as DLGPROC: the W-ness is in the strings,
+ * not in the signature. */
+#ifndef DLGTPROCW
+typedef INT_PTR (CALLBACK *DLGTPROCW)(HWND, UINT, WPARAM, LPARAM);
+#endif
+
+#define MAX_MODAL 8
+typedef struct {
+    HWND hwnd;              /* the dialog, NULL once EndDialog has fired */
+    int  done;
+    int  result;
+} ModalFrame;
+static ModalFrame g_modal[MAX_MODAL];
+static int        g_modal_depth;
+
+static int  (WINAPI *real_DialogBoxParamA)(HINSTANCE, UINT_PTR, HWND, DLGPROC, LPARAM);
+static int  (WINAPI *real_DialogBoxParamW)(HINSTANCE, UINT_PTR, HWND, DLGTPROCW, LPARAM);
+static int  (WINAPI *real_DialogBoxIndirectParamA)(HINSTANCE, LPCDLGTEMPLATE, HWND, DLGPROC, LPARAM);
+static int  (WINAPI *real_DialogBoxIndirectParamW)(HINSTANCE, LPCDLGTEMPLATE, HWND, DLGTPROCW, LPARAM);
+static HWND (WINAPI *real_CreateDialogIndirectParamA)(HINSTANCE, LPCDLGTEMPLATE, HWND, DLGPROC, LPARAM);
+static HWND (WINAPI *real_CreateDialogIndirectParamW)(HINSTANCE, LPCDLGTEMPLATE, HWND, DLGTPROCW, LPARAM);
+static BOOL (WINAPI *real_EndDialog)(HWND, INT_PTR);
+static BOOL (WINAPI *real_IsDialogMessageA)(HWND, LPMSG);
+static BOOL (WINAPI *real_IsDialogMessageW)(HWND, LPMSG);
+static BOOL (WINAPI *real_TranslateMessage)(const MSG *);
+static BOOL (WINAPI *real_DispatchMessageA)(const MSG *);
+static BOOL (WINAPI *real_DispatchMessageW)(const MSG *);
+static int  (WINAPI *real_MessageBoxA)(HWND, LPCSTR, LPCSTR, UINT);
+static int  (WINAPI *real_MessageBoxW)(HWND, LPCWSTR, LPCWSTR, UINT);
+
+/* --- the dialog template, read out of the resource ------------------------
+ * The resource id and the control ids are what a .dsc `dialog` op needs, and
+ * reading them off the live template is the only place they are exact: the
+ * caption in the resource is a caption, and the ids are the ids. */
+static const WORD *dlg_str(const WORD *p, char *out, int outsz)
+{
+    int i = 0;
+    out[0] = 0;
+    if (*p == 0x0000) return p + 1;                 /* absent */
+    if (*p == 0xFFFF) {                              /* ordinal */
+        if (outsz > 12) wsprintfA(out, "#%u", (unsigned)p[1]);
+        return p + 2;
+    }
+    while (p[i] && i < outsz - 1) { out[i] = (char)p[i]; i++; }
+    out[i] = 0;
+    return p + i + 1;
+}
+static void log_template(const char *what, HINSTANCE inst, const void *tmpl, int wide)
+{
+    const WORD *p = (const WORD *)tmpl;
+    char title[128], cls[64];
+    int ex = 0, cdit = 0, i;
+    if (!p) { tr("modal: %s id=? template=NULL", what); return; }
+    if (p[0] == 1 && p[1] == 0xFFFF) {              /* DLGTEMPLATEEX */
+        ex = 1;
+        cdit = p[8];
+        p += 13;                                    /* ver sig helpID ex style cdit x y cx cy */
+    } else {
+        cdit = p[4];
+        p += 9;                                     /* style exStyle cdit x y cx cy */
+    }
+    p = dlg_str(p, cls, sizeof cls);                 /* menu */
+    p = dlg_str(p, cls, sizeof cls);                 /* class */
+    if (wide) {
+        char tmp[128];
+        int k = 0;
+        while (p[k] && k < 126) { tmp[k] = (char)p[k]; k++; }
+        tmp[k] = 0;
+        p += k + 1;
+        title[0] = 0;
+        for (i = 0; tmp[i] && i < 126; i++)          /* the caption is ASCII in this image */
+            title[i] = (tmp[i] >= 32 && tmp[i] < 127) ? tmp[i] : '?';
+        title[i] = 0;
+    } else {
+        p = dlg_str(p, title, sizeof title);
+    }
+    tr("modal: %s %s cdit=%d ex=%d class=\"%s\" title=\"%s\"",
+       what, inst ? "hinst" : "NULL", cdit, ex, cls, title);
+    for (i = 0; i < cdit; i++) {
+        int id;
+        if (ex) { id = (int)((unsigned)p[10] | ((unsigned)p[11] << 16)); p += 12; }
+        else    { id = (int)(int16_t)p[9]; p += 10; }
+        tr("modal:   ctl %d", id);
+        p = dlg_str(p, cls, sizeof cls);             /* class */
+        p = dlg_str(p, cls, sizeof cls);             /* title */
+        p += 1;                                      /* creation data: WORD count */
+    }
+}
+
+/* The loop.  `tmpl` is the template in memory; `owner` is disabled exactly as
+ * Win32's DialogBox does, and re-enabled on the way out. */
+static int modal_run(const char *what, HINSTANCE inst, const void *tmpl, int wide,
+                     HWND owner, DLGPROC procA, DLGTPROCW procW, LPARAM lp)
+{
+    ModalFrame *f;
+    MSG msg;
+    HWND hwnd;
+    int result = 0;
+    if (g_modal_depth >= MAX_MODAL) {               /* deeper than any real nest */
+        tr("modal: %s: nesting deeper than %d, calling through", what, MAX_MODAL);
+        return wide ? real_DialogBoxIndirectParamW(inst, (LPCDLGTEMPLATE)tmpl, owner, procW, lp)
+                    : real_DialogBoxIndirectParamA(inst, (LPCDLGTEMPLATE)tmpl, owner, procA, lp);
+    }
+    hwnd = wide ? real_CreateDialogIndirectParamW(inst, (LPCDLGTEMPLATE)tmpl, owner, procW, lp)
+                : real_CreateDialogIndirectParamA(inst, (LPCDLGTEMPLATE)tmpl, owner, procA, lp);
+    if (!hwnd) { tr("modal: %s: CreateDialogIndirectParam failed (%lu)", what,
+                     (unsigned long)GetLastError()); return -1; }
+    f = &g_modal[g_modal_depth++];
+    f->hwnd = hwnd; f->done = 0; f->result = 0;
+    tr("modal: %s up as %p, entering the loop", what, (void *)hwnd);
+    if (owner) EnableWindow(owner, FALSE);
+    for (;;) {
+        pump_step();                       /* the virtual clock, and scripted input */
+        if (f->done) break;
+        if (!real_PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) continue;
+        if (msg.message == WM_QUIT) {
+            /* Win32 leaves WM_QUIT in the queue for the loop that is above us. */
+            tr("modal: %s: WM_QUIT out of the dialog loop", what);
+            PostQuitMessage(0);
+            break;
+        }
+        if (f->hwnd && (wide ? real_IsDialogMessageW(f->hwnd, &msg)
+                             : real_IsDialogMessageA(f->hwnd, &msg)))
+            continue;                                /* tab, arrows, default button */
+        real_TranslateMessage(&msg);
+        if (wide) real_DispatchMessageW(&msg); else real_DispatchMessageA(&msg);
+    }
+    result = f->result;
+    if (f->hwnd && IsWindow(f->hwnd)) DestroyWindow(f->hwnd);
+    f->hwnd = NULL;
+    if (owner) EnableWindow(owner, TRUE);
+    --g_modal_depth;
+    tr("modal: %s down, result=%d", what, result);
+    return result;
+}
+
+static BOOL WINAPI hook_EndDialog(HWND h, INT_PTR r)
+{
+    int i;
+    for (i = g_modal_depth - 1; i >= 0; i--)
+        if (g_modal[i].hwnd == h) {
+            g_modal[i].result = (int)r;
+            g_modal[i].done = 1;
+            g_modal[i].hwnd = NULL;
+            tr("modal: EndDialog(%p,%d)", (void *)h, (int)r);
+            DestroyWindow(h);
+            return 1;
+        }
+    return real_EndDialog(h, r);
+}
+
+static int modal_template(HINSTANCE inst, UINT_PTR name, const void **out)
+{
+    HANDLE hr = (HANDLE)FindResourceA(inst, (LPCSTR)name, (LPCSTR)RT_DIALOG);
+    HGLOBAL hg;
+    if (!hr) return 0;
+    hg = (HGLOBAL)LoadResource(inst, hr);
+    if (!hg) return 0;
+    *out = LockResource(hg);
+    return 1;
+}
+
+static int WINAPI hook_DialogBoxParamA(HINSTANCE inst, UINT_PTR name, HWND owner,
+                                       DLGPROC proc, LPARAM lp)
+{
+    const void *tmpl = NULL;
+    char what[64];
+    if (!real_DialogBoxParamA || !modal_template(inst, name, &tmpl)) {
+        tr("modal: DialogBoxParamA: template %u not found, calling through", (unsigned)name);
+        return real_DialogBoxParamA(inst, name, owner, proc, lp);
+    }
+    log_template("DialogBoxParamA", inst, tmpl, 0);
+    wsprintfA(what, "DialogBoxParamA(%u)", (unsigned)name);
+    return modal_run(what, inst, tmpl, 0, owner, proc, NULL, lp);
+}
+
+/* The call chain above a hook point, filtered to things that really are return
+ * addresses: a stack full of .data pointers looks exactly like a stack full of
+ * return addresses otherwise.  A value `v` counts only if the instruction that
+ * ends at `v` is a call -- E8 rel32, FF /2, FF /3, or FF /4 through a register
+ * or memory operand.  MFC sits at 0x5F4xxxxx and the game at 0x40xxxx-0x50xxxx,
+ * and the game's frame is the one that turns a mystery box into a VA. */
+static int looks_like_ret(DWORD v)
+{
+    const unsigned char *p = (const unsigned char *)v;
+    if ((p[-5] & 0xFF) == 0xE8) return 1;                     /* call rel32 */
+    if (p[-6] == 0xFF && (p[-5] & 0x38) == 0x10) return 1;     /* call [r/m] */
+    if (p[-2] == 0xFF && (p[-1] & 0xF8) == 0xD0) return 1;     /* call r32 */
+    return 0;
+}
+static void log_callers(const char *tag)
+{
+    DWORD pad[8];
+    DWORD *sp = pad;                 /* not __builtin_frame_address: -O2 drops the
+                                     * frame pointer, and the scan has to start
+                                     * inside THIS frame and walk up */
+    int i, n = 0;
+    for (i = 0; i < 1024 && n < 24; i++) {
+        DWORD v = sp[i];
+        if (v >= 0x00300000u && v < 0x7E000000u && looks_like_ret(v)) {
+            const char *who = v < 0x00500000u ? "  game"
+                         : v < 0x00600000u ? "  mfc"
+                         : v < 0x11000000u ? "  srmisc" : "  sys";
+            tr("callers[%s]: %08lX%s", tag, (unsigned long)v, who);
+            ++n;
+        }
+    }
+}
+static int WINAPI hook_DialogBoxIndirectParamA(HINSTANCE inst, LPCDLGTEMPLATE tmpl,
+                                               HWND owner, DLGPROC proc, LPARAM lp)
+{
+    log_template("DialogBoxIndirectParamA", inst, tmpl, 0);
+    return modal_run("DialogBoxIndirectParamA", inst, tmpl, 0, owner, proc, NULL, lp);
+}
+static int WINAPI hook_DialogBoxParamW(HINSTANCE inst, UINT_PTR name, HWND owner,
+                                       DLGTPROCW proc, LPARAM lp)
+{
+    const void *tmpl = NULL;
+    char what[64];
+    if (!real_DialogBoxParamW || !modal_template(inst, name, &tmpl)) {
+        tr("modal: DialogBoxParamW: template %u not found, calling through", (unsigned)name);
+        return real_DialogBoxParamW(inst, name, owner, proc, lp);
+    }
+    log_template("DialogBoxParamW", inst, tmpl, 1);
+    wsprintfA(what, "DialogBoxParamW(%u)", (unsigned)name);
+    return modal_run(what, inst, tmpl, 1, owner, NULL, proc, lp);
+}
+static int WINAPI hook_DialogBoxIndirectParamW(HINSTANCE inst, LPCDLGTEMPLATE tmpl,
+                                               HWND owner, DLGTPROCW proc, LPARAM lp)
+{
+    log_template("DialogBoxIndirectParamW", inst, tmpl, 1);
+    return modal_run("DialogBoxIndirectParamW", inst, tmpl, 1, owner, NULL, proc, lp);
+}
+
+/* A message box is the one modal thing that is NOT a dialog resource, and under a
+ * headless X server it is a deadlock with no upside.  The harness answers IDOK and
+ * writes down what it said: the text is the evidence, the answer is the only
+ * thing that keeps the run alive.  A run that hits one says so in the log, and
+ * the dump after it is the one to read. */
+static int WINAPI hook_MessageBoxA(HWND owner, LPCSTR text, LPCSTR cap, UINT type)
+{
+    tr("modal: MessageBoxA(owner=%p, type=0x%X) caption=\"%s\" text=\"%s\" -> IDOK",
+       (void *)owner, (unsigned)type, cap ? cap : "", text ? text : "");
+    log_callers("MessageBoxA");
+    return IDOK;
+}
+static int WINAPI hook_MessageBoxW(HWND owner, LPCWSTR text, LPCWSTR cap, UINT type)
+{
+    char t[256], c[128];
+    int i = 0, j = 0;
+    while (text && text[i] && i < 250) { t[i] = (char)text[i]; i++; }
+    t[i] = 0;
+    while (cap && cap[j] && j < 120) { c[j] = (char)cap[j]; j++; }
+    c[j] = 0;
+    tr("modal: MessageBoxW(owner=%p, type=0x%X) caption=\"%s\" text=\"%s\" -> IDOK",
+       (void *)owner, (unsigned)type, c, t);
+    log_callers("MessageBoxW");
+    return IDOK;
+}
+
+
+
 /* --------------------------------------------------------------------- install */
 
-/* --- file-access tracing (WOS_DETOURS group "trace"): the exact path that fails --- */
+/* --- file-access tracing (WOS_DETOURS group "trace") ------------------------
+ * The exact path that fails, and WHERE it failed from: the return address is
+ * the single most useful thing in this whole harness when the game asks for a
+ * file that is not there, because it maps straight onto a VA in the decomp. */
 static int g_trace_on;
 static int (__cdecl *real__access)(const char *, int);
 static HANDLE (WINAPI *real_CreateFileA)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES,
@@ -1194,41 +1482,131 @@ static FILE *(__cdecl *real_fopen)(const char *, const char *);
 static int __cdecl hook__access(const char *path, int mode)
 {
     int r = real__access(path, mode);
-    if (r == -1 && g_trace_on) tr("TRACE _access(\"%s\",%d) -> -1", path ? path : "(null)", mode);
+    if (r == -1 && g_trace_on)
+        tr("TRACE _access(\"%s\",%d) -> -1 at %08lX", path ? path : "(null)", mode,
+           (unsigned long)(uintptr_t)__builtin_return_address(0));
     return r;
 }
 static HANDLE WINAPI hook_CreateFileA(LPCSTR path, DWORD acc, DWORD sh,
                                      LPSECURITY_ATTRIBUTES sa, DWORD cd, DWORD fl, HANDLE t)
 {
     HANDLE h = real_CreateFileA(path, acc, sh, sa, cd, fl, t);
-    if (h == INVALID_HANDLE_VALUE && g_trace_on) tr("TRACE CreateFileA(\"%s\",0x%lX) -> FAIL", path ? path : "(null)",
-                                       (unsigned long)acc);
+    if (h == INVALID_HANDLE_VALUE && g_trace_on)
+        tr("TRACE CreateFileA(\"%s\",0x%lX) -> FAIL at %08lX", path ? path : "(null)",
+           (unsigned long)acc, (unsigned long)(uintptr_t)__builtin_return_address(0));
     return h;
 }
 static FILE *__cdecl hook_fopen(const char *path, const char *mode)
 {
     FILE *f = real_fopen(path, mode);
-    if (!f && g_trace_on) tr("TRACE fopen(\"%s\",\"%s\") -> NULL", path ? path : "(null)", mode ? mode : "");
+    if (!f && g_trace_on)
+        tr("TRACE fopen(\"%s\",\"%s\") -> NULL at %08lX", path ? path : "(null)",
+           mode ? mode : "", (unsigned long)(uintptr_t)__builtin_return_address(0));
     return f;
 }
 
-/* WOS_DETOURS selects which groups are installed, for bisecting a behaviour difference
- * against the unhooked game: "pump,timer,key,tick,wall,clock,rng,help" (default: all). */
-static int grp(const char *name)
+/* --- the module list, read out of the PEB ---------------------------------
+ * Which module a patch landed in only means something if the module has a
+ * name, and half the job of this harness is telling "MFC42 did not import
+ * DialogBoxIndirectParamW" from "the module that did is not the one you
+ * think".  Wine maps the 32-bit view in the low 2 GB, so the bases alone are
+ * ambiguous. */
+static void log_modules(void)
 {
-    char buf[256], *p, *q;
-    /* an unset variable means "all groups"; set-but-empty means "none" */
-    if (!GetEnvironmentVariableA("WOS_DETOURS", buf, sizeof buf)) return 1;
-    if (!buf[0]) return 0;
-    p = buf;
-    while (*p) {
-        q = strchr(p, ',');
-        if (q) *q = 0;
-        if (strcmp(p, name) == 0) return 1;
-        if (!q) break;
-        p = q + 1;
+    HANDLE snap;
+    MODULEENTRY32 me;
+    /* ToolHelp, not the PEB: a PEB walk is one struct offset away from wrong on
+     * every Wine build, and this runs once. */
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+    if (snap == INVALID_HANDLE_VALUE) { tr("modules: snapshot failed"); return; }
+    me.dwSize = sizeof me;
+    if (Module32First(snap, &me))
+        do { tr("modules: %08lX %s", (unsigned long)(uintptr_t)me.modBaseAddr, me.szModule); }
+        while (Module32Next(snap, &me));
+    CloseHandle(snap);
+}
+
+/* --- the watchdog -----------------------------------------------------------
+ * One question this harness has to be able to answer at any moment: is the game
+ * still moving, and if not, what is it looking at?  When a run produces no
+ * dumps the difference between "the pump is running and the script is done" and
+ * "the app is parked inside a loop that is not ours" is invisible from the
+ * outside, and that is the whole diagnosis.
+ *
+ * The thread is created from DllMain, which is a place threads should not be
+ * created from, so it does exactly one thing before it touches anything: it
+ * sleeps long enough for DllMain to have returned and the loader lock to be
+ * gone.  It never calls LoadLibrary or GetProcAddress, and it is given an
+ * explicit stack because the default one is a liability here. */
+static volatile LONG g_watchdog_started;
+/* The index of the next un-fired event, for the watchdog's one line. */
+static int pump_next_event(void)
+{
+    int i;
+    for (i = 0; i < g_nev; i++) if (!g_ev[i].done) return i;
+    return -1;
+}
+static DWORD WINAPI watchdog_thread(LPVOID unused)
+{
+    (void)unused;
+    /* Counters only.  EnumWindows from this thread is what the first version
+     * did, and it never came back: the main thread is parked inside a user32
+     * wait while the watchdog is asking user32 for the window list.  A
+     * diagnostic that can deadlock the thing it measures is not a diagnostic. */
+    Sleep(4000);                       /* let DllMain return and the game start */
+    for (;;) {
+        Sleep(3000);
+        tr("watch: steps=%ld peeks=%ld gets=%ld modal=%d ready=%ld finished=%d "
+           "rng=%ld ticks=%u next_in=%d",
+           (long)g_steps, (long)g_peeks, (long)g_gets, g_modal_depth,
+           (long)g_ready, g_finished, (long)g_rand_calls, vnow(), pump_next_event());
     }
     return 0;
+}
+static void start_watchdog(void)
+{
+    HANDLE t;
+    if (InterlockedCompareExchange(&g_watchdog_started, 1, 0) != 0) return;
+    t = CreateThread(NULL, 128 * 1024, watchdog_thread, NULL, 0, NULL);
+    tr("watch: watchdog thread %p", (void *)t);
+}
+
+
+/* WOS_DETOURS selects which groups are installed, for bisecting a behaviour difference
+ * against the unhooked game.
+ *
+ * The default is the CORE set -- the hooks a differential run needs and nothing
+ * else.  The rest are diagnostics that cost a great deal of wall time (a traced
+ * run does 500k relay-worthy calls in the first two seconds) and must be asked
+ * for by name:
+ *
+ *   core  (default) pump, timer, key, tick, wall, clock, rng, help, modal
+ *   probe           one-shot dump of the live options table (the "values=" line)
+ *   trace           every failing _access/fopen/CreateFileA, with its path
+ *   watch           log every modal dialog, with its resource id, caption and
+ *                   control ids, and auto-answer every MessageBox
+ *
+ * An unset variable means the core set; a set variable means exactly the names
+ * it lists (plus "all" for everything). */
+static int in_list(char *list, const char *name)
+{
+    char *p = list, *q;
+    for (;;) {
+        q = strchr(p, ',');
+        if (q) *q = 0;
+        if (!strcmp(p, name)) return 1;
+        if (!q) return 0;
+        p = q + 1;
+    }
+}
+static int grp(const char *name)
+{
+    char core[] = "pump,timer,key,tick,wall,clock,rng,help,modal,watch";
+    char buf[256];
+    DWORD n = GetEnvironmentVariableA("WOS_DETOURS", buf, sizeof buf);
+    if (!n) return in_list(core, name);
+    if (!buf[0]) return 0;
+    return in_list(buf, name) || in_list(buf, "all");
 }
 
 static void install_detours(void)
@@ -1243,12 +1621,45 @@ static void install_detours(void)
 
     real_PeekMessageA = (BOOL (WINAPI *)(LPMSG, HWND, UINT, UINT, UINT))GetProcAddress(u32, "PeekMessageA");
     real_GetMessageA  = (BOOL (WINAPI *)(LPMSG, HWND, UINT, UINT))GetProcAddress(u32, "GetMessageA");
+    real_TranslateMessage  = (BOOL (WINAPI *)(const MSG *))GetProcAddress(u32, "TranslateMessage");
+    real_DispatchMessageA  = (BOOL (WINAPI *)(const MSG *))GetProcAddress(u32, "DispatchMessageA");
+    real_DispatchMessageW  = (BOOL (WINAPI *)(const MSG *))GetProcAddress(u32, "DispatchMessageW");
+    real_IsDialogMessageA  = (BOOL (WINAPI *)(HWND, LPMSG))GetProcAddress(u32, "IsDialogMessageA");
+    real_IsDialogMessageW  = (BOOL (WINAPI *)(HWND, LPMSG))GetProcAddress(u32, "IsDialogMessageW");
+    real_EndDialog         = (BOOL (WINAPI *)(HWND, INT_PTR))GetProcAddress(u32, "EndDialog");
+    real_DialogBoxParamA   = (int (WINAPI *)(HINSTANCE, UINT_PTR, HWND, DLGPROC, LPARAM))
+                             GetProcAddress(u32, "DialogBoxParamA");
+    real_DialogBoxParamW   = (int (WINAPI *)(HINSTANCE, UINT_PTR, HWND, DLGTPROCW, LPARAM))
+                             GetProcAddress(u32, "DialogBoxParamW");
+    real_DialogBoxIndirectParamA = (int (WINAPI *)(HINSTANCE, LPCDLGTEMPLATE, HWND, DLGPROC, LPARAM))
+                             GetProcAddress(u32, "DialogBoxIndirectParamA");
+    real_DialogBoxIndirectParamW = (int (WINAPI *)(HINSTANCE, LPCDLGTEMPLATE, HWND, DLGTPROCW, LPARAM))
+                             GetProcAddress(u32, "DialogBoxIndirectParamW");
+    real_CreateDialogIndirectParamA = (HWND (WINAPI *)(HINSTANCE, LPCDLGTEMPLATE, HWND, DLGPROC, LPARAM))
+                             GetProcAddress(u32, "CreateDialogIndirectParamA");
+    real_CreateDialogIndirectParamW = (HWND (WINAPI *)(HINSTANCE, LPCDLGTEMPLATE, HWND, DLGTPROCW, LPARAM))
+                             GetProcAddress(u32, "CreateDialogIndirectParamW");
+    real_MessageBoxA = (int (WINAPI *)(HWND, LPCSTR, LPCSTR, UINT))GetProcAddress(u32, "MessageBoxA");
+    real_MessageBoxW = (int (WINAPI *)(HWND, LPCWSTR, LPCWSTR, UINT))GetProcAddress(u32, "MessageBoxW");
 
     if (grp("pump")) {
-    DETOUR("user32.dll", "PeekMessageA",     hook_PeekMessageA);
-        DETOUR("user32.dll", "PeekMessageW",     hook_PeekMessageA);
-        DETOUR("user32.dll", "GetMessageA",      hook_GetMessageA);
-        DETOUR("user32.dll", "GetMessageW",      hook_GetMessageA);
+        DETOUR("user32.dll", "PeekMessageA",         hook_PeekMessageA);
+        DETOUR("user32.dll", "PeekMessageW",         hook_PeekMessageA);
+        DETOUR("user32.dll", "GetMessageA",          hook_GetMessageA);
+        DETOUR("user32.dll", "GetMessageW",          hook_GetMessageA);
+    }
+
+    /* The modal loop Wine keeps on the far side of its own imports. */
+    if (grp("modal")) {
+        DETOUR("user32.dll", "EndDialog",             hook_EndDialog);
+        if (real_DialogBoxParamA)          DETOUR("user32.dll", "DialogBoxParamA", hook_DialogBoxParamA);
+        if (real_DialogBoxIndirectParamA)  DETOUR("user32.dll", "DialogBoxIndirectParamA",
+                                                  hook_DialogBoxIndirectParamA);
+        if (real_DialogBoxParamW)          DETOUR("user32.dll", "DialogBoxParamW", hook_DialogBoxParamW);
+        if (real_DialogBoxIndirectParamW)  DETOUR("user32.dll", "DialogBoxIndirectParamW",
+                                                  hook_DialogBoxIndirectParamW);
+        DETOUR("user32.dll", "MessageBoxA",           hook_MessageBoxA);
+        DETOUR("user32.dll", "MessageBoxW",           hook_MessageBoxW);
     }
 
     if (grp("timer")) {
@@ -1317,6 +1728,8 @@ static void install_detours(void)
 
     tr("install: %d detours installed; base=%08lX realPeek=%p realGet=%p",
        g_detoured, (unsigned long)g_base, (void *)real_PeekMessageA, (void *)real_GetMessageA);
+    log_modules();
+    if (grp("watch")) start_watchdog();
 }
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r)

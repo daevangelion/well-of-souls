@@ -20,10 +20,14 @@ Everything outside `src/platform/` is host-independent C99. `src/platform/platfo
 video present, input events, time, case-insensitive file open and directory listing, WAV sound and MIDI music.
 
 ## Game loop
-The loop runs a fixed 60 Hz step (`game_main.c`). Each step polls platform events (or injects replay events), calls the
-current `Screen.update`, calls `Screen.render` into a 640x480 0x00RRGGBB framebuffer, then calls `plat_present`. Game
-logic counts steps and never reads the wall clock. As a result, `--replay` runs are deterministic and can run faster
-than real time.
+The loop follows the original's `CWinApp::Run` (0x40A8D9). Each pass handles input, then due timers, then idle/paint, all
+on a virtual millisecond clock (`src/engine/clock.c`). The idle pass is gated at 20 ms (FUN_0040A7C7) and the world
+step at 25 ms (FUN_0042895C, which also burns one `rand()` per idle pass). Rules read `clock_ms()`, the port's
+GetTickCount, using the original's literal millisecond constants; nothing counts frames. Randomness comes from the
+MSVC6 CRT LCG (`crt_rand`), called at the same points and in the same order as the original. Boot seeding is
+srand(time), rand(), srand(time), as in FUN_004269AF. With `--script`/`--replay` the clock moves only on schedule
+(including onto each 20 ms idle boundary), so runs are deterministic. Interactive runs attach the clock to real time.
+See docs/re/timing.md and docs/re/rng_calls.md.
 
 ## Android
 - `tools/fetch_android.sh` installs into /mnt/build: SDK API 34 and build-tools 34 (android-sdk/), NDK 26.3.11579264, CMake 3.22.1 and SDL2 2.32.10 (android-deps/). The wrapper pins Gradle 8.9 and AGP 8.7.3 on JDK 21, with `GRADLE_USER_HOME=/mnt/build/gradle`.
@@ -53,25 +57,21 @@ than real time.
 | map hero blit FUN_00416426 (sub-cell InflateRect -1) | world.c sheet_draw_map_dir |
 
 ## Deliberate deviations
+Only presentation and host differences remain. Every rule/outcome row from earlier versions (60 Hz timing, the `.wsh`
+saves, the `.cookies` sidecar, always-successful flee, pathfinder clearance, per-step encounters, the skipped PK and
+placement prompts, the TIMER clock, WEATHER/FX/PARTY) was replaced by the original's behaviour.
+
 | Deviation | Reason |
 |-----------|--------|
-| MFC dialogs and child windows (New Soul, Pick-a-Soul, chat splitter) are drawn as in-framebuffer panels | there is no portable equivalent of MFC; the flow and validation rules are kept |
-| Fixed 640x480 layout, scaled to the window by the platform | the original sized its layout from the client rect |
-| Text uses an embedded 8x8 bitmap font instead of Tempus Sans ITC | no TrueType dependency in the core |
-| Hero saves use a port format (`.wsh`) under `--save`, not the encrypted/serial-bound `.her` | `.her` is tied to the machine's soul ID |
-| Networking (SRNet.dll), online worlds, PK, the chat and the world CRC check are not implemented | the target is offline solo play |
-| Every GetTickCount timing is converted to 60 Hz steps | deterministic replays |
-| Quest TIMER/COUNTDOWN run on a global 60 Hz clock (256 ids) that keeps ticking across screens; WEATHER/FX log `visual=unsupported`; PARTY is a no-op offline | there is no party or weather renderer in solo mode yet |
-| Quest cookies (`#<name>`) persist in a per-hero `.cookies` sidecar next to the save | the original keeps them server-side or in the `.her` blob |
-| Detour pathfinder (FUN_00461b11/FUN_00461b93/FUN_00461dcc): a bounded 2000-node two-sided wall-following search. Diagonal path legs keep one map unit of clearance | the clearance stops fixed-point truncation from landing on the blocked side of terrain corners |
-| Encounter roll uses hunting rating 0 for a fresh hero: 200/10000 per moving 60 Hz step (original: per timer tick) | the tick was converted to steps |
-| LOCK has no online peers to lock out | solo only |
-| Arrow-key walking on the map, plus keyboard shortcuts for menus and fights | lets deterministic replays drive the game; mouse behaviour is unchanged |
-| Battle: solo flee always succeeds | nothing else in solo play can reject it |
-| Spell effects are drawn as element-coloured flashes over 4 s instead of the effectsNN/attackNN particle strips | presentation only; the damage, timing and fizzle rules follow the decomp |
-| A missing music file (e.g. Evergreen `lost.mid`, which music.ini names but was never shipped) logs `music_error` and stays silent | the retail data is incomplete |
-| No "Place Yourself On Gaiea" prompt after the first incarnation; a fresh hero starts above link 0 of map 0 | the prompt places the player on the online world globe (FUN_00434f95("earth")) |
-| The PK opt-in confirmation in New Soul is skipped (always non-PK) | there is no PK in solo play |
+| MFC dialogs and child windows (New Soul, Pick-a-Soul, shop, items, missions, mini-games, trophy bag, pet pen, chat splitter, MessageBoxes) are drawn as in-framebuffer panels. They accept the scripted `dialog` op with the original's resource and control ids; flows, validation and outcomes are the original's | there is no portable MFC |
+| The "Place Yourself" map picker (FUN_00434F95) is a simple map/link chooser instead of the original's live map widget. When it appears, what it writes (map, link) and the save it triggers match the original | presentation |
+| Text uses an embedded 8x8 bitmap font instead of Tempus Sans ITC. Hotspot anchors use the original's per-mille arithmetic (FUN_00405153/0x405194); the hit-rect extents come from our font metrics | no TrueType in the core; the anchor, not the extent, decides which entry a click selects |
+| The layout is computed for a 640x480 client area and scaled to the window by the platform | the differential oracle runs the original at a 640x480 client |
+| Spell and attack effects are element-coloured flashes, not the effectsNN/attackNN strips. The effect placement rands, damage, timing and fizzle follow the decomp | presentation only |
+| Networking (SRNet.dll): online worlds, PK duels, chat channels other than Solo, server vars and the ladder | offline target. Offline code paths behave as the original does when no network is present |
+| Arrow-key walking and keyboard shortcuts for menus and fights | extra input that triggers the same actions as the original's mouse clicks |
+| world.ver signing leaves the 4 bytes at +0x4A4 zero. The original stores a leaked heap address there | not reproducible |
+| A missing music file (Evergreen `lost.mid`, named in music.ini but never shipped) logs `music_error` | the retail data is incomplete |
 
 ## RE corrections found during porting
-See REVERSE.md "Corrections to docs/re/*.md". Map encounters follow the decomp: the difficulty-0 `.mon` suppression applies ON the nearest link, and the proximity tiers are 0.5 and 0.25.
+See REVERSE.md "Corrections to docs/re/*.md".
