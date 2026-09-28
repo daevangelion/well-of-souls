@@ -401,8 +401,8 @@ int hero_record_decode(const uint8_t in[HERO_RECORD_SIZE], Hero *out)
     if (get32s(in+R_PP)+get32s(in+R_PP_MIRROR)!=0) return -1;
     memset(&v,0,sizeof(v));
     v.serial = get32s(in+R_SERIAL);
-    memcpy(v.name,in+R_NAME,HERO_NAME_MAX); v.name[HERO_NAME_MAX]=0;
-    memcpy(v.skin,in+R_SKIN,sizeof(v.skin)); v.skin[sizeof(v.skin)]=0;
+    memcpy(v.name,in+R_NAME,HERO_NAME_MAX); v.name[HERO_NAME_MAX-1]=0;
+    memcpy(v.skin,in+R_SKIN,sizeof(v.skin)); v.skin[sizeof(v.skin)-1]=0;
     v.klass = get32s(in+R_CLASS);
     v.level = get32s(in+R_LEVEL);
     v.xp    = get32s(in+R_XP);

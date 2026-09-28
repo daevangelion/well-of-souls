@@ -15,7 +15,7 @@ add_library(main SHARED ${WOS_ROOT_SOURCES} ${WOS_SOURCES} ${WOS_THIRD_PARTY}
     "${WOS_ROOT}/src/platform/sdl2/cic_unpack.c"
     ${WOS_CODEC_SOURCES})
 target_include_directories(main PRIVATE
-    "${WOS_ROOT}/src" "${WOS_ROOT}/src/platform/sdl2" "${WOS_ROOT}/src/third_party/codec")
+    "${WOS_ROOT}/src" "${WOS_ROOT}/src/platform/sdl2" "${WOS_ROOT}/src/platform/codec")
 foreach(source IN LISTS WOS_ROOT_SOURCES WOS_SOURCES)
     set_property(SOURCE "${source}" APPEND PROPERTY COMPILE_OPTIONS -Wall -Wextra)
 endforeach()

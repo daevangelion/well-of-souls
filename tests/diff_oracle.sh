@@ -21,6 +21,9 @@
 # Environment:
 #   WOS_BUILD            port build dir (default /mnt/build/wos-main)
 #   WOS_ORACLE_TIMEOUT   seconds allowed per original run (default 180)
+#   WOS_PORT_TIMEOUT     seconds allowed per port run (default 120); a port run that
+#                        waits for something the script never provides is otherwise
+#                        unbounded and takes the suite with it
 #   DIFF_ONLY=<name>     run just one script
 #   DIFF_PORT_DUMP       refused: see the --dump note at the port invocation. A --dump
 #                        file is end-of-run state, not per-op, and comparing it would
@@ -84,8 +87,15 @@ for dsc in "$REPO"/tests/diff/*.dsc; do
     # never match the original even when every rule agrees. The oracle's epoch is
     # VIRTUAL_EPOCH = 1234567890 (docs/re/oracle.md section 2), and the two must be the
     # same number or the comparison is not a comparison.
+    # BOUNDED, because the port side is not currently bounded. A `--script` run that
+    # waits for something the script never provides -- a window, a label, a state -- can
+    # sit forever, and an unbounded port run takes the whole suite down with it rather
+    # than reporting one hung script. WOS_PORT_TIMEOUT bounds it (default 120 s) and a
+    # timeout is reported as a result, not as a pass: the label set is still diffed, so
+    # a script that hung after its last dump is visible rather than silently absent.
     ( cd "$PORT_DATA" && \
       SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+      timeout "${WOS_PORT_TIMEOUT:-120}" \
       "$PORT" --data "$PORT_DATA" --save "$TMP/save/$name" --headless \
               --script "$dsc" --log "$pdir/log" --time 1234567890 ) >"$pdir/run.log" 2>&1
     # --dump IS DELIBERATELY ABSENT, and that matters more than it looks.
@@ -98,7 +108,13 @@ for dsc in "$REPO"/tests/diff/*.dsc; do
     # numbers in a diff are per-op by construction, and a run that passed --dump would
     # make every clock.* and rng.* value identical across labels. Guarded, not assumed.
     prc=$?
-    [ $prc -ne 0 ] && echo "  PORT EXIT $prc (see $pdir/run.log)"
+    if [ $prc -eq 124 ]; then
+        echo "  PORT TIMED OUT after ${WOS_PORT_TIMEOUT:-120}s (see $pdir/run.log)"
+        SUMMARY+=("$name: port TIMED OUT")
+        bad=$((bad+1))
+    elif [ $prc -ne 0 ]; then
+        echo "  PORT EXIT $prc (see $pdir/run.log)"
+    fi
     if [ -n "${DIFF_PORT_DUMP:-}" ]; then
         echo "  FATAL: DIFF_PORT_DUMP is set; this suite compares per-op LOG values, and a"
         echo "  --dump file holds end-of-run state for every label. Unset it."

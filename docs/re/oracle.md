@@ -187,6 +187,36 @@ hero record and therefore into the `.her` checksum.
 
 ---
 
+## 2.2 Reading a number off the hook: check the instrument first
+
+This applies to everyone who reads a value out of the hook, not only to whoever wrote it.
+
+**If an instrument reports a count of zero, or a flat line, or a suspiciously round number, ask
+what in the HARNESS could produce that before asking what in the GAME could.** Three times in one
+session a confident number off this hook turned out to be the harness, not the original:
+
+* **"The original's 100 ms timer fires exactly once in 3200 ms."** It did — because the hook's
+  `outstanding` flag was set when a `WM_TIMER` was posted and cleared only when the timer was
+  *armed*, so the first post latched it permanently. Every timer in the game fired once, per run.
+  The original's `rng.calls` was reported as flat at 1415 across 1250 ms of idle, which was the
+  same bug seen from the other side; with it fixed the count grows 1414 → 1418 → 1421 and the
+  port's shape is matched rather than contradicted. A flat line is a symptom, and a flat line in
+  the instrument is indistinguishable from a flat line in the game until you check.
+* **"The original delivers no draws in an idle window."** The same bug, restated as a model.
+* **The menu label strings.** Ghidra's symbol names cannot distinguish a hyphen from a space or
+  render a parenthesis, so `s_Check_On_Line_for_New_Worlds_004e1fe8` is not evidence about
+  "Check On-Line for New Worlds" — the `.rdata` bytes at `0x4E1FE8` are.
+
+The cheap test in every case is the same: read the value the instrument is supposed to be
+measuring out of the image directly, and compare. If they disagree, the instrument is wrong
+first, because the image does not change between runs and the instrument might.
+
+**Corollary: an artefact that looks like a finding is worse than no finding**, because it gets
+routed to an owner who will spend a day on it. A number that is wrong in the harness is a
+statement about the harness, and it is only prevented by checking the harness.
+
+---
+
 ## 3. The event loop, and the step rule
 
 The game's loop is the `CWinApp::Run` override at **0x0040A8D9**:
@@ -259,6 +289,42 @@ ticks on both sides, because the live original spins the idle loop that many tim
    `WM_LBUTTONUP` in one step; `key` is `WM_KEYDOWN` + `WM_KEYUP` in one step. Nothing is
    ever half-pressed across a step, which is why `GetKeyState` reporting 0 is right.
 3. **Events at the same `t` fire in file order.**
+
+### 3.2.1 Two timer defects that made the whole harness wrong, both found by measurement
+
+**1. `outstanding` was never cleared, so every timer fired exactly once, ever.** The flag was
+set when a `WM_TIMER` was posted and cleared only in `hook_SetTimer` — that is, only when the
+timer was *armed*. So the first post of each timer latched it permanently. Measured: the main
+frame's 100 ms timer (id `0x16`, `FUN_00428360` at `0x428803`) and the Book of Tactics dialog's
+id 2 were each delivered **once in a whole run**, across 1,416,245 `PeekMessage` and 472,165
+`GetMessage` calls. The fix is `timer_taken()`, called from both message hooks when a `WM_TIMER`
+is actually taken: clear `outstanding`, and re-arm `deadline += interval` from the **deadline**,
+not from the dispatch instant, so the two readings differ by exactly the coalesced backlog. After
+the fix the same run logs ~74,000 deliveries instead of 2.
+
+This is not a performance detail. It starved **every timed transition in the game**, which
+includes the front end's state 2 — "Where Do You Want To Play Today?" advances through the
+`FUN_004057D3` gate inside `FUN_0041BDB4`, i.e. on a *timer*, not on a click. With the timer
+firing once, no amount of correct clicking could advance it.
+
+**2. A due timer must be synthesised when the app is about to block, with Win32 priority.**
+`GetMessage`/`PeekMessage` synthesise a `WM_TIMER` for any armed timer that is due, and the
+queue drains posted/input first, then `WM_TIMER`, then `WM_PAINT`. Two consequences, and the
+harness had both wrong: a continuously repainting window does **not** starve timers, because
+paint is the lowest priority; and a due-but-untaken timer becomes a message as soon as the app
+would block. The wake-up the harness posted when a caller was about to sleep was always a bare
+`WM_NULL`, so a due timer stayed unposted until the pump happened to run — and the pump only
+runs from inside a hooked call. It now looks for the earliest due timer first and posts *that*,
+falling back to the inert wake-up only when no timer is due.
+
+**3. `end` is a terminal, and a live timer does not keep a run alive.** With the re-arm correct,
+id `0x16` is *always* due, so the pump's "nothing pending, run the clock out" branch became
+unreachable: a script with `end 6400` ran to virtual **5,666,940 ms** and 30,406 `rand()` draws.
+The termination test is therefore on the **script's** pending events, not on the timer table,
+which is what section 3.1's rule already says.
+
+Side effect worth keeping: fixing all three took a 3400 ms script from **84 s of wall clock to
+7 s**, so the 16-script suite is runnable at all.
 
 ### 3.3 Timers
 
@@ -659,7 +725,20 @@ the suite report success:
   `PORT-ONLY` and counted in the failure total, because an unreachable target is exactly the
   failure the suite exists to catch.
 
-Measured 2026-09-28, six scripts, 19 labels, `labels=19 equal=1 mismatched=18`:
+The full suite is **16 scripts, 86 labels**, `labels=86 equal=4 mismatched=83`. The four green
+labels are `front_hotspots/options` (34 keys compared, all equal — every numbered option read live
+out of `DAT_006840D0`) and `quest_timer_cookies/scene@{enter,mid,timers}`, which are a *weak*
+green: all 40 `scene.*` keys are port-only per 5.4.4, so only one key is really compared on each.
+
+**Eleven of the sixteen scripts do not reach their target in the original.** They stop in the front
+end, and section 7 says why. The `battle.*` and `items.*` mismatches they produce are therefore
+*not* evidence about the battle and items modules: at those points the original is in a fight and
+the port is not. Reporting them as module defects would attribute to an owner a difference that is
+a property of the script not getting there.
+
+The table below is the boot/front subset, where both sides actually run the same states:
+
+| script | label | result | first differing keys |
 
 | script | label | result | first differing keys |
 |---|---|---|---|
@@ -680,7 +759,9 @@ Measured 2026-09-28, six scripts, 19 labels, `labels=19 equal=1 mismatched=18`:
 | `front_hotspots` | `options` | **OK (34 keys)** | — |
 
 `hero.base_offset` agrees at every checkpoint (1168 both sides), and `clock.ms` agrees at every
-checkpoint that follows no input (150/150, 800/800, 1400/1400).
+checkpoint that follows no input (150/150, 800/800, 1400/1400) — the one exception is
+`boot_click/rng@after`, where the oracle reads 430 against the port's 400, i.e. the only checkpoint
+that follows a posted click.
 
 **The one green label is real.** `options` compares equal on all 33 numbered options read live out
 of `DAT_006840D0` in the running original, including option 7 (waypoints, default **1** = ON) and
@@ -729,6 +810,17 @@ constant, so the port's per-window draws have no counterpart to be tuned towards
   intervening dump, "Play now" is still at its "from" position `(591,120,864,162)` and the
   settled centre `(215,141)` misses it entirely. This is why the shared prelude in the
   translated scripts is `click -> dump -> dump -> click` and not `click -> click`.
+
+  **Where a click's effect GOES, and why it appears to go nowhere.** `FUN_00405765` does
+  `PostMessage((&DAT_00533A60)[i*0x2F], (&DAT_00533A64)[i*0x2F], i, (&DAT_00533A68)[i*0x2F])` —
+  the record's **+0x68 HWND**, the message at **+0x6C**, and the lParam at **+0x70**. An earlier
+  version of `dump_hotspots` read +0x70 and called it "target", which is the lParam and is 0 for
+  every entry, and never emitted the window at all — so the one field that says where the effect
+  lands was the one field missing. It is now emitted, and the measured value for "Play now" is
+  `hwnd=65658` (0x1007A), class `AfxFrameOrView42`, `msg=0x046B`. So the click does reach the
+  front view, by a direct `PostMessage` of a `WM_USER`-range id rather than through `WM_COMMAND`,
+  which is the next thing to trace: whether the front view's message map has an entry for 0x046B
+  at all, or whether the "Play now" transition is meant to come from somewhere else entirely.
 
   **Past the main menu the original cannot be driven at all by this suite's means.** The
   "Where Do You Want To Play Today?" screen (state 2) registers exactly ONE hotspot, and it

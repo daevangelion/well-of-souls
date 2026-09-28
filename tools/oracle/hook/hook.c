@@ -415,6 +415,34 @@ static UINT_PTR __stdcall hook_SetTimer(HWND hwnd, UINT_PTR id, UINT elapse, TIM
     return (UINT_PTR)t;                    /* SetTimer's return is not checked anywhere */
 }
 
+/* THE APP TOOK A WM_TIMER. This is the missing half of the timer model, and it was a
+ * one-line omission with a large effect: `outstanding` was set when a WM_TIMER was posted
+ * and cleared ONLY in hook_SetTimer, i.e. only when the timer was (re)armed. So the first
+ * post of every timer latched it forever and it could never fire again.
+ *
+ * Measured consequence, and it is not a subtle one: the main frame's 100 ms timer
+ * (id 0x16, FUN_00428360 at 0x428803) and the Book of Tactics dialog's id 2 were each
+ * delivered EXACTLY ONCE in a whole run -- 1,416,245 PeekMessage calls and 472,165
+ * GetMessage calls, and one delivery. Every timed transition in the game was starved,
+ * which includes the front end's state 2 ("Where Do You Want To Play Today?"), which
+ * advances through the FUN_004057D3 gate inside FUN_0041BDB4 rather than on a click.
+ *
+ * The re-arm rule is Win32's and is the one already agreed: `deadline += interval`, from
+ * the DEADLINE and not from the dispatch instant, so the two readings differ by exactly
+ * the coalesced backlog. The `outstanding` flag is what stops a backlog being replayed:
+ * one message per period at most, and a stall collapses to a single delivery. */
+static void timer_taken(HWND hwnd, WPARAM id)
+{
+    int i;
+    for (i = 0; i < MAX_TIMERS; i++) {
+        Timer *t = &g_timers[i];
+        if (t->live && t->hwnd == hwnd && t->id == id) {
+            t->outstanding = 0;
+            t->deadline += t->interval;
+            return;
+        }
+    }
+}
 static BOOL __stdcall hook_KillTimer(HWND hwnd, UINT_PTR id)
 {
     Timer *t = timer_find(hwnd, id);
@@ -1506,6 +1534,7 @@ static void dump_hotspots(FILE *f, const char *pfx)
         unsigned char *r = t + (size_t)i * HOTSPOT_STRIDE;
         int state = *(int *)r;
         int rect[4], flags, msg, target;
+        HWND hwnd;
         const char *label;
         int k;
         if (state < 1 || state > 2) continue;      /* FUN_00405765's own liveness test */
@@ -1515,8 +1544,14 @@ static void dump_hotspots(FILE *f, const char *pfx)
          * dword's whole low byte would report 4 for an entry that is not clickable. */
         flags = *(int *)(r + 0x08) & 0x400;
         label = *(const char **)(r + 0x14);
+        /* Record layout, from FUN_00405000's stores and FUN_00405765's PostMessage:
+         *   +0x68 the HWND the entry posts to, +0x6C the message, +0x70 the lParam.
+         * The earlier version of this dump read +0x70 and called it "target", which is
+         * the lParam -- 0 for every entry -- and never emitted the window at all, so the
+         * one field that says WHERE a click's effect goes was the one field missing. */
         msg   = *(int *)(r + 0x6C);
         target= *(int *)(r + 0x70);
+        hwnd  = *(HWND *)(r + 0x68);
         if (rect[2] <= rect[0] || rect[3] <= rect[1]) continue;   /* an empty rect never hits */
         fprintf(f, "%s.hotspot.%d.state=%d\n", pfx, i, state);
         fprintf(f, "%s.hotspot.%d.rect=%d,%d,%d,%d\n", pfx, i,
@@ -1524,6 +1559,14 @@ static void dump_hotspots(FILE *f, const char *pfx)
         fprintf(f, "%s.hotspot.%d.clickable=%d\n", pfx, i, flags ? 1 : 0);
         fprintf(f, "%s.hotspot.%d.msg=%04X\n", pfx, i, (unsigned)msg);
         fprintf(f, "%s.hotspot.%d.target=%d\n", pfx, i, target);
+        /* the window the entry's message is posted to, as the hook sees it */
+        fprintf(f, "%s.hotspot.%d.hwnd=%lu\n", pfx, i,
+                (unsigned long)(hwnd ? (unsigned long)(uintptr_t)hwnd : 0ul));
+        if (hwnd) {
+            char cls[64];
+            GetClassNameA(hwnd, cls, sizeof cls);
+            fprintf(f, "%s.hotspot.%d.class=%s\n", pfx, i, cls);
+        }
         if (label) {
             char buf[96];
             int n = 0;
@@ -1808,7 +1851,16 @@ static int pump_step_inner(void)
            now, t_in, t_tim, t_idle, (unsigned long)gate);
     }
 
-    if (t_in == 0xFFFFFFFFu && t_tim == 0xFFFFFFFFu) {
+    /* `end` IS THE TERMINAL WHEN NOTHING IS PENDING -- and a live timer does not count as
+     * pending, because a timer that is always due would otherwise keep the pump alive for
+     * ever. Before the timer re-arm fix this branch was only reachable when no timer was
+     * live at all; with the re-arm correct, id 0x16 is ALWAYS due, so the branch became
+     * unreachable and the run raced past `end` indefinitely: measured, virtual
+     * 5,666,940 ms against an `end 6400`, with 30,406 rand() draws. A script has to
+     * terminate on its own schedule or the suite cannot run at all. So the test is on the
+     * SCRIPT's pending events, and the clock is run out to `end` first, exactly as the
+     * rule in docs/re/oracle.md 3.1 already says. */
+    if (t_in == 0xFFFFFFFFu) {
         if (now < g_end_ms) { vadvance(g_end_ms); return 0; }   /* run the clock out */
         g_finished = 1;
         tr("pump_step: script done, posting WM_QUIT");
@@ -1951,6 +2003,7 @@ static BOOL WINAPI hook_PeekMessageA(LPMSG m, HWND h, UINT a, UINT b, UINT rm)
         tr("hook_PeekMessageA: call %ld rm=%08X", (long)g_peeks, rm);
     pump_step();
     r = real_PeekMessageA(m, h, a, b, rm);
+    if (r && m->message == WM_TIMER) timer_taken(m->hwnd, m->wParam);
     if (!r) InterlockedIncrement(&g_idle_pass);
     if (r) msglog_win(m->hwnd);
     msglog(m, "Peek", rm, r);
@@ -1998,9 +2051,44 @@ static UINT getmessage_wakeup_id(HWND h, UINT a, UINT b)
     (void)h;
     return id;
 }
+/* THE WAKE-UP IS A DUE TIMER IF THERE IS ONE, NOT ALWAYS A BARE WM_NULL.
+ *
+ * This is Win32's priority rule and it is not cosmetic. `GetMessage`/`PeekMessage`
+ * synthesise a `WM_TIMER` for any armed timer whose deadline has passed whenever the
+ * thread is about to wait, and the queue is drained in the order posted/input first,
+ * then `WM_TIMER`, then `WM_PAINT`. Two consequences this harness had wrong:
+ *
+ *   * A continuously repainting window does NOT starve timers. Paint is the LOWEST
+ *     priority, so a window that invalidates itself every frame still gets its timers.
+ *   * A timer that is due and untaken is not "waiting for the app to come back" in any
+ *     useful sense -- it becomes a message as soon as the app would block.
+ *
+ * Before this, the only thing that ever woke a blocked `GetMessage` was a bare WM_NULL,
+ * so a due timer stayed unposted until the pump happened to run, and the pump only runs
+ * from inside a hooked call. The measured consequence was that the original's main-frame
+ * 100 ms timer (id 0x16, armed by FUN_00428360 at 0x428803) was delivered ONCE in
+ * 3200 ms of idle -- an artefact of the harness, not a fact about the original. It
+ * matters because the front end's state 2 ("Where Do You Want To Play Today?") advances
+ * on a TIMED transition through the FUN_004057D3 gate inside FUN_0041BDB4, which is
+ * reached from the 20 ms gate FUN_0040A7C7 -- i.e. from that timer. With the timer
+ * starved, the state could never advance however correctly the script clicked.
+ *
+ * So: if the caller's queue is empty, look for the earliest due timer and post THAT;
+ * only when no timer is due does the harness fall back to the inert wake-up message. */
 static BOOL getmessage_wakeup(HWND h, UINT a, UINT b)
 {
     UINT id = getmessage_wakeup_id(h, a, b);
+    int i;
+    uint32_t now = vnow();
+    for (i = 0; i < MAX_TIMERS; i++) {
+        Timer *t = &g_timers[i];
+        if (t->live && !t->outstanding && t->deadline <= now) {
+            t->outstanding = 1;
+            tr("timer: delivered by synthesis id=%u at=%u", (unsigned)t->id, now);
+            t->last_delivered = now;
+            return PostMessageA(t->hwnd, WM_TIMER, (WPARAM)t->id, 0);
+        }
+    }
     return h ? PostMessageA(h, id, 0, 0)
              : PostThreadMessage(GetCurrentThreadId(), id, 0, 0);
 }
@@ -2037,6 +2125,7 @@ static BOOL WINAPI hook_GetMessageA(LPMSG m, HWND h, UINT a, UINT b)
             getmessage_wakeup(h, a, b);
     }
     r = real_GetMessageA(m, h, a, b);
+    if (r && m->message == WM_TIMER) timer_taken(m->hwnd, m->wParam);
     if (r) msglog(m, "Get", PM_REMOVE, r);
     return r;
 }

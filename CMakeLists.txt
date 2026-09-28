@@ -108,7 +108,7 @@ if(WOS_BUILD_TESTS)
     add_executable(cic_unpack_selftest tests/cic_unpack_selftest.c
         src/platform/sdl2/cic_unpack.c src/platform/sdl2/files_sdl2.c ${WOS_CODEC_SOURCES})
     target_include_directories(cic_unpack_selftest PRIVATE
-        src src/platform/sdl2 src/third_party/codec)
+        src src/platform/sdl2 src/platform/codec)
     foreach(source src/platform/sdl2/cic_unpack.c src/platform/sdl2/files_sdl2.c tests/cic_unpack_selftest.c)
         # miniz.h exposes unused static compress helpers into the decoder TU.
         set_property(SOURCE ${source} APPEND PROPERTY COMPILE_OPTIONS -Wall -Wextra -Wno-unused-function)
@@ -128,7 +128,7 @@ if(WOS_BUILD_TESTS)
         src/platform/sdl2/install.c src/platform/sdl2/cic_unpack.c
         src/platform/sdl2/files_sdl2.c ${WOS_CODEC_SOURCES})
     target_include_directories(install_selftest PRIVATE
-        src src/platform/sdl2 src/third_party/codec)
+        src src/platform/sdl2 src/platform/codec)
     foreach(source src/platform/sdl2/install.c tests/install_selftest.c)
         set_property(SOURCE ${source} APPEND PROPERTY COMPILE_OPTIONS -Wall -Wextra -Wno-unused-function)
         if(WOS_WERROR)
