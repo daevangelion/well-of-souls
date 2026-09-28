@@ -82,8 +82,12 @@ static void rebuild(void)
     if(panel.kind==PANEL_SHOP && !panel.selling) {
         for(i=0;i<panel.offer_count;i++) panel.ids[panel.count++]=panel.offers[i];
     } else if(panel.kind==PANEL_SPELLS) {
+        /* FUN_0044E3BD: the list holds what is LEARNABLE, not what is
+         * affordable - the PP wallet is checked when Learn is pressed and says
+         * so. Filtering on hero_can_learn_spell here left a broke hero with an
+         * empty list and nothing to press. */
         for(i=1;i<WORLD_MAX_SPELLS;i++)
-            if(g_world.spells[i].used && (hero_spell_known(&g_hero,i) || hero_can_learn_spell(&g_hero,i))) panel.ids[panel.count++]=i;
+            if(g_world.spells[i].used && (hero_spell_known(&g_hero,i) || items_spell_listable(i))) panel.ids[panel.count++]=i;
     } else if(panel.kind==PANEL_TRAIN) panel.count=8;
     else if(panel.kind==PANEL_ITEMS || panel.kind==PANEL_EQUIP || panel.kind==PANEL_SHOP) {
         for(i=0;i<HERO_INVENTORY;i++) {

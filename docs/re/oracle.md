@@ -723,6 +723,23 @@ constant, so the port's per-window draws have no counterpart to be tuned towards
   computed from `GetClientRect` at state entry and a later resize leaves every stored rect
   describing a client area that no longer exists.
 
+  **The animation only advances on a paint, and a `dump` is what forces one.** `FUN_004054A8`
+  is driven by the front end's paint, so a script that reaches the menu and clicks without
+  dumping in between is clicking at coordinates chosen for a rect that has not moved: with no
+  intervening dump, "Play now" is still at its "from" position `(591,120,864,162)` and the
+  settled centre `(215,141)` misses it entirely. This is why the shared prelude in the
+  translated scripts is `click -> dump -> dump -> click` and not `click -> click`.
+
+  **Past the main menu the original cannot be driven at all by this suite's means.** The
+  "Where Do You Want To Play Today?" screen (state 2) registers exactly ONE hotspot, and it
+  is a non-clickable label — `state=1`, `rect=39,60,533,102`, `msg=0000`, `clickable=0`,
+  label "Where Do You Want To Play Today?". `FUN_00405765` skips any record without the
+  `0x400` bit, so there is nothing there to press, and `FUN_0041C1CD`'s dispatch switch
+  (`0`, `5`, `6`, `8`, `9`, `10`) has no case for state 2, so a mouse-down does not advance
+  it either. Three clicks at y=200, y=300 and y=400 all leave the front state at 1. The
+  transition out of state 2 is therefore reached by something this suite has not identified,
+  and until it is, the eleven translated scripts stop in the front end.
+
   Two further facts constrain the route and are worth not rediscovering: `key RETURN` is a
   **port-only** shortcut (four RETURNs leave the original at state 1,1,1,1 — the front
   view's message map has entries for `WM_LBUTTONDOWN`/`UP` and `WM_MOUSEMOVE` and nothing

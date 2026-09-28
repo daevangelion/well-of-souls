@@ -1358,7 +1358,10 @@ static void scene_update(const Input *in)
     int advance=in->pressed[PLAT_KEY_RETURN]||in->pressed[PLAT_KEY_SPACE]
         ||((in->mouse_pressed&((1u<<1)|(1u<<3)))&&in->mouse_x<400);
     if(minigame_active()) { minigame_update(now); minigame_click(in->mouse_x,in->mouse_y,
-        (in->mouse_pressed&1u)?1:0); return; }
+        /* bit 1 is the port's LEFT button (PLAT_EV_MOUSE_DOWN button=1, ui.c's 1u<<ev->button).
+         * Bit 0 is the Win32 MK_LBUTTON mask and this input layer never produces it, so `&1u`
+         * made every mini-game dialog inert while still opening. Same mask as hit() above. */
+        (in->mouse_pressed&(1u<<1))?1:0); return; }
     if(html_active()) { html_update(in); return; }
     if(missions_panel_active()) { missions_panel_update(in); return; }
     if(panel_active()) { panel_update(in); return; }
@@ -1622,9 +1625,10 @@ static unsigned char colour_table[SCOLOUR_SLOTS*SCOLOUR_SLOT_STRIDE];
 static const int colour_channel_off[SCOLOUR_CHANNELS] = {
     0x20,0x58,0x90,0xC8,0x100,0x138,0x170
 };
+#define SCOLOUR_OBJS_NAMED 10  /* boot seals 0..8, FUN_0043BE95 names 1..9; the slot holds both */
 static EncInt *colour_slot_obj(int slot,int obj)
 {
-    if(slot<0||slot>=SCOLOUR_SLOTS||obj<0||obj>=SCOLOUR_OBJS) return NULL;
+    if(slot<0||slot>=SCOLOUR_SLOTS||obj<0||obj>=SCOLOUR_OBJS_NAMED) return NULL;
     return (EncInt *)(void *)(colour_table + (size_t)slot*SCOLOUR_SLOT_STRIDE
                               + 8 + (size_t)obj*SCOLOUR_OBJ_STRIDE);
 }
@@ -1634,6 +1638,7 @@ typedef struct {
     int w0, w1, w2, index, w4, w5, bitflag;
     unsigned char pad[8];              /* to +0x20, where the first EncInt starts */
     EncInt ch[SCOLOUR_CHANNELS];       /* +0x20 .. +0x170, seven of them */
+    int tail0, tail1, tail2;            /* +0x1A8: 0, 1, 0 */
 } ColourObj;
 /* FUN_0043BC68 formats "%02X" five times: w0, w2, w4, w5 and channel 6. */
 static char colour_palette[SCOLOUR_OBJS*10+1];
@@ -1717,6 +1722,55 @@ void scene_colour_level_flash(int slot,int obj,int monster_9c)
     a=enc_raw(&ob->ch[2])*2-2+monster_9c;
     enc_set(&ob->ch[2],a);        /* +0x90 */
     enc_set(&ob->ch[5],2);        /* +0x138, the literal 2 */
+}
+/* FUN_0042620D: two hex characters. */
+static int hex2(const char *p)
+{
+    int v=0,i;
+    for(i=0;i<2;i++) {
+        int c=(unsigned char)p[i],d;
+        if(c>='0'&&c<='9') d=c-'0';
+        else if(c>='A'&&c<='F') d=c-'A'+10;
+        else if(c>='a'&&c<='f') d=c-'a'+10;
+        else return v;                       /* the original's parser just stops */
+        v=v*16+d;
+    }
+    return v;
+}
+/* FUN_0043BD0A: parse one 23-character (0x17) hex record into object `index` of `slot`.
+ * Seven enc_set calls, so 28 draws per record. Returns 0x17 on success, 0 if the
+ * record is shorter than 23 characters, which is the original's only validation. */
+static int colour_record_parse(const char *rec,int slot,int index)
+{
+    ColourObj *ob=(ColourObj *)(void *)colour_slot_obj(slot,index);
+    if(!rec || strlen(rec)<0x17) return 0;
+    memset(ob,0,0x298);
+    ob->w0 = hex2(rec);
+    ob->w1 = 0;                       /* *(base+4): a global the caller sets, not part of the name */
+    ob->w2 = hex2(rec+2);
+    ob->index = index;
+    ob->bitflag = 1 << (index & 0x1f);
+    ob->w4 = hex2(rec+4);
+    ob->w5 = hex2(rec+6);
+    /* the seven channels, in ascending address order, 4 draws each */
+    enc_set(&ob->ch[0],hex2(rec+0x08));
+    enc_set(&ob->ch[1],hex2(rec+0x0A));
+    enc_set(&ob->ch[2],hex2(rec+0x0C));
+    enc_set(&ob->ch[3],hex2(rec+0x0E));
+    enc_set(&ob->ch[4],hex2(rec+0x10));
+    enc_set(&ob->ch[5],hex2(rec+0x12));
+    enc_set(&ob->ch[6],hex2(rec+0x14));
+    ob->tail0 = 0; ob->tail1 = 1; ob->tail2 = 0;   /* _Dst[0x6a/0x6b/0x6c] */
+    return 0x17;
+}
+/* FUN_0043BE95, called from FUN_00446F77 at VA 0x00447236 with (records, slot_base).
+ * Nine records of 23 characters, indices 1..9, advancing 0x17 each: 9*7 = 63 seals. */
+void scene_colour_populate(int slot,const char *records)
+{
+    int i;
+    if(!records) return;
+    for(i=1;i<10;i++) colour_record_parse(records+(size_t)(i-1)*0x17,slot,i);
+    colour_palette_build();
 }
 /* Core calls this next to boot_register_core(), before boot_run(). */
 void scene_boot_register(void)

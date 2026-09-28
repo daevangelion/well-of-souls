@@ -539,6 +539,34 @@ int trophy_bag_award_kill(int monster_id)
     return kept;
 }
 
+/* FUN_0044E3BD, the Learn button. Its gates, in the original's order:
+ *   1. a list row must be selected
+ *   2. the spell's PP cost field (record +0x120) must be >= 0
+ *   3. FUN_004A46EC(spell.affinity, spell.element): the elemental PP LEVEL for
+ *      that element must be >= the required affinity
+ *   4. the hero's PP wallet must cover the cost - this produces a MESSAGE
+ *      ("not enough PP"), it does not remove the spell from the list
+ * So gates 2 and 3 decide whether a row is LEARNABLE AT ALL, and gate 4 is an
+ * affordability check at press time. The port had them fused: the Spells list
+ * was built from hero_can_learn_spell(), which includes gate 4, so a hero with
+ * less PP than the cheapest spell saw an EMPTY list and the Learn button had
+ * nothing to act on. There is also no min-level and no token gate at learn time
+ * - FUN_0044E3BD has neither. */
+int items_spell_listable(int id)
+{
+    const SpellDef *spell;
+    int element;
+    if (id <= 0 || id >= WORLD_MAX_SPELLS) return 0;
+    spell = &g_world.spells[id];
+    if (!spell->used) return 0;
+    if (spell->pp_cost < 0) return 0;              /* gate 2 */
+    if (spell->flags & 2) return 0;                /* "not offered to humans" */
+    /* FUN_004A46EC: an element outside 0..7 DEFAULTS to 4 rather than failing. */
+    element = (spell->element < 0 || spell->element > 7) ? 4 : spell->element;
+    if (spell->req_affinity > hero_pp_level(g_hero.element_pp[element])) return 0;  /* gate 3 */
+    return 1;
+}
+
 /* ----------------------------------------------------------------- pets */
 
 int pet_count(void)

@@ -1,6 +1,16 @@
 # seed: 1
 # requires: shop_buy item_use travel panel_open trophy_bag_resize
-# requires-match: panels\.kind=Trophy\ Bag item_html|item_html_missing
+# requires-match: panel_open kind=Trophy\ Bag
+#
+# `item_html` / `item_html_missing` (items.c:205-206) is deliberately NOT asserted here.
+# Both fire only on the ITEM_HTML class, and retail Evergreen has exactly three class-201
+# items -- 96 "Quest Dictionary", 1024 "Guild Hall", 5119 "Forum" -- all with their arg-4
+# page index 0, level 0 and find-probability 0, and no scene in the world GIVEs or OFFERs
+# any of them, so no playable hero can ever hold one. That code path is covered instead by
+# tests/missions_html.sh, which drives the probe world where such an item is obtainable.
+# `panels.kind` was never an EVT either: panels.c:691 emits it through panels_dump into the
+# dump file, not the event log, so the assertion above names the panel_open EVT the port
+# really does emit.
 #
 # The item classes end to end, all of them earned in play at the retail Gateway of
 # Dreams (Evergreen SCENE 3, quest.txt:1583-1700, the only scene on the main map that

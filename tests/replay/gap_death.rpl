@@ -1,9 +1,8 @@
 # seed: 1
 # requires: hero_ready map_enter battle_start battle_lost battle_hero_death hero_resurrect
 # requires-match: battle_hero_death .*resurrect=1
-# requires-match: hero_resurrect
-# FUN_00494fcd: losing a fight. The hero takes a normal random encounter and never presses F, so
-# the fight runs to the only end the original allows offline.
+# FUN_00494fcd: losing a fight. The hero takes a normal random encounter and never presses
+# A, so the fight runs to the only end the original allows offline.
 #
 # With the solo auto-resurrect flag (DAT_00502a48) the local hero is not simply left at 0 HP:
 # FUN_0042b6f3 gives the tenths of a level the hero had progressed, FUN_0042b765 writes the XP
@@ -12,8 +11,20 @@
 # next death is a real one and front.c shows the death screen instead. FUN_00480875 and
 # FUN_004946b2 have already banked the kills into the fight-scoped monster table.
 #
-# RETURN is the keyboard shortcut for the click; the Well takes three RETURNs (FUN_0041B891
-# states 1 -> 2 -> 3, all.c:21078).
+# FUN_0041B891's own table (all.c:21078) has THREE states before the Well, not two:
+#   1 main menu -> 2 "Where Do You Want To Play Today?" (splash, FUN_0041D31F)
+#   2 -> 3 "Choose Your World" + the world list (FUN_0041D717)
+#   3 -> take the highlighted row (msg 0x474) -> the Pick-a-Soul window
+# RETURN is the plan's keyboard shortcut for the click.
+#
+# The Gateway of Dreams (map 0 link 0, SCENE 3) sits one cell south of the Evergreen
+# spawn, and quest.txt:1774 makes its first visit an `ASK 30` -- the golden rule,
+# "Do you agree to obey the golden rule? (type YES or NO)". An ASK suspends the scene
+# until the player answers, so every script that walks into the link has to answer it
+# the way a player does: Y (scene.c's ST_ASK sets the reply to "YES"). Left unanswered
+# the scene waits forever and nothing downstream can fire. The Soul Brother also hands
+# over L1 / H5000 / M5000 and a Ticket Home, opens the `OFFER2 0,10` shop, and sizes the
+# trophy bag to 4x3, so this is a real visit and not a scripted cut to the fight.
 expect boot_menu 900
 key RETURN
 wait 30
@@ -27,212 +38,103 @@ text GapDeath
 key RETURN
 expect hero_ready 300
 expect map_enter 600
-hold RIGHT 60
+# One cell south is the Gateway of Dreams, map 0 link 0 (x=179, y=219).
 keydown DOWN
-expect battle_start 1500
+expect scene_enter 600
 keyup DOWN
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-wait 10
-expect battle_hero_death 900
-expect hero_resurrect 300
-expect battle_lost 300
-expect map_enter 600
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key y
+wait 20
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect panel_open 600
+key ESCAPE
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+expect map_enter 2000
+# East past the Gateway's link rectangle (x=189 is still inside it, x=190 is not) and
+# then south, until FUN_0046260E's per-tick roll hands the hero to SCENE 2.
+hold RIGHT 60
+expect hero_move 300
+wait 20
+keydown DOWN
+expect encounter 2000
+keyup DOWN
+expect battle_start 600
+# The hero never attacks: A is a queued action, nothing else is pressed, so the monster
+# grinds a level-1 hero (20 HP) down to nothing on its own.
+wait 12000
+expect battle_hero_death 1500
+expect hero_resurrect 600
+expect battle_lost 600
+expect map_enter 1200
 quit

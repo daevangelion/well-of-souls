@@ -1,10 +1,11 @@
 # seed: 1
 # requires: hero_ready scene_enter minigame_arm minigame_open minigame_slots_spin minigame_slots_result
-# GAME 1 (Slobber Slots) at the Evergreen casino.
+#
+# Slobber Slots (GAME 1) at the retail casino.
 #
 # WHERE THE CASINO IS, from the retail data and not from docs/gap_analysis.md (which says
-# "scene 4" - scene 4 is an unreachable template; docs/re/script.md section 8 is right
-# that the only real GAME opcodes live in the per-map scene files):
+# "scene 4" - scene 4 is an unreachable template; docs/re/script.md section 8 is right that
+# the only real GAME opcodes live in the per-map scene files):
 #     SCENE 1005  aztec                       extracted/worlds/Evergreen/QuestScenes1000.txt:93
 #         THEME 0 / ACTOR 1 "Barker" / SEL 1 / MOVE 1,15,80
 #         GAME 1                              QuestScenes1000.txt:99
@@ -12,20 +13,40 @@
 #         END
 # Ten more identical casinos live in the same file, plus the SCENE 4 template at
 # quest.txt:1720. The one that is actually on a map is reached from map 2:
-#     map=2(castle1) link=3 x=264 y=267 kind=1 dest=0 target=1005 diff=1 theme=0 req=0 Casino
-# and map 2 is Macgyver Castle, entered from map 0 link 9 "Macgyver Castle" at (151,275),
-# which is 101 map units south-west of the Evergreen spawn at (179,202).
+#     map=2(castle1) link=3 x=264 y=267 kind=1 dest=0 target=1005 diff=1 name=Casino
+# and map 2 is Macgyver Castle, entered from map 0 link 9 "Macgyver Castle" at (151,275).
+#
+# THE LEGS. Arrow-key walking is the original's own cell-at-a-time walk (mapview.c:908-917
+# re-issues click_walk(hero + dir) exactly as the click would), so `hold DIR n` is ordinary
+# walking and stops when the terrain does. Each hold below is 4 frames per map cell:
+#   * The Gateway of Dreams is answered on the way out, not walked past. quest.txt:1774 is
+#     `ASK 30` - the golden rule - and an ASK suspends the scene until the player answers, so
+#     the script answers it the way a player does, with Y (scene.c's ST_ASK sets the reply to
+#     "YES"). The Soul Brother also hands over L1 / H5000 / M5000, opens the `OFFER2 0,10`
+#     shop and sizes the trophy bag to 4x3, so this is a real visit.
+#   * The 101-unit walk to the castle is done east first: `click 19 40` aims at (142,177) and
+#     the path builder routes the hero south-west until FUN_0046260E's per-tick roll fires.
+#     The fight is won, which places the hero above map 0 link 9 at (151,264) - eleven units
+#     from the link - and `click 183 184` is (151,275), the link itself.
+#   * On map 2 the hero lands at (158,322), just above the Main Gate. castle1.ter is an
+#     82x87 grid over a 328x350 jpg, so a cell is 4x4 pixels and the four holds below are the
+#     straight runs a flood fill of that grid gives: east 138 to (296,322), north 35 to
+#     (296,287) - the column above (264,287) is walled at y=288..299 - west 32 to (264,287),
+#     north into the link. The last hold is deliberately long and the one after it short: the
+#     link rectangle is only x 263..265 by y 266..268, and the original fires a link when the
+#     hero comes to REST inside it (mapview.c:812-820 clears the latch while the hero is still
+#     walking), so the hero has to overshoot the wall and step back down into it.
 #
 # `GAME n` opens nothing by itself. scene.c's OP_GAME is a comment worth repeating: it
-# "does NOT block: FUN_00421529 arms the button, then pc++", so the opcode only arms a
-# scene button-bar slot; the click is what opens the dialog. The armed slot is 6, the
-# shared Shop/Equip/Game/Missions slot, at button_rect(6) = {640-51-51*6, 8, 48, 48} =
-# {283,8,48,48}, centre (307,32) - scene.c:1287-1293 dispatches it, preferring
-# missions, then the minigame, then the Equip panel.
-# The slots window is RT_DIALOG 0xA7, 176x111, and scene.c:1536 renders it at (0,0), so
-# the client rect of SPIN (control 0x447, DLU x=123 y=7 cx=46 cy=12) is the screen rect
-# (123,7,46,12) and its centre is (146,13). The spin charges 10 GP (0x466BC6 refuses
-# under 10) and settles by itself, which is what logs minigame_slots_result.
+# "does NOT block: FUN_00421529 arms the button, then pc++", so the opcode only arms a scene
+# button-bar slot; the click is what opens the dialog. The armed slot is 6, the shared
+# Shop/Equip/Game/Missions slot, at button_rect(6) = {640-51-51*6, 59, 48, 48} = {283,59,...};
+# scene.c:1372 dispatches it and hands the raw click to minigame_click, which is the path that
+# logs minigame_open. The slots window is 176x111 and scene.c:1536 renders it at (0,0), so
+# the client rect of SPIN (control 0x447, DLU x=123 y=7 cx=46 cy=12, minigame_slots.c:30-33)
+# is the screen rect (123,7,46,12) and its centre is (146,13). The spin charges 10 GP
+# (0x466BC6 refuses under 10) and settles by itself, which is what logs
+# minigame_slots_result.
 expect boot_menu 900
 key RETURN
 wait 30
@@ -39,30 +60,101 @@ text Gambler
 key RETURN
 expect hero_ready 300
 expect map_enter 600
-# The 101-unit walk, in three click legs inside the 82x71 map-unit view pane
-# (19,0 325x281, four map units per screen pixel, hero hard-centred):
-#   (179,202) -> (138,235) -> (151,270) -> (151,275) = map 0 link 9.
-click 19 272
-expect hero_move 900
-click 235 280
-expect hero_move 900
-click 183 160
-expect hero_move 900
+keydown DOWN
+expect scene_enter 600
+keyup DOWN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key y
+wait 20
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect panel_open 600
+key ESCAPE
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
 expect map_enter 2000
-# Map 2: the hero lands above map 2 link 0 "Main Gate" (158,333). The Casino link 3 is
-# at (264,267); two legs east along y=267.
-click 343 280
-expect hero_move 1200
-click 183 100
-expect scene_enter 1200
+# East out of the Gateway, south-west toward the castle, until the encounter roll fires.
+click 19 40
+expect battle_start 4000
+key a
+wait 60
+expect battle_won 4000
+expect map_enter 4000
+# (151,275) is map 0 link 9, eleven units south of where the fight left the hero.
+click 183 184
+expect map_enter 3000
+# Macgyver Castle, (158,322) -> (264,267) = map 2 link 3.
+hold RIGHT 552
+hold UP 140
+hold LEFT 128
+hold UP 200
+hold DOWN 40
+expect scene_enter 2000
+wait 100
 shot /tmp/wos-gap-casino.bmp
 # The armed GAME button, then the window's own SPIN control.
 click 307 32
-expect minigame_open 600
+expect minigame_open 900
 shot /tmp/wos-gap-slots-open.bmp
 click 146 13
-expect minigame_slots_spin 600
-shot /tmp/wos-gap-slots-spin.bmp
-expect minigame_slots_result 1500
+expect minigame_slots_spin 900
+expect minigame_slots_result 3000
 shot /tmp/wos-gap-slots-result.bmp
 quit

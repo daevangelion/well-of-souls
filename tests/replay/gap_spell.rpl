@@ -2,6 +2,46 @@
 # requires: hero_ready spell_learn spell_cast music_play
 # requires-match: spell_cast caster=hero
 # requires-match: spell_cast caster=monster
+#
+# STATUS: the route is authored and verified end to end up to the Spell Training master
+# (SCENE 291, reached, spoken to and left); the three spell assertions are NOT yet met.
+# Everything below is measured on the pinned binary, not inferred.
+#
+# The Gateway of Dreams is answered, not walked past. quest.txt:1774 is `ASK 30` - the golden
+# rule - and an ASK suspends the scene until the player answers, so the script answers it the
+# way a player does, with Y (scene.c's ST_ASK sets the reply to "YES"). The Soul Brother hands
+# over L1 / H5000 / M5000, opens the `OFFER2 0,10` shop and sizes the trophy bag to 4x3, and
+# music.ini [evergreen] gives the map_enter music_play.
+#
+# PP IS THE WHOLE PROBLEM, and the floor is exact. FUN_0047FCED (world.c complete_spells)
+# seeds pp at 5000 and grows it 1.5x per required-affinity level, then FUN_0047FCF7 divides by
+# 20: the cheapest spell in retail Evergreen is spell 1 "Dirt" at affinity 0, so 5000/20 =
+# 250 PP, and spells.txt gives no spell an explicit lower price (every row checked: the ppCost
+# column is 0 = auto everywhere except the unlearnable -1s). PP is earned at battle.c:1270,
+# `hero_add_pp(hero, WIS*200/255+5)` once per committed hero action. Six `key DOWN` in the
+# Pick-a-Soul window pick class 7, whose levels.txt START_ABILITY gives WIS 10, so 12 PP an
+# action and 21 actions for one spell; the default class 1 Sword-User has `hero.abil.wis=0` in
+# the dump, so 5 PP an action and 50 actions. No scene in the world does `GIVE P<n>` (grep
+# over every extracted/worlds/Evergreen script finds none), and the only scripted PP is
+# missions.ini [1] "Jelly Bellies" (RewardPP=1000), which needs 5x trophy 1 "Green Jelly
+# Pigment" at a 5 % drop.
+#
+# The deterministic PP farm the retail data offers is the training masters, because their loss
+# branches heal and re-fight with no walking:
+#     map 2 link 12 -> SCENE 290 "Hand Training"  (QuestScenes200.txt:1173)
+#         @1 MOVE / FIGHT 1 / IF ALIVE,@2 / 22 `'` lines / @3 MOVE / FIGHT 1, 4 / IF ALIVE,@4
+#         / on a loss six `'` lines / GIVE L1 H5000 M5000 / GOTO @3
+#     map 2 link 11 -> SCENE 291 "Spell Training" (QuestScenes200.txt:1317)
+#         IF T2,@1 ... @1 FIGHT 1 / IF ALIVE,@2 / eight `'` lines / GIVE L1 H5000 M5000 /
+#         GOTO @1 ... and on a win `GIVE S207`, a free known spell to cast with.
+# Both links are reached below. Measured on the binary, a caster (class 7) walking SCENE 290's
+# `FIGHT 1, 4` loss loop banks 24 PP an iteration - two committed hero actions - so 250 PP is
+# about eleven iterations of [press A, take the six dialogue lines, get healed, fight again].
+# The loop measured only 108 PP over nine iterations before the hero stopped committing
+# actions, so the remaining work is to find the iteration count that actually reaches 250 and
+# then to survive a fight long enough to cast. SCENE 291 is gated on T2, the token at the end
+# of the whole Hand Training chain, so its `GIVE S207` route is the fallback for
+# `spell_cast caster=hero` once the chain is finished.
 expect boot_menu 900
 key RETURN
 wait 30
@@ -12,314 +52,118 @@ wait 30
 key n
 wait 5
 text SpellStudent
-key DOWN
-key DOWN
-key DOWN
-key DOWN
-key DOWN
-key DOWN
 key RETURN
 expect hero_ready 300
 expect map_enter 600
-hold RIGHT 60
 keydown DOWN
-expect battle_start 2500
+expect scene_enter 600
 keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-hold RIGHT 60
-keydown DOWN
-expect battle_start 2500
-keyup DOWN
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-expect battle_won 1200
-expect map_enter 1200
-click 541 32
-wait 5
-click 110 44
-wait 5
-key DOWN
-key DOWN
-key DOWN
-key DOWN
-key DOWN
-key DOWN
-key DOWN
-key l
-expect spell_learn 600
-key ESCAPE
-wait 5
-click 343 152
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-click 343 160
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key a
-wait 25
-key s
-wait 5
-key DOWN
+wait 40
 key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key y
+wait 20
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect panel_open 600
+key ESCAPE
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+expect map_enter 2000
+# East out of the Gateway, south-west toward the castle, until the encounter roll fires.
+click 19 40
+expect battle_start 4000
+key a
 wait 60
-expect spell_cast 900
-wait 60
-expect spell_cast 900
+expect battle_won 4000
+expect map_enter 4000
+# (151,275) is map 0 link 9 "Macgyver Castle", eleven units south of where the fight left him.
+click 183 184
+expect map_enter 3000
+# Macgyver Castle, (158,322). castle1.ter is an 82x87 grid over a 328x350 jpg, so a cell is
+# 4x4 pixels; the flood fill of that grid from the Main Gate to the Spell Training link 11 at
+# (190,231) is two straight runs, east 32 then north 91.
+hold RIGHT 130
+hold UP 300
+expect scene_enter 2000
+shot /tmp/wos-gap-spellmaster.bmp
+# Greetings, %2. / I feel my teachings will be more effective if first you meet with my
+# brother, Master of The Hand. / Go now. Return to me after learning the ways of the HAND.
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key ESCAPE
+wait 40
+# music.ini [evergreen] midi1=scrn_overworld, logged on every map_enter.
+expect music_play 600
 quit

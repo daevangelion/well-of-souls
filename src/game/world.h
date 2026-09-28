@@ -79,14 +79,20 @@ typedef struct {
     int used;
     char name[32];
     char skin[64];    /* sprite sheet base name (monsters/ folder) */
-    int scale, flags; /* arg3 scaleFactor[.monsterFlags] */
+    /* The four fields below are PARSED FROM REAL monsters.txt COLUMNS AND READ BY NO PORT CODE
+     * YET. That is not the same as a phantom field, and it is why they are kept:
+     *   a phantom field - no writer and no reader - is a trap and should be deleted;
+     *   a parsed-but-unread column is working parsing that the next person to implement monster
+     *   AI, sounds or attack paths needs, and deleting it costs them a re-derivation.
+     * Do not sweep these on a "no readers" grep without checking for a writer first. */
+    int scale, flags; /* arg3 scaleFactor[.monsterFlags]; flags IS read (battle.c) */
     int element;
     int hp, mp, defense, offense, exp, gold, level;
     int strength, stamina, agility, dexterity, wisdom;
-    char growl_wav[64], pain_wav[64];
-    int attack_path;
-    int spells[16];
-    int spell_count;
+    char growl_wav[64], pain_wav[64]; /* arg17, arg18; the combatant record keeps runtime
+                                       * copies at +0x046 and +0x079 (FUN_004809a3) */
+    int attack_path;                   /* arg19; not to be confused with ItemDef.attack_path,
+                                         * which IS live (written world.c:445, read items.c) */
     char ai[256];    /* arg20 optional AI command, FUN_004809a3 */
 } MonsterDef;
 

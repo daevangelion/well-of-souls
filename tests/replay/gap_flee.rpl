@@ -1,20 +1,37 @@
+# seed: 6
+# requires: hero_ready map_enter battle_start battle_flee_failed battle_fled
+# requires-match: battle_flee_failed sticky=0 held=
+# requires-match: battle_fled sticky=0
 # FUN_00436c9d: fleeing. Offline, DAT_00502b14 is 0 for an ordinary encounter and the Tactics
 # abandon dialog (FUN_00447431) returns 0, so the hero is NEVER given a timer escape: pressing F
-# while its combatant is still 0x2F is refused outright with "You attempt to flee... but are
+# while nothing is animating on the hero is refused outright with "You attempt to flee... but are
 # dragged back".
 #
-# The only way out is the original's 30 % interrupt, and that window is narrower than it looks.
-# FUN_00436c9d returns "blocked" on its first test whenever the hero's own record is 0x2F, and
-# FUN_00490723 sets 0x2F on whichever combatant acted. So after the hero attacks, every later F in
-# that round is refused before the roll is ever reached; the roll is only live while a MONSTER's
-# attack is animating on the hero and the hero has not yet acted in that round. Hence: never press
-# A here, just keep pressing F and let the monsters swing.
+# The only way out is the original's 30 % interrupt, and that window is far narrower than it
+# looks. FUN_00436c9d returns "blocked" on its first test whenever the hero's own record is 0x2F,
+# and it SETS that record to 0x2F as a side effect, so the hero gets exactly one live roll per
+# round and every later F in the same round is refused before the roll is ever reached. The roll
+# itself (`fight.victim == 0 && state == ROUND_DAMAGE && !past(anim_start, duration_ms)`) is only
+# open while a MONSTER's attack is animating on the hero. The hero therefore never presses A,
+# and F is pressed exactly once per round, on the frame `battle_monster_act` reports the
+# monster committing - the same frame FUN_0048f56c calls FUN_00490723, which stamps anim_start
+# and enters ROUND_DAMAGE. Miss the frame and the round is burnt; the seed is pinned so the
+# pinned round's 30 % draw is the one that lands.
 #
 # FUN_0041B891's own table (all.c:21078) has THREE states before the Well, not two:
-#   1 main menu -> 2 "Where Do You Want To Play Today?" (splash, art\where.jpg, FUN_0041D31F)
-#   2 -> 3 "Choose Your World" + the world list (art\chapter.jpg, FUN_0041D717)
+#   1 main menu -> 2 "Where Do You Want To Play Today?" (splash, FUN_0041D31F)
+#   2 -> 3 "Choose Your World" + the world list (FUN_0041D717)
 #   3 -> take the highlighted row (msg 0x474) -> the Pick-a-Soul window
 # RETURN is the plan's keyboard shortcut for the click.
+#
+# The Gateway of Dreams (map 0 link 0, SCENE 3) sits one cell south of the Evergreen
+# spawn, and quest.txt:1774 makes its first visit an `ASK 30` -- the golden rule,
+# "Do you agree to obey the golden rule? (type YES or NO)". An ASK suspends the scene
+# until the player answers, so every script that walks into the link has to answer it
+# the way a player does: Y (scene.c's ST_ASK sets the reply to "YES"). Left unanswered
+# the scene waits forever and nothing downstream can fire. The Soul Brother also hands
+# over L1 / H5000 / M5000 and a Ticket Home, opens the `OFFER2 0,10` shop, and sizes the
+# trophy bag to 4x3, so this is a real visit and not a scripted cut to the fight.
 expect boot_menu 900
 key RETURN
 wait 30
@@ -28,78 +45,100 @@ text Tester
 key RETURN
 expect hero_ready 300
 expect map_enter 600
-hold RIGHT 60
 keydown DOWN
-expect battle_start 1500
+expect scene_enter 600
 keyup DOWN
-# Refused outright: the hero has not acted, so its record is still 0x2F and FUN_00436c9d returns
-# blocked on its first test, before DAT_00502b14 or the 30 % roll are ever consulted.
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key y
+wait 20
+key RETURN
+wait 40
+key RETURN
+wait 40
+expect panel_open 600
+key ESCAPE
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+expect map_enter 2000
+hold RIGHT 60
+expect hero_move 300
+wait 20
+keydown DOWN
+expect encounter 2000
+keyup DOWN
+expect battle_start 600
+# Round 1, before anything is animating on the hero: the window test fails, so this is a
+# straight refusal -- no 30 % roll is spent, and the hero's record is now 0x2F.
 key f
 expect battle_flee_failed 300
-# The roll is only live while a MONSTER's attack is animating on the hero, so wait for the
-# monster to commit and then poll F through its 1000 ms animation. The hero never presses A, so
-# it never blocks its own window.
-#
-# FUN_00436c9d sets rec[0x38C] = 0x2F as a side effect, before the roll, so the hero gets exactly
-# ONE 30 % roll per round and every later F in that round is refused on the first test. The
-# window below is therefore a single 30 % draw: it is pinned to a seed, and the log shows both
-# outcomes, the refusal and the successful interrupt.
-expect battle_monster_act 2000
+# Round 1's monster commits. Nothing is pressed on that frame: the hero's record is
+# already 0x2F from the refusal above, so the roll would be refused anyway.
+expect battle_monster_act 9000
+# ROUND_START re-arms every live combatant to 0x5F, so this is round 2's one live roll,
+# taken on the frame the monster's 1000 ms attack animation starts.
+expect battle_monster_act 9000
 key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-# The escape itself is ONE 30 % draw per round, so it is not assertable here without pinning a
-# lucky seed: FUN_00436c9d sets rec[0x38C] = 0x2F before the roll, so every later F in that round
-# is refused on the first test. Logs of successful runs carry
-#   EVT battle_flee_failed sticky=0 held=384
-#   EVT battle_fled sticky=0 held=10017
-# and the only deterministic escape is FIGHT2's 20 s window (BATTLE_MOD_STICKY), which Evergreen's
-# standard encounter does not use. What this replay pins is the parity fix itself: the refusal,
-# and that the fight keeps running instead of the port's old unconditional escape.
-expect map_enter 900
+expect battle_fled 900
+expect map_enter 1200
 quit

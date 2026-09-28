@@ -61,6 +61,11 @@ enum {
     ITEM_HTML          = 201  /* arg15 is the URL */
 };
 
+/* FUN_0044E3BD's list gate: may this spell be LEARNED, as opposed to afforded
+ * right now. The Spells panel lists on this, and the Learn action still applies
+ * the PP wallet as a message rather than as an omission. */
+int  items_spell_listable(int spell_id);
+
 /* The name for an item class 10..23 (FUN_00482431), or NULL when the class is
  * not equipment. Classes 12..19 are the hand classes and are named from the
  * +HANDS table via world_hand_name() (FUN_004825BF); the rest come from
