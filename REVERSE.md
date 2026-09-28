@@ -95,11 +95,12 @@ The detailed findings for each subsystem are in `docs/re/*.md`:
 ## Port Progress
 | Subsystem | Status | Files |
 |-----------|--------|-------|
-| Platform (SDL2): video, input, case-insensitive files, WAV mixer, optional MIDI | done | src/platform/ |
-| Engine: framebuffer, BMP/JPEG, 8x8 font, UI, INI, replay/log, RNG, screens | done | src/engine/ |
-| World data: quest.txt + #include, tables, scene index, map binaries, filmstrip sheets | done | src/game/world.c |
-| Front end: title, menu, world select, Well, New Soul, save/load (.wsh) | done | src/game/front.c, hero.c |
-| Map mode: walking, terrain, links, random encounters, panels | done (no detour pathfinder) | src/game/mapview.c |
-| Scene VM: dialog, actors, conditions, tokens, cookies, timers, arithmetic, FIGHT, shops | done (WEATHER/FX visuals unsupported) | src/game/scene.c |
-| Battle: physical + spell combat, rewards, level-ups, training gain | done | src/game/battle.c |
-| Spells (hero, monster AI, weapon binding), items/equipment, shops, training, music.ini playlists, detour pathfinder | done (spell visuals are flashes) | battle.c, hero.c, panels.c, scene.c, audio.c, mapview.c |
+| Platform (SDL2): video, input, case-insensitive files, WAV mixer, TinySoundFont MIDI, installer codecs (src/platform/codec) | done | src/platform/ |
+| Engine: virtual ms clock and Win32 timers, CRT rand, EncInt, boot sequence in CRT order, dscript/dump, framebuffer, BMP/JPEG, font, UI, INI | done | src/engine/ |
+| World data: quest.txt, all tables, config.ini (16 keys), +TOKENS/+EQUIP/+STORY/+CREDITS, CRC-1/2, optional map files | done | src/game/world.c |
+| Front end: all 12 FUN_0041B891 states, per-mille hotspots, labels from .data, New Soul 138/149, BIO, `.her` save/load | done | src/game/front.c, hero.c |
+| Map mode: timer-driven walking, raw 24.8 walk leg, waypoint pathfinder (option 7), encounters, link names, music | done | src/game/mapview.c, audio.c |
+| Scene VM: every opcode (the keyword table at 0x4FAD50), conditions, cookies in the per-hero INI, colour table | done (palette population FUN_0043BE95 open) | src/game/scene.c |
+| Battle: timing, rand order, EncInt seals, flee, trophies/finds, death/resurrect, ailment counters, two-roll fizzle, summons/recall | done | src/game/battle.c |
+| Items/panels/pets/trophy bag, missions/HTML, 8 mini-games, editors/chat, options | done | items.c, panels.c, missions.c, html.c, minigame*.c, editors.c, chat.c, options.c |
+| Differential oracle (Souls.exe under Wine) | runs deterministically; the 16 scripts stop past the main menu | tools/oracle, tests/diff_oracle.sh |
