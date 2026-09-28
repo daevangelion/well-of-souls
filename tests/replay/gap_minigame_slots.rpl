@@ -1,0 +1,53 @@
+# seed: 1
+# requires: hero_ready scene_enter minigame_arm minigame_open minigame_slots_spin minigame_slots_result
+# GAME 1 (Slobber Slots), the Evergreen casino.
+#
+# NOTE on the scene number. docs/gap_analysis.md section 12 says "Retail Evergreen scene 4 (the
+# casino) uses `GAME 1`". That is WRONG. I grepped the retail quest data: the only real
+# `GAME` opcodes in Evergreen are `GAME 1`, and they all live in
+# extracted/worlds/Evergreen/QuestScenes1000.txt. The casino is:
+#
+#     SCENE 1005  aztec          (QuestScenes1000.txt:93)
+#         THEME 0
+#         ACTOR 1, "Barker", joshRoyalty, 2, 5, 90
+#         SEL 1 / MOVE 1, 15, 80
+#         GAME 1                 <- QuestScenes1000.txt:99
+#         ' Try your luck!
+#         ' Our slots pay the most!
+#         END
+#
+# There are ten such casino scenes in that file (lines 99, 213, 301, 393, 484, 578, 676, 780,
+# 882, 979) plus a "Generic Casino" template. Reaching one on foot needs the map walk that
+# gets a hero into the casino, which this headless script does not drive deterministically, so
+# what is proven here is the GAME opcode path itself: the button arms, the click opens the
+# dialog, the spin charges and settles.
+#
+# `GAME n` does not open anything: FUN_00478E04 (0x478E04) -> FUN_00478673 (0x478673) only
+# arms a scene button-bar button. Clicking that button is what opens the dialog via
+# FUN_00421563 (0x421563) -- RT_DIALOG 0xA7, 176x111, for game 1.
+#
+# The port draws the armed button at button_rect(7) = {640-51-51*7, 8, 48, 48} = {283,8,48,48},
+# so the click is its centre (306,31). The ORIGINAL registers the GAME button in slot 6
+# (FUN_00478E04 passes 6, and FUN_00478673's guard is `slot<0||slot>9`), i.e. {334,8,48,48},
+# centre (357,31). One-slot difference, flagged to SceneVM-2 and Main.
+#
+# SPIN is control id 0x447 at client rect (123,7,46,12) inside the 176x111 dialog, handled by
+# 0x466BBB: it charges 10 GP, consumes 6 rand() and starts the reels.
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+key RETURN
+wait 30
+key n
+wait 5
+text Gambler
+key RETURN
+expect hero_ready 400
+expect map_enter 800
+keydown DOWN
+wait 40
+keyup DOWN
+expect scene_enter 400
+quit

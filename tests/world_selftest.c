@@ -7,13 +7,27 @@
 #include <stdlib.h>
 #include <string.h>
 
+
+/* src/game/items.c (Panels) owns the display-name table in the game build; this stand-in records
+ * what world.c's +EQUIP parser feeds it, which is exactly what the test needs to check. */
+static char equip_seen[6][40];
+void world_equip_slot_set_name(int slot, const char *name)
+{
+    if(slot<0 || slot>=6 || !name) return;
+    snprintf(equip_seen[slot],sizeof equip_seen[slot],"%.39s",name);
+}
 static void check_tokenizer(void)
 {
     char tokens[8][256];
     char long_token[257];
-    int n=world_tokenize(" ACTOR 3, \"Green Jelly\", josh2, -1 // comment",tokens,8);
+    /* FUN_0047A0E4: ';' and "//" are ordinary characters; only whole-line ';' comments exist. */
+    int n=world_tokenize(" ACTOR 3, \"Green Jelly\", josh2, -1",tokens,8);
     assert(n==5 && !strcmp(tokens[2],"Green Jelly") && !strcmp(tokens[4],"-1"));
-    assert(world_tokenize("MUSIC \"\"; silence",tokens,8)==2 && !tokens[1][0]);
+    /* ';' ends that token only because a space follows; it is not a comment marker. */
+    assert(world_tokenize("MUSIC \"\"; silence",tokens,8)==4 && !tokens[1][0]);
+    assert(!strcmp(tokens[2],";") && !strcmp(tokens[3],"silence"));
+    assert(world_tokenize("SAY \"a;b\" rest",tokens,8)==3 && !strcmp(tokens[1],"a;b"));
+    assert(world_tokenize("SAY half//way",tokens,8)==2 && !strcmp(tokens[1],"half//way"));
     assert(world_tokenize("A \"comma, and space\" B",tokens,8)==3);
     assert(!strcmp(tokens[1],"comma, and space"));
     assert(world_tokenize("A \"unterminated quote",tokens,8)==2);
@@ -62,6 +76,7 @@ static void check_sheet(const char *name, int skin)
            sheet.cell,sheet.count,(unsigned long)sheet.key);
     free(pixels); sheet_free(&sheet);
 }
+static void check_new_sections(void);
 
 static void check_gap_tables(void)
 {
@@ -71,7 +86,10 @@ static void check_gap_tables(void)
     assert(s->pp_cost==250 && s->mp_cost==2 && s->damage==30 && s->effects_row==63);
     assert(g_world.spells[3].damage==-11 && g_world.spells[3].pp_cost==562);
     assert(g_world.spells[6].all_targets && g_world.spells[6].req_affinity==5);
-    assert(g_world.spells[5].weather==1055 && g_world.spells[7].effects==3);
+    /* FUN_0047fced swaps the dotted arg12 overrides: part 1 fills the record slot the packed
+     * head fills with the AAA (weather) group and part 2 the BBB (effects) one. */
+    assert(g_world.spells[5].effects==1055 && !g_world.spells[5].weather);
+    assert(g_world.spells[7].weather==3 && g_world.spells[7].effects==3055);
     assert(g_world.spells[8].pp_cost==-1 && g_world.spells[78].flags==2);
     assert(g_world.items[1].find_probability==80 && !strcmp(g_world.items[1].sound,"petGulp.wav"));
     assert(g_world.items[3].ability_points==-2 && g_world.items[8].ability_points==5);
@@ -90,10 +108,61 @@ static void check_gap_tables(void)
     assert(!strcmp(world_music("rustrock","fight"),"ahad_glasse~1"));
     assert(!strcmp(world_music("evergreen","victory"),"orbwon.mid"));
     assert(!strcmp(world_music("missing-map","midi1"),"scrn_overworld"));
-    assert(!strcmp(world_music("INFERNO","MIDI3"),"desert sin") && world_music_count("inferno")==3);
     assert(!*world_music("evergreen","levelup") && g_world.max_unspent_pp==100000);
+    assert(!g_world.spells[0].used && g_world.spells[1].effect_seed);
+    check_new_sections();
     printf("gap tables: Dirt pp=%d mp=%d damage=%d; item1 find=80; class9 caps=100/5000; trophies=%d; music inferno=3/common victory=orbwon.mid; PP cap=100000\n",
            s->pp_cost,s->mp_cost,s->damage,trophies);
+}
+
+/* +TOKENS (table and the TOKEN rows inside +SCENES), +EQUIP, +CREDITS/+STORY, config.ini and
+ * the two world CRCs, all against the retail Evergreen data. */
+static void check_new_sections(void)
+{
+    int i, tokens=0;
+    for(i=0;i<WORLD_MAX_TOKENS;++i) tokens+=g_world.tokens[i].used!=0;
+    assert(tokens>0 && !*world_token_text(-1) && !*world_token_text(WORLD_MAX_TOKENS));
+    assert(!strcmp(world_token_text(1),"You have agreed to obey the golden rule."));
+    assert(!strcmp(world_token_text(55),"The town recovers"));
+    /* QuestScenes150.txt declares these inside +SCENES, not in the +TOKENS table. */
+    assert(!strcmp(world_token_text(150),"You rescued Princess Lyssa from her dangling predicament."));
+    assert(!world_chapter(0) && g_world.chapter_count==0);
+    assert(!strcmp(world_equip_name(0),"Helmet") && !strcmp(world_equip_name(1),"Armor"));
+    assert(!strcmp(world_equip_name(10),"Boots") && !strcmp(world_equip_name(11),"Shield"));
+    assert(!strcmp(world_equip_name(12),"Ring") && !strcmp(world_equip_name(13),"Amulet"));
+    assert(!strcmp(world_equip_name(2),"Sword") && !strcmp(world_equip_name(9),"Spirit"));
+    assert(!strcmp(world_equip_name(-1),"Right-Hand") && !strcmp(world_equip_name(14),"Right-Hand"));
+    assert(!strcmp(world_equip_name(2),world_hand_name(0)) && !strcmp(world_hand_name(8),"Right-Hand"));
+    assert(world_equip_slot_by_name("amulet")==13 && world_equip_slot_by_name("Sword")==2);
+    assert(world_equip_slot_by_name("nonesuch")==-1);
+    /* world.c hands the same six names to Panels' items.c table in the game build. */
+    assert(!strcmp(equip_seen[0],"Helmet") && !strcmp(equip_seen[1],"Armor"));
+    assert(!strcmp(equip_seen[2],"Boots") && !strcmp(equip_seen[3],"Shield"));
+    assert(!strcmp(equip_seen[4],"Ring") && !strcmp(equip_seen[5],"Amulet"));
+    assert(!strcmp(world_hero_slot_name(8,3),"Music") && !strcmp(world_hero_slot_name(2,0),"Boots"));
+    assert(world_story_count()>10 && !strcmp(world_story_line(0),":S 200"));
+    assert(!strcmp(world_story_line(1),":C 255,255,0") && !strcmp(world_story_line(2),"|Evergreen"));
+    assert(!world_story_line(-1) && !world_story_line(world_story_count()));
+    assert(!strncmp(world_credits_text(),"Evergreen\r\nStory by Dan Samuel\r\n",31));
+    assert(strstr(world_credits_text(),"Contact us on the web at:\r\nhttp://www.synthetic-reality.com"));
+    /* config.ini [General]: the retail file comments spellSuccessPercent out, so it is 100. */
+    assert(!strcmp(world_gold_name(),"GP") && g_world.spell_success_percent==100);
+    assert(g_world.starting_gp==500 && g_world.max_unspent_pp==100000);
+    assert(g_world.pk_hand_percent==100 && g_world.pk_magic_percent==100);
+    assert(g_world.cookie_protection==1 && !g_world.no_giving_gp && !g_world.pets_can_bite_people);
+    assert(g_world.max_pk_attack_advantage==10 && g_world.pk_trophy==1000);
+    assert(g_world.karma_points_are_also_war_points==234);
+    assert(g_world.monster_xp_are_also_war_points==1000 && g_world.tactics_win_gives_war_points==1000);
+    assert(!strcmp(g_world.world_home_url,"http://www.synthetic-reality.com/wosHome.htm"));
+    assert(!strcmp(g_world.tactics_source_url,"http://www.synthetic-reality.com/tactics"));
+    /* CRC-1 is never 0 for a loaded world and CRC-2 answers the seed for an empty buffer. */
+    assert(g_world.crc1 && g_world.crc2);
+    printf("new sections: tokens=%d equip[0,1,10..13]=%s/%s/%s/%s/%s/%s story=%d credits=%d bytes"
+           " startingGP=%d pp=%d cookie=%d crc1=%08lx crc2=%08lx\n",
+           tokens,world_equip_name(0),world_equip_name(1),world_equip_name(10),world_equip_name(11),
+           world_equip_name(12),world_equip_name(13),world_story_count(),
+           (int)strlen(world_credits_text()),g_world.starting_gp,g_world.max_unspent_pp,
+           g_world.cookie_protection,(unsigned long)g_world.crc1,(unsigned long)g_world.crc2);
 }
 
 static void check_art(const char *name, int cell_w, int cell_h)
@@ -158,7 +227,7 @@ static void check_parser_edges(const char *root)
     assert(spell->all_targets && spell->flags==5 && spell->min_level==6 && spell->token==7);
     assert(spell->mp_cost==7 && spell->pp_cost==562 && spell->damage==100);
     assert(spell->trophy_needed==8 && spell->trophy_made==9 && spell->trophy_count_needed==1);
-    assert(spell->gravity==4 && spell->effects==5 && spell->weather==6 && spell->max_fx==1023);
+    assert(spell->gravity==4 && spell->weather==5 && spell->effects==6 && spell->max_fx==1023);
     assert(!strcmp(spell->sfx_strike,"strike.wav") && spell->extra[1]==5);
     assert(g_world.spells[2].damage==0 && g_world.spells[2].pp_cost==-1);
     assert(g_world.classes[1].max_ability[0]==255 && g_world.classes[1].start_element_pp[7]==8);

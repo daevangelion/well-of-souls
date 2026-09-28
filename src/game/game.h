@@ -5,6 +5,7 @@
 #define WOS_GAME_H
 
 #include "world.h"
+#include "../engine/dump.h"
 
 #define GAME_WORLD_DEFAULT "Evergreen"
 
@@ -33,5 +34,18 @@ int  game_take_pending_fight(int *monster_ids, int max, int *difficulty, int *di
 
 /* Resolve world MIDI first, then shared MIDI; NULL/empty stops playback. */
 void game_music(const char *midi_name);
+
+/* Map mode internals the rest of the port needs (mapview.c).
+ *
+ * map_set_waypoints maps FUN_004620F3's `FUN_00467312(7)` gate, option 27 in the Options
+ * dialog ("Enable automatic Way Point calculations", read into DAT_006840D0[7] at
+ * 0x466F3F). It is the ONLY thing that makes a map click run FUN_0046206D -> FUN_00461DCC;
+ * retail leaves it off, so the hero walks in a straight line and stops at an obstacle.
+ * map_note_battle_end is FUN_0046259A's stamp DAT_004e70a8: the tick the last fight ended,
+ * which gates the encounter roll's 1 s grace and the "no monsters here" hint.
+ * map_dump is the `map.*` differential namespace (parity_plan contract 3). */
+void map_set_waypoints(int on);
+void map_note_battle_end(void);
+void map_dump(DumpEmit emit, void *user);
 
 #endif

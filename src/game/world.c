@@ -4,7 +4,9 @@
 #include "../engine/fb.h"
 #include "../engine/ini.h"
 #include "../engine/text.h"
+#include "../engine/rng.h"
 #include "../platform/platform.h"
+#include "items.h"
 #include <ctype.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -23,7 +25,9 @@ static char *music_text;
 
 static void copy_string(char *dst, size_t cap, const char *src)
 {
-    size_t n = strlen(src);
+    size_t n;
+    if (!src) { dst[0] = 0; return; }
+    n = strlen(src);
     if (n >= cap) n = cap - 1;
     memcpy(dst, src, n);
     dst[n] = 0;
@@ -43,6 +47,17 @@ const char *world_data_path(char *buf, int size, const char *rel)
 const char *world_path(char *buf, int size, const char *rel)
 { return join_path(buf, size, g_world.dir, rel); }
 
+/* FUN_0047A0E4. Exact rules, in order:
+ *   - characters <= 0x20 and ',' separate tokens, both inside and outside quotes;
+ *   - '"' opens and closes a quoted run; an unterminated quote ends at end of line;
+ *   - ';' and "//" are ORDINARY characters. Comments are whole-line only: FUN_004798A9 drops
+ *     a line whose first non-blank character is ';' before any of this runs. The old
+ *     "';' terminates even quoted text" rule (docs/re/script.md section 1.2) is not in the
+ *     binary and truncated dialogue that legitimately contains ';' or "//".
+ *   - the original's slots are 0x104 (260) bytes and it writes with NO length check, so a
+ *     token longer than the slot overwrites the following ones. We return -1 instead, which
+ *     is the same observable result for every retail row (no Evergreen token exceeds 255).
+ * `max` is the caller's slot count; the original passes 32 for every table row. */
 int world_tokenize(const char *line, char tokens[][256], int max)
 {
     int count = 0;
@@ -52,23 +67,24 @@ int world_tokenize(const char *line, char tokens[][256], int max)
         int quoted = 0;
         size_t len = 0;
         while (*p && (*p <= ' ' || *p == ',')) ++p;
-        if (!*p || *p == ';' || (p[0] == '/' && p[1] == '/')) break;
+        if (!*p) break;
         if (count == max) return -1;
         if (*p == '"') { quoted = 1; ++p; }
         while (*p) {
-            /* Semicolons terminate even quoted text: script.md section 1.2. */
-            if (*p == ';') break;
             if (quoted) {
                 if (*p == '"') { ++p; break; }
             } else {
-                if (*p <= ' ' || *p == ',' || (p[0] == '/' && p[1] == '/')) break;
+                if (*p <= ' ' || *p == ',') break;
                 if (*p == '"') { quoted = 1; ++p; continue; }
             }
             if (len == 255) return -1;
             tokens[count][len++] = (char)*p++;
         }
         tokens[count++][len] = 0;
-        if (*p == ';' || (!quoted && p[0] == '/' && p[1] == '/')) break;
+        if (!quoted) {
+            while (*p && (*p <= ' ' || *p == ',')) ++p;
+            if (!*p) break;
+        }
     }
     return count;
 }
@@ -114,6 +130,24 @@ static int append_line(char **text, size_t *size, size_t *capacity, const char *
     return 0;
 }
 
+static int prefix_ci(const char *s, const char *prefix, size_t n);
+/* FUN_00479594 matches _strnicmp(line, "#include ", 9). The trailing space is part of the
+ * literal, so "#include<file>" is NOT an include and falls through to the normal line path. */
+static int include_line(const char *line) { return prefix_ci(line, "#include ", 9); }
+static int prefix_ci(const char *s, const char *prefix, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; ++i) {
+        int a = tolower((unsigned char)s[i]);
+        if (!a || a != tolower((unsigned char)prefix[i])) return 0;
+    }
+    return 1;
+}
+
+/* FUN_00479594: leading whitespace is skipped, a line starting with ';' or shorter than two
+ * characters is dropped, and a line whose first nine characters match "#include " (case
+ * insensitively) is replaced by the included file, then by an empty line. Comments are
+ * whole-line only: FUN_0047a0e4 keeps ';' as an ordinary token character. */
 static int read_quest(const char *path, int depth, char **text, size_t *size, size_t *capacity)
 {
     char *file, *cursor, *line;
@@ -125,23 +159,28 @@ static int read_quest(const char *path, int depth, char **text, size_t *size, si
     cursor = file;
     while ((line = text_next_line(&cursor)) != NULL) {
         char *p = line;
+        const char *arg;
         while (*p && (unsigned char)*p <= ' ') ++p;
-        if (!*p || *p == ';' || (p[0] == '/' && p[1] == '/')) continue;
-        if (*p == '#') {
-            char t[3][256], child[1024];
-            const char *slash;
-            int n = world_tokenize(p, t, 3);
-            if (n > 0 && !text_casecmp(t[0], "#include")) {
-                size_t base;
-                if (n != 2) { result = -1; break; }
-                slash = strrchr(path, '/');
-                base = slash ? (size_t)(slash - path + 1) : 0;
-                if (base + strlen(t[1]) >= sizeof(child)) { result = -1; break; }
-                memcpy(child, path, base);
-                memcpy(child + base, t[1], strlen(t[1]) + 1);
-                if (read_quest(child, depth + 1, text, size, capacity)) { result = -1; break; }
-                continue;
-            }
+        if (!*p || *p == ';' || !p[1]) continue;
+        if (include_line(p)) {
+            char child[1024];
+            size_t base, k;
+            char *q, *slash;
+            arg = p + 8;
+            while (*arg && (unsigned char)*arg <= ' ') ++arg;
+            slash = strrchr(path, '/');
+            base = slash ? (size_t)(slash - path + 1) : 0;
+            if (!*arg || base + strlen(arg) >= sizeof(child)) { result = -1; break; }
+            memcpy(child, path, base);
+            k = strlen(arg);
+            memcpy(child + base, arg, k + 1);
+            /* The original truncates the copied tail at the LAST '"' of the line, then turns
+             * every remaining control character into a NUL. */
+            if ((q = strrchr(child + base, '"')) != NULL) *q = 0;
+            for (q = child + base; *q; ++q) if ((unsigned char)*q < ' ') *q = 0;
+            if (read_quest(child, depth + 1, text, size, capacity)) { result = -1; break; }
+            if (append_line(text, size, capacity, "")) { result = -1; break; }
+            continue;
         }
         if (append_line(text, size, capacity, p)) { result = -1; break; }
     }
@@ -223,6 +262,10 @@ static int parse_levels(char t[][256], int n, int *current)
     return 0;
 }
 
+/* Section index order does not matter (each section is seen at most once); the names and
+ * their set are FUN_004799b3's 16-entry table at 0x4FA858 (CREDITS, STORY, TOKENS, ITEMS,
+ * SPELLS, MONSTERS, SCENES, GROUPS, LEVELS, TERRAINS, MAPS, ELEMENTS, HANDS, EQUIP,
+ * THEMES, TROPHIES). */
 enum { SEC_MAPS, SEC_TERRAINS, SEC_MONSTERS, SEC_GROUPS, SEC_LEVELS, SEC_ITEMS,
        SEC_SPELLS, SEC_SCENES, SEC_CREDITS, SEC_STORY, SEC_TOKENS, SEC_ELEMENTS,
        SEC_HANDS, SEC_EQUIP, SEC_THEMES, SEC_TROPHIES, SEC_COUNT };
@@ -231,10 +274,64 @@ static const char *const section_names[SEC_COUNT] = {
     "CREDITS","STORY","TOKENS","ELEMENTS","HANDS","EQUIP","THEMES","TROPHIES"
 };
 
+/* FUN_004817de: a +TOKENS row whose first token is "chapter" is a diary page, not a token.
+ * Needs at least five tokens and stops at 100 chapters; the values land in
+ * {a, b, c, title, link, text} in that order. */
+static int parse_chapter(char t[][256], int n)
+{
+    ChapterDef *ch;
+    if (n < 5 || g_world.chapter_count >= WORLD_MAX_CHAPTERS) return -1;
+    ch = &g_world.chapters[g_world.chapter_count];
+    ch->used = 1;
+    ch->a = number(t[1]); ch->b = number(t[2]); ch->c = number(t[3]);
+    copy_string(ch->title, sizeof ch->title, t[4]);
+    if (n > 5) copy_string(ch->link, sizeof ch->link, t[5]);
+    if (n > 6) copy_string(ch->text, sizeof ch->text, t[6]);
+    g_world.chapter_count++;
+    return 0;
+}
+
+/* FUN_004814d2 / FUN_00481654: the +TOKENS table row is "<id>,<text>"; the +SCENES form is
+ * "TOKEN <id> <text>" and that parser passes t+1, so the keyword is not part of the row.
+ * 0..4095, 128 chars, duplicate ids rejected. */
+static int set_token(char (*t)[256], int n)
+{
+    TokenDef *v;
+    int id;
+    if (n < 2 || !isdigit((unsigned char)t[0][0])) return -1;
+    id = number(t[0]);
+    if (id < 0 || id >= WORLD_MAX_TOKENS) return -1;
+    v = &g_world.tokens[id];
+    if (v->used) return -1;
+    v->used = 1;
+    copy_string(v->text, sizeof v->text, t[1]);
+    return 0;
+}
+
 static int parse_row(int section, char t[][256], int n, int *current_class)
 {
     int id, i;
     if (section==SEC_LEVELS) return parse_levels(t,n,current_class);
+    if (section==SEC_TOKENS) {
+        /* FUN_004814d2 tries the "chapter" form first, then the token form. */
+        if (!text_casecmp(t[0],"chapter")) return parse_chapter(t,n);
+        return set_token(t,n);
+    }
+    if (section==SEC_EQUIP) {
+        /* FUN_004824b4: id 0..13, name truncated to 39 chars, no duplicate check. Ids 2..9 are
+         * the eight hand classes and never appear here. Panels' items.c keeps its own
+         * EQUIP_SLOT_* order, so translate the six real slots on the way out. */
+        static const int slot_of[WORLD_MAX_EQUIP]={
+            EQUIP_SLOT_HELMET,EQUIP_SLOT_ARMOR,-1,-1,-1,-1,-1,-1,-1,-1,
+            EQUIP_SLOT_BOOTS,EQUIP_SLOT_SHIELD,EQUIP_SLOT_RING,EQUIP_SLOT_AMULET
+        };
+        if (n<2 || !isdigit((unsigned char)t[0][0])) return -1;
+        id=number(t[0]);
+        if (id<0 || id>=WORLD_MAX_EQUIP) return -1;
+        copy_string(g_world.equip_names[id],sizeof(g_world.equip_names[id]),t[1]);
+        if (slot_of[id]>=0) world_equip_slot_set_name(slot_of[id],t[1]);
+        return 0;
+    }
     if (!isdigit((unsigned char)t[0][0])) return -1;
     id=number(t[0]);
     switch(section) {
@@ -319,7 +416,9 @@ static int parse_row(int section, char t[][256], int n, int *current_class)
         SpellDef *v;
         int affinity, packed;
         if(id>=WORLD_MAX_SPELLS || n<7) return -1;
-        v=&g_world.spells[id]; v->used=1; copy_string(v->name,sizeof(v->name),t[1]);
+        /* FUN_0047fced 0x47FE06: spell 0 is the algorithm-tweak template and is never marked
+         * used, so the post-pass skips it. Every other field is still copied. */
+        v=&g_world.spells[id]; if(id) v->used=1; copy_string(v->name,sizeof(v->name),t[1]);
         v->pp_cost=arg(t,n,2); v->element=arg(t,n,3); v->damage=arg(t,n,4);
         v->summon_id=dotted(t[4],1); v->mp_cost=arg(t,n,5);
         affinity=arg(t,n,6); v->req_affinity=affinity%100; v->all_targets=affinity>99;
@@ -333,8 +432,12 @@ static int parse_row(int section, char t[][256], int n, int *current_class)
         v->ms_per_col=n>11?arg(t,n,11):100;
         packed=arg(t,n,12); v->gravity=packed%1000;
         v->effects=(packed%1000000)/1000; v->weather=(packed%1000000000)/1000000;
-        if(dotarg(t,n,12,1)>0) v->effects=dotarg(t,n,12,1);
-        if(dotarg(t,n,12,2)>0) v->weather=dotarg(t,n,12,2);
+        /* FUN_0047fced 0x4800F2/0x480108: the dotted part 1 lands in the record slot the
+         * packed head fills with the AAA (weather) group and part 2 in the BBB (effects) one,
+         * i.e. the two dotted overrides are swapped with respect to spells.txt's
+         * "gravity.effects.weather" wording. Reproduced as the original computes it. */
+        if(dotarg(t,n,12,1)>0) v->weather=dotarg(t,n,12,1);
+        if(dotarg(t,n,12,2)>0) v->effects=dotarg(t,n,12,2);
         v->loop=arg(t,n,13);
         if(n>14) copy_string(v->sfx_summon,sizeof(v->sfx_summon),t[14]);
         if(n>15) copy_string(v->sfx_travel,sizeof(v->sfx_travel),t[15]);
@@ -382,6 +485,19 @@ static int parse_row(int section, char t[][256], int n, int *current_class)
     return 0;
 }
 
+/* FUN_004798a9 splits the buffer into line pointers once; FUN_00479a02 pairs the +/- markers
+ * and each table parser then walks its own line range. +STORY and +CREDITS have no table
+ * parser: FUN_004861c8 concatenates the CREDITS lines and the front-end scroller walks the
+ * STORY lines, so we only record the pointers (they point into g_world.text). */
+static int push_line(WorldText *out, const char *line)
+{
+    const char **grown = realloc(out->lines, (size_t)(out->count + 1) * sizeof(*grown));
+    if (!grown) return -1;
+    out->lines = grown;
+    out->lines[out->count++] = line;
+    return 0;
+}
+
 static int parse_world(void)
 {
     int line, active=-1, seen[SEC_COUNT]={0}, current_class=-1, scene=-1;
@@ -405,14 +521,26 @@ static int parse_world(void)
             }
             continue;
         }
-        if(active<0 || (active>SEC_SCENES && active!=SEC_ELEMENTS &&
-           active!=SEC_HANDS && active!=SEC_TROPHIES)) continue;
+        if(active==SEC_STORY) { if(push_line(&g_world.story,p)) return -1; continue; }
+        if(active==SEC_CREDITS) { if(push_line(&g_world.credits,p)) return -1; continue; }
+        if(active<0 || (active>SEC_SCENES && active!=SEC_TOKENS && active!=SEC_ELEMENTS &&
+           active!=SEC_HANDS && active!=SEC_EQUIP && active!=SEC_TROPHIES)) continue;
         if(active==SEC_SCENES) {
-            /* Dialogue may exceed a token: only SCENE declarations need lexing. */
+            /* Dialogue may exceed a token: only SCENE and TOKEN declarations need lexing
+             * (FUN_00481654). */
             if(strlen(p)<5 || toupper((unsigned char)p[0])!='S' ||
                toupper((unsigned char)p[1])!='C' || toupper((unsigned char)p[2])!='E' ||
                toupper((unsigned char)p[3])!='N' || toupper((unsigned char)p[4])!='E' ||
-               (p[5] && p[5]!=' ' && p[5]!='\t' && p[5]!=',')) continue;
+               (p[5] && p[5]!=' ' && p[5]!='\t' && p[5]!=',')) {
+                /* "TOKEN <id> <text>": the keyword is t[0], the row starts at t[1]. */
+                if(!prefix_ci(p,"TOKEN",5)) continue;
+                n=world_tokenize(p,t,TABLE_TOKENS_MAX);
+                if(n<3 || set_token(t+1,n-1)) {
+                    fprintf(stderr,"world: invalid TOKEN row at expanded line %d: %.80s\n",line,p);
+                    return -1;
+                }
+                continue;
+            }
             n=world_tokenize(p,t,TABLE_TOKENS_MAX);
             if(n<2) return -1;
             if(scene>=0) g_world.scenes[scene].end_line=line;
@@ -427,12 +555,14 @@ static int parse_world(void)
             }
         }
     }
-    return active==-1?0:-1;
+    if(active!=-1) return -1;
+    return 0;
 }
 
 void world_free(void)
 {
     free(g_world.lines); free(g_world.text);
+    free((void *)g_world.story.lines); free((void *)g_world.credits.lines);
     free(music_text); music_text=NULL; memset(&music_ini,0,sizeof(music_ini));
     memset(&g_world,0,sizeof(g_world)); data_root[0]=0;
 }
@@ -463,6 +593,10 @@ static int spell_auto(int value, int percent)
     return value<1?1:value;
 }
 
+/* FUN_0047fced 0x480255..0x4803F1, the spell post-pass. Three accumulators seeded 200/5000/3000
+ * are grown once per required affinity level (x145/x150/x130) and, for an all-targets spell,
+ * multiplied by 120/200 before the costs are derived. The pass also draws ONE rand() per used
+ * spell into record +0x154 (0x4803E9, rand_calls.md line 93973) while that field is 0. */
 static void complete_spells(void)
 {
     int id;
@@ -478,15 +612,223 @@ static void complete_spells(void)
         if(!s->mp_cost) s->mp_cost=spell_auto(mp/100,zero->mp_cost);
         if(!s->pp_cost) s->pp_cost=spell_auto(pp/20,zero->pp_cost);
         if(!s->damage && s->element) s->damage=spell_auto(damage/100,zero->damage);
+        if(!s->effect_seed) s->effect_seed=crt_rand();
     }
+}
+
+/* FUN_004823c4: the built-in +EQUIP names, installed before the section is read so a world
+ * that renames only some slots keeps the rest. Slots 2..9 are the hand classes, not their own
+ * defaults (FUN_00482431 forwards them to FUN_004825bf). */
+static void default_equip_names(void)
+{
+    copy_string(g_world.equip_names[0], sizeof g_world.equip_names[0], "Helmet");
+    copy_string(g_world.equip_names[1], sizeof g_world.equip_names[1], "Armor");
+    copy_string(g_world.equip_names[10], sizeof g_world.equip_names[10], "Boots");
+    copy_string(g_world.equip_names[11], sizeof g_world.equip_names[11], "Shield");
+    copy_string(g_world.equip_names[12], sizeof g_world.equip_names[12], "Ring");
+    copy_string(g_world.equip_names[13], sizeof g_world.equip_names[13], "Amulet");
+}
+
+/* FUN_0048219a: only installed when +ELEMENTS defined no rows at all. */
+static void default_element_names(void)
+{
+    static const char *const names[8]={"Life","Water","Nature","Earth","Death","Fire","Spirit","Air"};
+    int i;
+    for(i=0;i<8;++i) {
+        g_world.elements[i].used=1;
+        copy_string(g_world.elements[i].name,sizeof g_world.elements[i].name,names[i]);
+    }
+}
+
+/* FUN_004825df: the 4th..8th classes have no retail name and are RH5..RH8. */
+static void default_hand_names(void)
+{
+    static const char *const names[8]={"Sword","Staff","Bow","Music","Fist","Dart","Book","Spirit"};
+    int i;
+    for(i=0;i<8;++i) {
+        g_world.hands[i].used=1;
+        copy_string(g_world.hands[i].name,sizeof g_world.hands[i].name,names[i]);
+    }
+}
+
+/* FUN_0047983e: seed 0x075BCD15, then XOR the quest.txt buffer one dword at a time
+ * (little-endian; the loop count is the byte length divided by four, rounded up). */
+static uint32_t quest_crc2(const char *text, size_t size)
+{
+    uint32_t crc=0x075bcd15u;
+    size_t words=(size+3)/4, i;
+    for(i=0;i<words;++i) {
+        uint32_t w=(uint32_t)(unsigned char)text[i*4];
+        if(i*4+1<size) w|=(uint32_t)(unsigned char)text[i*4+1]<<8;
+        if(i*4+2<size) w|=(uint32_t)(unsigned char)text[i*4+2]<<16;
+        if(i*4+3<size) w|=(uint32_t)(unsigned char)text[i*4+3]<<24;
+        crc^=w;
+    }
+    return crc;
+}
+
+/* FUN_0047977a: seed 0x175A3E2D, then for every byte of the #include-expanded quest.txt
+ * rotate left by one (the old bit31 is folded into bit 0) and XOR the byte in. */
+static uint32_t quest_crc1(const char *text, size_t size)
+{
+    uint32_t crc=0x175a3e2du;
+    size_t i;
+    for(i=0;i<size;++i) {
+        crc<<=1;
+        if(crc==0) crc=1;          /* the old bit 31 survives the shift only in bit 0 */
+        crc^=(unsigned char)text[i];
+    }
+    return crc;
+}
+
+/* FUN_00437b15: plain additive sum of every byte; a missing file contributes 0. */
+static uint32_t file_byte_sum(const char *path)
+{
+    unsigned char buffer[8192];
+    uint32_t sum=0;
+    size_t got;
+    FILE *f=plat_fopen(path,"rb");
+    if(!f) return 0;
+    while((got=fread(buffer,1,sizeof buffer,f))>0) {
+        size_t i;
+        for(i=0;i<got;++i) sum+=buffer[i];
+    }
+    fclose(f);
+    return sum;
+}
+
+/* FUN_00479a02 0x479E0F..0x479F22: the per-file byte sums XORed into CRC-1. Every map row's
+ * .obl/.mon/.ter, then slots.ini, config.ini, gender.ini and missions.ini (the three INIs only
+ * when the world is "Evergreen" or the online build number reaches 0xA86/0xA91, which offline
+ * retail always is), then devTable00..99.txt when present. */
+static uint32_t world_file_sum(void)
+{
+    char path[1024];
+    uint32_t sum=0;
+    int i, n;
+    for(i=0;i<WORLD_MAX_MAPS;++i) {
+        const MapDef *m=&g_world.maps[i];
+        static const char *const exts[3]={".obl",".mon",".ter"};
+        int e;
+        if(!m->used || !*m->root) continue;
+        for(e=0;e<3;++e) {
+            n=snprintf(path,sizeof(path),"%s/maps/%s%s",g_world.dir,m->root,exts[e]);
+            if(n>0 && (size_t)n<sizeof(path)) sum+=file_byte_sum(path);
+        }
+    }
+    if(world_path(path,sizeof(path),"slots.ini")) sum+=file_byte_sum(path);
+    if(world_path(path,sizeof(path),"config.ini")) sum+=file_byte_sum(path);
+    if(world_path(path,sizeof(path),"gender.ini")) sum+=file_byte_sum(path);
+    if(world_path(path,sizeof(path),"missions.ini")) sum+=file_byte_sum(path);
+    for(i=0;i<100;++i) {
+        if(snprintf(path,sizeof(path),"%s/devTable%02d.txt",g_world.dir,i)<(int)sizeof(path))
+            sum+=file_byte_sum(path);
+    }
+    return sum;
+}
+
+/* FUN_004861c8: the +CREDITS lines joined with "\r\n", stopping five bytes short of the limit. */
+static void build_credits(void)
+{
+    size_t used=0;
+    int i;
+    g_world.credits_text[0]=0;
+    for(i=0;i<g_world.credits.count;++i) {
+        const char *line=g_world.credits.lines[i];
+        size_t n=line?strlen(line):0;
+        if(!n) continue;
+        if(used+n+2>WORLD_CREDITS_MAX-5) break;
+        memcpy(g_world.credits_text+used,line,n); used+=n;
+        g_world.credits_text[used++]='\r';
+        g_world.credits_text[used++]='\n';
+    }
+    g_world.credits_text[used]=0;
+}
+
+/* GetPrivateProfileString (FUN_0047C5C5) semantics: only a ';' at the start of a line is a
+ * comment, the key is everything before the first '=', and both sides are trimmed. A "//" in a
+ * value is ordinary text, so config.ini cannot go through the quest INI lexer, which treats "//"
+ * as a comment and would truncate http://... to "http:". One pass fills the whole table because
+ * the scan destroys the separators in place. */
+#define CONFIG_KEYS 16
+static void read_profile(char *text, const char *section, const char *const *keys,
+                         const char **values)
+{
+    char *cursor = text, *line;
+    int i, inside = 0;
+    for (i = 0; i < CONFIG_KEYS; ++i) values[i] = NULL;
+    while ((line = text_next_line(&cursor)) != NULL) {
+        char *p, *eq, *key, *value;
+        while (*line && (unsigned char)*line <= ' ') ++line;
+        if (!*line || *line == ';') continue;
+        if (*line == '[') {
+            p = strchr(line, ']');
+            if (!p) continue;
+            *p = 0;
+            inside = text_casecmp(text_trim(line + 1), section) == 0;
+            continue;
+        }
+        if (!inside) continue;
+        eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = 0;
+        key = text_trim(line);
+        value = text_trim(eq + 1);
+        for (i = 0; i < CONFIG_KEYS; ++i)
+            if (!text_casecmp(key, keys[i])) values[i] = value;
+    }
+}
+
+/* FUN_0041e421 0x41E8A5..0x41EB3D, one FUN_0047c5c5 call per key. Every numeric key is
+ * passed through atoi with no range check, and the DEFAULT is the string the call site pushes,
+ * which is not always the InitInstance pre-init value at 0x41E300. */
+static void read_config(void)
+{
+    static const char *const keys[CONFIG_KEYS]={
+        "goldName","pkHandPercent","pkMagicPercent","spellSuccessPercent",
+        "karmaPointsAreAlsoWarPoints","pkTrophy","monsterXPAreAlsoWarPoints",
+        "tacticsWinGivesWarPoints","noGivingGP","cookieProtection",
+        "petsCanBitePeople","maxUnspentPP","maxPKAttackAdvantage","startingGP",
+        "worldHomeUrl","tacticsSourceUrl"
+    };
+    /* The DEFAULT column is the string each call site pushes, which is not always the
+     * InitInstance pre-init value at 0x41E300. */
+    static const char *const fallback[CONFIG_KEYS]={
+        "GP","100","100","100","0","0","0","0","0","0","1","1000000","80","1000","",""
+    };
+    const char *value[CONFIG_KEYS];
+    char path[1024], *text;
+    int i;
+    for(i=0;i<CONFIG_KEYS;++i) value[i]=fallback[i];
+    if(!world_path(path,sizeof(path),"config.ini")) return;
+    text=text_read_file(path,NULL);
+    if(!text) return;
+    read_profile(text,"General",keys,value);
+    for(i=0;i<CONFIG_KEYS;++i) if(!value[i]) value[i]=fallback[i];
+    copy_string(g_world.gold_name,sizeof g_world.gold_name,value[0]);
+    g_world.pk_hand_percent=number(value[1]);
+    g_world.pk_magic_percent=number(value[2]);
+    g_world.spell_success_percent=number(value[3]);
+    g_world.karma_points_are_also_war_points=number(value[4]);
+    g_world.pk_trophy=number(value[5]);
+    g_world.monster_xp_are_also_war_points=number(value[6]);
+    g_world.tactics_win_gives_war_points=number(value[7]);
+    g_world.no_giving_gp=number(value[8]);
+    g_world.cookie_protection=number(value[9]);
+    g_world.pets_can_bite_people=number(value[10]);
+    g_world.max_unspent_pp=number(value[11]);
+    g_world.max_pk_attack_advantage=number(value[12]);
+    g_world.starting_gp=number(value[13]);
+    copy_string(g_world.world_home_url,sizeof g_world.world_home_url,value[14]);
+    copy_string(g_world.tactics_source_url,sizeof g_world.tactics_source_url,value[15]);
+    free(text);
 }
 
 int world_load(const char *data_dir, const char *name)
 {
-    char path[1024], *p, *config;
+    char path[1024], *p;
     size_t size=0, capacity=0, offset;
-    int count=0, n;
-    Ini ini;
+    int count=0, n, i, elements=0, hands=0;
     world_free();
     if(!data_dir || !name || strlen(data_dir)>=sizeof(data_root) || strlen(name)>=sizeof(g_world.name)) return -1;
     copy_string(data_root,sizeof(data_root),data_dir); copy_string(g_world.name,sizeof(g_world.name),name);
@@ -500,18 +842,18 @@ int world_load(const char *data_dir, const char *name)
     if(!g_world.lines) goto fail;
     g_world.line_count=count; p=g_world.text;
     for(n=0;n<count;++n) { g_world.lines[n]=p; p+=strlen(p)+1; }
+    default_equip_names();
     if(parse_world()) goto fail;
+    for(i=0;i<WORLD_MAX_ELEMENTS;++i) elements+=g_world.elements[i].used!=0;
+    for(i=0;i<WORLD_MAX_HANDS;++i) hands+=g_world.hands[i].used!=0;
+    if(!elements) default_element_names();
+    if(!hands) default_hand_names();
     complete_spells();
-    g_world.starting_gp=500;
-    if(!world_path(path,sizeof(path),"config.ini")) goto fail;
-    g_world.max_unspent_pp=1000000;
-    config=text_read_file(path,NULL);
-    if(config) {
-        if(ini_parse(&ini,config)) { free(config); goto fail; }
-        g_world.starting_gp=number(ini_get(&ini,"General","startingGP","500"));
-        g_world.max_unspent_pp=clamp(number(ini_get(&ini,"General","maxUnspentPP","1000000")),0,INT_MAX);
-        free(config);
-    }
+    read_config();
+    build_credits();
+    g_world.crc1=quest_crc1(g_world.text,size);
+    g_world.crc2=quest_crc2(g_world.text,size);
+    g_world.crc1^=world_file_sum();
     if(!world_path(path,sizeof(path),"music.ini")) goto fail;
     music_text=text_read_file(path,NULL);
     if(music_text && ini_parse(&music_ini,music_text)) goto fail;
@@ -519,6 +861,109 @@ int world_load(const char *data_dir, const char *name)
 fail:
     fprintf(stderr,"world: cannot load %s\n",name);
     world_free(); return -1;
+}
+
+/* FUN_004814a7: an unused or out-of-range id answers the shared empty string, not NULL. */
+const char *world_token_text(int id)
+{
+    if(id<0 || id>=WORLD_MAX_TOKENS || !g_world.tokens[id].used) return "";
+    return g_world.tokens[id].text;
+}
+
+const ChapterDef *world_chapter(int index)
+{
+    if(index<0 || index>=g_world.chapter_count || !g_world.chapters[index].used) return NULL;
+    return &g_world.chapters[index];
+}
+
+/* FUN_004825bf: a bad hand id answers "Right-Hand". */
+const char *world_hand_name(int hand)
+{
+    if(hand<0 || hand>=WORLD_MAX_HANDS || !g_world.hands[hand].used) return "Right-Hand";
+    return g_world.hands[hand].name;
+}
+
+/* FUN_00482431: 0/1 are the +EQUIP table itself, 2..9 forward to the hand classes, 10..13 are
+ * the remaining +EQUIP slots, and anything else answers "Right-Hand". */
+const char *world_equip_name(int slot)
+{
+    if(slot>=2 && slot<=9) return world_hand_name(slot-2);
+    if(slot<0 || slot>=WORLD_MAX_EQUIP) return "Right-Hand";
+    return g_world.equip_names[slot];
+}
+
+const char *world_hero_slot_name(int hero_slot, int hand)
+{
+    switch(hero_slot) {
+    case 0: return world_equip_name(0);   /* HERO_SLOT_HELMET  */
+    case 1: return world_equip_name(1);   /* HERO_SLOT_ARMOR   */
+    case 2: return world_equip_name(10);  /* HERO_SLOT_BOOTS   */
+    case 3: return world_equip_name(11);  /* HERO_SLOT_SHIELD  */
+    case 4: return world_equip_name(12);  /* HERO_SLOT_RING    */
+    case 5: return world_equip_name(13);  /* HERO_SLOT_AMULET  */
+    case 8: return world_hand_name(hand); /* HERO_SLOT_RIGHT_HAND */
+    default: return "";
+    }
+}
+
+/* The original only ever walks index -> name (FUN_00482431); this is the reverse for UIs that
+ * have to match a localised label. Hand slots are named by the hand class. */
+int world_equip_slot_by_name(const char *name)
+{
+    int slot, hand;
+    if(!name || !*name) return -1;
+    for(slot=0;slot<WORLD_MAX_EQUIP;++slot) {
+        if(slot>=2 && slot<=9) continue;
+        if(!text_casecmp(name,g_world.equip_names[slot])) return slot;
+    }
+    for(hand=0;hand<WORLD_MAX_HANDS;++hand)
+        if(!text_casecmp(name,g_world.hands[hand].name)) return hand+2;
+    return -1;
+}
+
+const char *world_story_line(int index)
+{
+    if(index<0 || index>=g_world.story.count) return NULL;
+    return g_world.story.lines[index];
+}
+
+int world_story_count(void) { return g_world.story.count; }
+const char *world_credits_text(void) { return g_world.credits_text; }
+const char *world_gold_name(void) { return g_world.gold_name[0]?g_world.gold_name:"GP"; }
+
+void world_dump(void (*emit)(const char *key, const char *value, void *user), void *user)
+{
+    char value[64];
+    int i, used=0;
+#define WORLD_DUMP_INT(key,field) \
+    do { snprintf(value,sizeof value,"%ld",(long)(field)); emit((key),value,user); } while (0)
+    WORLD_DUMP_INT("world.crc1",(long)g_world.crc1);
+    WORLD_DUMP_INT("world.crc2",(long)g_world.crc2);
+    WORLD_DUMP_INT("world.line_count",g_world.line_count);
+    WORLD_DUMP_INT("world.starting_gp",g_world.starting_gp);
+    WORLD_DUMP_INT("world.max_unspent_pp",g_world.max_unspent_pp);
+    WORLD_DUMP_INT("world.spell_success_percent",g_world.spell_success_percent);
+    WORLD_DUMP_INT("world.pk_hand_percent",g_world.pk_hand_percent);
+    WORLD_DUMP_INT("world.pk_magic_percent",g_world.pk_magic_percent);
+    WORLD_DUMP_INT("world.cookie_protection",g_world.cookie_protection);
+    WORLD_DUMP_INT("world.max_pk_attack_advantage",g_world.max_pk_attack_advantage);
+    WORLD_DUMP_INT("world.no_giving_gp",g_world.no_giving_gp);
+    WORLD_DUMP_INT("world.pets_can_bite_people",g_world.pets_can_bite_people);
+    emit("world.gold_name",world_gold_name(),user);
+    emit("world.world_home_url",g_world.world_home_url,user);
+    emit("world.tactics_source_url",g_world.tactics_source_url,user);
+    for(i=0;i<WORLD_MAX_TOKENS;++i) used+=g_world.tokens[i].used!=0;
+    WORLD_DUMP_INT("world.tokens.defined",(long)used);
+    WORLD_DUMP_INT("world.chapters",g_world.chapter_count);
+    WORLD_DUMP_INT("world.story_lines",g_world.story.count);
+    WORLD_DUMP_INT("world.credits_bytes",(long)strlen(g_world.credits_text));
+    for(i=0;i<WORLD_MAX_EQUIP;++i) {
+        char key[32];
+        if(i>=2 && i<=9) continue;
+        snprintf(key,sizeof key,"world.equip.%d",i);
+        emit(key,world_equip_name(i),user);
+    }
+#undef WORLD_DUMP_INT
 }
 
 /* Explicit little-endian decoding: maps.md sections 4-5; never native struct dumps. */
@@ -555,6 +1000,7 @@ static int load_records(Map *map, const char *path, int type)
             disk_string(v->background,sizeof(v->background),record+112,80);
             disk_string(v->name,sizeof(v->name),record+192,128);
             v->dest_map=le32(record+404); v->weather=le32(record+408); v->fx=le32(record+412);
+            v->has_been_used=le32(record+416);
             v->required_item=le32(record+420);
         } else if(type==1) {
             MonPlace *v=&map->mons[i];

@@ -1,3 +1,5 @@
+#include "../src/engine/clock.h"
+#include "../src/engine/dscript.h"
 #include "../src/engine/replay.h"
 #include "../src/engine/ini.h"
 #include "../src/engine/image.h"
@@ -121,10 +123,172 @@ static void test_ui(void)
     ui_text_input(&ui,&fb,2,rect,text,sizeof(text));assert(pixels[8*64+8]==0);
     puts("PASS UI: release-click, text input, UTF-8 backspace, Return, nested clipping");
 }
+/* --- virtual clock and Win32 timer emulation (src/engine/clock.c) -------------
+ * Contract under test: the 20 Hz gate re-arms from the PREVIOUS BOUNDARY, so a
+ * clock jump of N ms costs floor(N/20) idle ticks and never skips one, and a
+ * timer that is k intervals overdue fires ONCE (Win32 coalescing). */
+static int idle_count, fired_count;
+static int fired_log[64];
+static void on_fast(void *owner, void *user) { (void)owner; (void)user; if (fired_count < 64) fired_log[fired_count++] = 100; }
+static void on_slow(void *owner, void *user) { (void)owner; (void)user; if (fired_count < 64) fired_log[fired_count++] = 1000; }
+static void on_none(void *owner, void *user) { (void)owner; (void)user; }
+static void test_clock(void)
+{
+    uint32_t idle20;
+    clock_reset();
+    assert(clock_ms() == 0);
+    assert(clock_time_s() == 0);
+    /* The gate is the original's `GetTickCount() - last > 19`: 20 ms, not 16.7. */
+    assert(!clock_idle_due());
+    clock_advance(19);
+    assert(!clock_idle_due());
+    clock_advance(1);
+    assert(clock_idle_due());
+    assert(!clock_idle_due());
+    /* A 1000 ms jump must cost 50 idle ticks, not one. */
+    idle_count = 0;
+    clock_advance(1000);
+    while (clock_idle_due()) if (++idle_count == 200) break;
+    assert(idle_count == 50);
+    /* The gate never runs backwards or double-counts a boundary. */
+    idle20 = clock_20hz_next();
+    assert(idle20 == clock_ms() + 20);   /* the next boundary, never the current one */
+
+    /* Timers: Win32 clamps uElapse to USER_TIMER_MINIMUM (10 ms). */
+    clock_reset();
+    assert(!clock_timer_active((void *)0x1, 2));
+    clock_set_timer((void *)0x1, 2, 0, on_none, NULL);
+    assert(clock_timer_active((void *)0x1, 2));
+    clock_kill_timer((void *)0x1, 2);
+    assert(!clock_timer_active((void *)0x1, 2));
+
+    /* Overdue timers walk forward one interval per message (the rule agreed with
+     * the Oracle): a SetTimer(hwnd,2,100) idle until t=300 delivers at the
+     * deadlines 100, 200 and 300 -- never a replayed burst at a single stamp --
+     * and the clock ends exactly on the last deadline. */
+    clock_reset();
+    clock_set_timer((void *)0x1, 2, 100, on_fast, NULL);
+    clock_advance(300);
+    fired_count = 0;
+    assert(clock_dispatch_timers() == 3);
+    assert(fired_count == 3);
+    assert(clock_ms() == 300);
+    assert(!clock_dispatch_timers());          /* caught up: nothing left overdue */
+
+    /* A timer 3x over due by only one interval fires once, not three times. */
+    clock_reset();
+    clock_set_timer((void *)0x1, 2, 1000, on_slow, NULL);
+    clock_advance(1100);
+    fired_count = 0;
+    assert(clock_dispatch_timers() == 1);
+    assert(fired_count == 1);
+    assert(clock_ms() == 1100);   /* the clock never rewinds to the deadline */
+
+    /* Ordering: oldest deadline first, whichever was registered first. The 1000 ms
+     * timer is armed before the 100 ms one but must still fire second. */
+    clock_reset();
+    clock_set_timer((void *)0x1, 4, 1000, on_slow, NULL);
+    clock_set_timer((void *)0x1, 2, 100, on_fast, NULL);
+    fired_count = 0;
+    clock_advance(100);
+    assert(clock_dispatch_timers() == 1);
+    assert(fired_count == 1 && fired_log[0] == 100);
+    clock_kill_timer((void *)0x1, 2);
+    clock_advance(900);
+    assert(clock_dispatch_timers() == 1);
+    assert(fired_count == 2 && fired_log[1] == 1000);
+    /* Equal deadlines break by registration order. */
+    clock_reset();
+    clock_set_timer((void *)0x1, 2, 100, on_slow, NULL);
+    clock_set_timer((void *)0x1, 2 + 1000, 100, on_fast, NULL);
+    clock_advance(100);
+    fired_count = 0;
+    assert(clock_dispatch_timers() == 2);
+    assert(fired_count == 2 && fired_log[0] == 1000 && fired_log[1] == 100);
+
+    /* A killed timer stops the backlog walk. */
+    clock_reset();
+    clock_set_timer((void *)0x1, 2, 10, on_none, NULL);
+    clock_advance(1000);
+    assert(clock_dispatch_timers() >= 1);
+    clock_kill_timer((void *)0x1, 2);
+    assert(clock_dispatch_timers() == 0);
+
+    /* time() tracks the virtual clock and the epoch base. */
+    clock_reset();
+    clock_set_time_base(1000);
+    clock_advance(2500);
+    assert(clock_time_s() == 1002);
+    clock_set_now(1);           /* never rewinds */
+    assert(clock_ms() == 2500);
+    puts("PASS clock: 20 ms idle gate re-arms per boundary, timer coalescing and order");
+}
+
+/* --- .dsc parser (src/engine/dscript.c) ------------------------------------- */
+static void test_dscript(void)
+{
+    Dscript ds;
+    char good[] =
+        "# comment\n"
+        "at 0 key RETURN\n"
+        "at 100 click 320 240 3\n"
+        "at 150 move 10 20\n"
+        "at 200 down 5 6 1\n"
+        "at 250 up 5 6 1\n"
+        "at 300 rclick 1 2\n"
+        "at 400 text Hero Name\n"
+        "at 500 dialog 138 1000=1 1001=2 ok\n"
+        "at 600 dialog 149 1000=3 cancel\n"
+        "at 700 dump hero\n"
+        "end 1000\n";
+    char no_at[]="click 1 2\n";
+    char neg[]="at -1 key a\n";
+    char badkind[]="at 5 teleport 1\n";
+    char badpair[]="at 5 dialog 1 1000 ok\n";
+    char badbtn[]="at 5 click 1 2 9\n";
+    char badend[]="end\n";
+    char okfine[]="at 5 dialog 1 ok\n";
+    size_t line=0;
+    const DscriptOp *op;
+
+    assert(!dscript_parse(&ds,good,&line));
+    assert(ds.count == 10 && ds.has_end && ds.end_ms == 1000);
+    assert(ds.ops[0].kind==DS_KEY && ds.ops[0].at_ms==0 && ds.ops[0].key==PLAT_KEY_RETURN);
+    assert(ds.ops[1].kind==DS_CLICK && ds.ops[1].x==320 && ds.ops[1].y==240 && ds.ops[1].button==3);
+    assert(ds.ops[2].kind==DS_MOVE && ds.ops[2].x==10 && ds.ops[2].y==20 && ds.ops[2].button==0);
+    assert(ds.ops[3].kind==DS_DOWN && ds.ops[4].kind==DS_UP);
+    assert(ds.ops[5].kind==DS_RCLICK && ds.ops[5].button==3);
+    assert(ds.ops[6].kind==DS_TEXT && !strcmp(ds.ops[6].text,"Hero Name"));
+    assert(ds.ops[7].kind==DS_DIALOG && ds.ops[7].id==138 && ds.ops[7].ok==1 &&
+           ds.ops[7].control_count==2 && ds.ops[7].control[1]==1001 && ds.ops[7].value[1]==2);
+    assert(ds.ops[8].ok==0);
+    assert(ds.ops[9].kind==DS_DUMP && !strcmp(ds.ops[9].text,"hero"));
+
+    /* The schedule is consumed in file order, never pre-empted out of order. */
+    assert(dscript_next_time(&ds,0) == 0);
+    assert(dscript_next_time(&ds,1) == 100);
+    op = dscript_take(&ds,0); assert(op && op->kind==DS_KEY);
+    assert(dscript_take(&ds,0) == NULL);
+    assert(dscript_take(&ds,99) == NULL);
+    op = dscript_take(&ds,100); assert(op && op->kind==DS_CLICK);
+    while (dscript_take(&ds,1000)) { }
+    assert(ds.pc == ds.count);
+    assert(dscript_next_time(&ds,1000) == 1000);   /* the `end` still terminates */
+
+    assert(dscript_parse(&ds,no_at,&line) && line==1);
+    assert(dscript_parse(&ds,neg,&line) && line==1);
+    assert(dscript_parse(&ds,badkind,&line) && line==1);
+    assert(dscript_parse(&ds,badpair,&line) && line==1);
+    assert(dscript_parse(&ds,badbtn,&line) && line==1);
+    assert(dscript_parse(&ds,badend,&line) && line==1);
+    assert(!dscript_parse(&ds,okfine,&line));   /* `ok` with no controls is legal */
+    puts("PASS dscript: ops, dialog pairs, schedule order, rejection cases");
+}
+
 int main(int argc,char **argv)
 {
     const char *root=argc>1?argv[1]:"extracted";char path[4096];Image im={0};size_t i;unsigned histogram[256]={0};
-    test_replay();test_ini();test_bmp_formats();test_framebuffer();test_ui();
+    test_replay();test_clock();test_dscript();test_ini();test_bmp_formats();test_framebuffer();test_ui();
     assert(snprintf(path,sizeof(path),"%s/worlds/Evergreen/maps/castle1.ter",root)>0);
     assert(!image_load(&im,path));assert(im.w==82 && im.h==87 && im.bpp==8 && im.indices);
     for(i=0;i<(size_t)im.w*im.h;++i) { ++histogram[im.indices[i]]; assert(im.pixels[i]==im.palette[im.indices[i]]); }

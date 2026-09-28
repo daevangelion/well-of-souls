@@ -81,11 +81,27 @@ int   plat_mkdir(const char *path);                 /* 0 on success or already e
  * returns number of entries or -1 if the directory cannot be opened. */
 int   plat_list_dir(const char *path, void (*cb)(const char *name, int is_dir, void *user), void *user);
 
+/* External targets. The original hands these to the shell: ShellExecute for the help
+ * file ("Read the attractive help file", WM_COMMAND 0x46D -> WINHELP WELLOFSOULS.HLP),
+ * "Visit synthetic-reality.com" (0x483), and the web view (app state 11). `target` is
+ * a URL or a filesystem path. Returns 0 if the host accepted it, -1 otherwise; a
+ * headless build always returns -1 after logging, so a failure is never fatal. */
+int  plat_open_external(const char *target);
+/* 1 when plat_open_external can actually reach a host handler, 0 when it cannot
+ * (headless / dummy video driver). Presentation may skip work when 0. */
+int  plat_open_external_supported(void);
+
+/* Custom cursors. The original loads them from art (a pointing hand over hotspots, a
+ * busy/hourglass over long work); they are presentation only and never affect rules. */
+typedef enum { PLAT_CURSOR_DEFAULT, PLAT_CURSOR_HAND, PLAT_CURSOR_BUSY, PLAT_CURSOR_TEXT } PlatCursor;
+int  plat_cursor_set(PlatCursor shape);
+void plat_cursor_restore(void);
+
 /* Audio. Buffers are complete RIFF/WAVE files in memory; the platform decodes them.
  * Music is a path to a MIDI file; playback is best effort (silently ignored if unsupported). */
 void plat_sound_play(const void *wav, size_t len);
 void plat_music_play(const char *midi_path, int loop);
 void plat_music_stop(void);
-int plat_music_playing(void);
+int  plat_music_playing(void);
 
 #endif

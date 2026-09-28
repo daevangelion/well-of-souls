@@ -1,0 +1,50 @@
+# Solo Channel chat pane and the offline slash commands.
+# Title -> main menu -> Play now -> world splash -> Choose Your World -> Evergreen -> the Well ->
+# N = New Soul, name, RETURN -> the map. Then click the chat splitter grip (the default pane is
+# (0,420,640,60) with a 4px grip at y 420..424) and type the commands.
+# requires: map_enter chat_pane chat_command chat_say springy_object
+# requires-match: chat_command cmd=springy arg=\S+ state=loaded
+# requires-match: chat_command cmd=version arg= state=shown
+# requires-match: chat_say text=Well of Souls Version 1\.0
+# The title screen turns any key into the main menu, so no boot_menu expect is needed.
+key RETURN
+wait 20
+key RETURN
+wait 30
+# Three states before the Well, not two: 1 main menu -> 2 the
+# "Where Do You Want To Play Today?" splash (FUN_0041D31F) -> 3 the world
+# list (FUN_0041D717). The original's own table is FUN_0041B891 (all.c:21078);
+# the port used to collapse the splash, so the script had drifted. RETURN is
+# the plan's keyboard shortcut for the row click (msg 0x474).
+wait 20
+key x
+wait 40
+# Choose Your World: the world rows are FUN_0041D3CC's list, x = 2*((W+7)>>3) = 160,
+# y = H/20 + ((H+3)>>2) = 144, step 0 at 640x480; FUN_00405153 then scales by client/1000,
+# so the Evergreen row rect is (102,69)-(174,77).
+click 120 73
+expect world_chosen 300
+key n
+wait 5
+# The New Soul name field needs a click to take focus (front.c name_rect = 104,88,432,26).
+click 200 100
+wait 2
+text Tester
+key RETURN
+expect hero_ready 300
+expect map_enter 600
+# Incarnating on link 0 puts the hero on the link, so the map walks into it (FUN_00462958).
+# Click a far corner of the walk rect on the next frame to step off the link first.
+click 60 240
+wait 60
+# Open the chat pane from its splitter grip. The hero is standing on link 0, so the command
+# block runs back to back: the map walks into the link a few frames after map_enter.
+click 320 422
+expect chat_pane 120
+text /springy
+key RETURN
+expect springy_object 120
+text /version
+key RETURN
+expect chat_say 120
+quit

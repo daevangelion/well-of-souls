@@ -2,8 +2,10 @@ modelRoles:
   default: anthropic/claude-opus-5-5
   astra: openai-codex/gpt-6-astra
   bunny: opencode-zen/space-bunny-free
+  architect: x-ai/grok-4.7
 task:
   agentModelOverrides:
-    task: "@astra"
+    grok-architect: "@architect"
+    task: "@bunny"
     scout: "@bunny"
     sonic: "@bunny"

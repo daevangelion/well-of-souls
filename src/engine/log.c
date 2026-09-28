@@ -48,3 +48,11 @@ uint64_t wos_log_seen_since(const char *name, uint64_t since)
         if (!strcmp(events[i].name, name)) return events[i].serial > since ? events[i].serial : 0;
     return 0;
 }
+/* The dump pair as a log line: `EVT hero.level hero.level=5`. The key is both
+ * the event name and half the payload, so a .dsc `dump` op and a plain log grep
+ * see the same tokens. */
+void log_emit(const char *key, const char *value, void *user)
+{
+    (void)user;
+    if (key && value) wos_log_event(key, "%s=%s", key, value);
+}

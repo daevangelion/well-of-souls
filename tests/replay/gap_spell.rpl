@@ -2,10 +2,26 @@
 # requires: hero_ready spell_learn spell_cast music_play
 # requires-match: spell_cast caster=hero
 # requires-match: spell_cast caster=monster
-# Retail Book-User: 21 real attacks earn 252 PP; retreat before retaliation.
-# Learn Health Weave in the normal Spells panel, then meet Slobber + Giant Flea.
-# Health Weave is cast once; the second spell event must come from a monster.
+# Learn Health Weave in the normal Spells panel, then meet a random encounter, cast it once, and
+# take a monster's cast back.
+#
+# CHANGED (Battle-2): the 21 "attack once, then press F to retreat before retaliation" legs are
+# GONE. Under the original's FUN_00436c9d an offline ordinary encounter has no timer escape at
+# all - DAT_00502b14 is 0 and the Tactics abandon dialog FUN_00447431 returns 0 offline - so F is
+# refused with "You attempt to flee... but are dragged back" unless the 30 % interrupt of an
+# attack already animating on the hero fires. Farming PP by retreating was only possible because
+# the port's flee always succeeded, which was a documented deviation. This replay now plays the
+# encounter out and leaves through that 30 % window, which is the original's own escape.
+# tests/replay/gap_flee.rpl asserts the refusal and the escape on their own.
 expect boot_menu 900
+key RETURN
+wait 30
+# FUN_0041B891's own table (all.c:21078) has THREE states before the Well, not two:
+#   1 main menu -> 2 "Where Do You Want To Play Today?" (splash, art\where.jpg, FUN_0041D31F)
+#   2 -> 3 "Choose Your World" + the world list (art\chapter.jpg, FUN_0041D717)
+#   3 -> take the highlighted row (msg 0x474) -> the Pick-a-Soul window
+# The old port collapsed the splash; the three states are the original's, so the script
+# spends one more RETURN on them. RETURN is the plan's keyboard shortcut for the click.
 key RETURN
 wait 30
 key RETURN
@@ -22,194 +38,6 @@ key DOWN
 key RETURN
 expect hero_ready 300
 expect map_enter 600
-hold RIGHT 60
-keydown DOWN
-expect battle_start 1200
-keyup DOWN
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 2, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 3, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 4, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 5, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 6, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 7, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 8, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 9, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 10, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 11, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 12, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 13, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 14, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 15, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 16, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 17, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 18, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 19, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 20, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
-# Practice attack 21, retreat before retaliation.
-wait 300
-keydown RIGHT
-expect battle_start 1500
-keyup RIGHT
-key a
-wait 35
-key f
-expect map_enter 600
 click 415 8
 wait 3
 click 110 44
@@ -224,6 +52,8 @@ key DOWN
 key l
 expect spell_learn 300
 key ESCAPE
+# Random encounter: cast Health Weave once, take a monster's cast, then leave through the
+# original's 30 % interrupt window (FUN_00436c9d's `rand()%100 < 30`).
 hold RIGHT 150
 keydown DOWN
 expect battle_start 1500
@@ -238,6 +68,486 @@ shot /tmp/wos-gap-spell-effect.bmp
 expect spell_cast 600
 expect spell_cast 600
 shot /tmp/wos-gap-spell.bmp
+key a
+wait 30
 key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+key a
+wait 30
+key f
+wait 2
+expect battle_fled 300
 expect map_enter 600
 quit

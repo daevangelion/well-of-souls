@@ -1,6 +1,8 @@
 #include "platform/platform.h"
 #include <SDL.h>
 #include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 void wos_audio_init(void);
@@ -158,3 +160,68 @@ void plat_present(const uint32_t *pixels, int w, int h)
 
 uint32_t plat_ticks_ms(void) { return SDL_GetTicks(); }
 void plat_sleep_ms(uint32_t ms) { SDL_Delay(ms); }
+
+/* --- External targets and cursors -----------------------------------------
+ * The original hands URLs and the help file to ShellExecute. SDL has no shell
+ * hook, so the backend asks the OS the portable way: xdg-open / open / cmd
+ * start, chosen by the build platform. When none applies (headless, Android,
+ * a container with no helper) the call fails cleanly and the game logs it. */
+static PlatCursor cursor_shape = PLAT_CURSOR_DEFAULT;
+
+int plat_open_external_supported(void)
+{
+#if defined(__ANDROID__) || defined(_WIN32)
+    return 1;
+#else
+    const char *d = getenv("DISPLAY");
+    const char *w = getenv("WAYLAND_DISPLAY");
+    return (d && *d) || (w && *w);
+#endif
+}
+
+int plat_open_external(const char *target)
+{
+    if (!target || !*target) return -1;
+#if defined(__ANDROID__)
+    (void)target;
+    return -1;
+#elif defined(_WIN32)
+    int ok = (system(NULL) != 0);
+    char cmd[1200];
+    int n = snprintf(cmd, sizeof(cmd), "start \"\" \"%s\"", target);
+    if (n < 0 || (size_t)n >= sizeof(cmd)) return -1;
+    if (!ok) return -1;
+    return system(cmd) == 0 ? 0 : -1;
+#else
+    static const char *const helpers[] = { "xdg-open", "gio", "gnome-open", "kde-open", NULL };
+    int i;
+    for (i = 0; helpers[i]; ++i) {
+        char cmd[1200];
+        int n = snprintf(cmd, sizeof(cmd), "%s \"%s\" >/dev/null 2>&1 &", helpers[i], target);
+        if (n < 0 || (size_t)n >= sizeof(cmd)) return -1;
+        if (system(cmd) == 0) return 0;
+    }
+    return -1;
+#endif
+}
+
+int plat_cursor_set(PlatCursor shape)
+{
+    if (!window) return -1;
+    switch (shape) {
+    case PLAT_CURSOR_HAND: SDL_SetCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND)); break;
+    case PLAT_CURSOR_BUSY: SDL_SetCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_WAIT)); break;
+    case PLAT_CURSOR_TEXT: SDL_SetCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM)); break;
+    default: break;
+    }
+    cursor_shape = shape;
+    return 0;
+}
+
+void plat_cursor_restore(void)
+{
+    if (window && cursor_shape != PLAT_CURSOR_DEFAULT) {
+        SDL_SetCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW));
+        cursor_shape = PLAT_CURSOR_DEFAULT;
+    }
+}

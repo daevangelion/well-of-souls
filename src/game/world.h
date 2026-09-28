@@ -28,15 +28,45 @@
 #define MON_RECORD_SIZE     276
 #define OBR_RECORDS         1000  /* maximum 48-byte rows; Evergreen ships 256 */
 #define OBR_RECORD_SIZE     48
+#define WORLD_MAX_TOKENS    4096  /* +TOKENS id 0..4095, FUN_004814d2 */
+#define WORLD_MAX_CHAPTERS  100   /* FUN_004817de rejects chapter 100 */
+#define WORLD_MAX_EQUIP     14    /* +EQUIP ids 0..13, FUN_004824b4 */
+#define WORLD_CREDITS_MAX   9999  /* FUN_004861c8 buffer, called with 0x270F */
+/* +CREDITS is concatenated with "\r\n" after every line (FUN_004861c8, called with
+ * WORLD_CREDITS_MAX by the About-this-world dialog at 0x49751B). +STORY keeps its lines
+ * in file order; both are owned by World.text. */
+typedef struct {
+    const char **lines;
+    int count;
+} WorldText;
+
+
 
 typedef struct {
     int used;
     char image[64];   /* e.g. "evergreen.jpg" */
     char root[64];    /* base name of .obl/.ter/.mon and music.ini section */
     char name[64];    /* display name */
-    uint32_t flags;   /* MAP_FLAG_* bitmask (quest.txt +MAPS docs) */
-    int theme;
+    uint32_t flags;   /* MAP_FLAG_* bitmask, quest.txt +MAPS arg4; FUN_00482BB8 tests it */
+    int theme;        /* arg5, optional */
 } MapDef;
+
+/* +TOKENS description / diary text: id 0..4095, text truncated to 128 chars
+ * (FUN_004814d2: strncpy(dst, src, 0x80); dst[0x80] = 0). FUN_004814a7 returns "" for an
+ * unused or out-of-range id, so world_token_text() never returns NULL. */
+typedef struct {
+    int used;
+    char text[129];
+} TokenDef;
+
+/* +TOKENS "chapter <a> <b> <c> <title> <link> <text>" rows (FUN_004817de), max 100.
+ * A chapter is the quest-diary page; FUN_00481aca lists the tokens in [low, high]. */
+typedef struct {
+    int used;
+    int a, b, c;
+    char title[261], link[261], text[261];
+} ChapterDef;
+
 
 typedef struct {
     int used;
@@ -123,14 +153,20 @@ typedef struct {
     int path, effects_row, max_cols, max_fx, ms_per_col;
     int gravity, effects, weather, loop;
     int extra[2];     /* optional arg17 dotted pair, FUN_0047fced +0x180/+0x184 */
+    /* FUN_0047fced 0x4803E9 draws one rand() per used spell into record +0x154 while it is
+     * still 0; FUN_0048????? reads it back as the effect-animation seed. Keep the draw even
+     * if the value is never displayed: it shifts every later crt_rand(). */
+    int effect_seed;
     char sfx_summon[80], sfx_travel[80], sfx_strike[80];
 } SpellDef;
 
 typedef struct { int used; char name[32]; } ElementDef;
 typedef struct {
     int used;
+    /* 8 entries, 79-char names; FUN_004825df installs Sword/Staff/Bow/Music/Fist/Dart/Book/
+     * RH5/RH6/RH7/RH8 when the +HANDS section defines no rows at all. */
     char name[80], sound[80];
-    int strength_percent; /* arg2 (0..100), default 50 */
+    int strength_percent; /* arg2, clamped 0..100 (>99 becomes 100, <1 becomes 0) */
     int damage_weight;    /* strength_percent * 40 / 100 + 10, FUN_004825df */
 } HandDef;
 typedef struct {
@@ -159,6 +195,8 @@ typedef struct {
     int theme;        /* +0x6c */
     int dest_map;     /* +0x194 */
     int required_item;/* +0x1a4 */
+    int has_been_used; /* +0x1A0; FUN_00462958 sets it when the link fires and FUN_004639EB
+                        * draws the +0xC0 name only when it is set (or map flag 32) */
     char name[64];
     char background[80]; /* +0x70, inherited by SCENE (FUN_0047a1bc) */
     int fx, weather;     /* +0x19c, +0x198 */
@@ -212,10 +250,40 @@ typedef struct {
     SpellDef spells[WORLD_MAX_SPELLS];
     SceneDef scenes[WORLD_MAX_SCENES];
     ElementDef elements[WORLD_MAX_ELEMENTS];
-    HandDef hands[WORLD_MAX_HANDS];
     TrophyDef trophies[WORLD_MAX_TROPHIES];
-    int starting_gp;          /* config.ini startingGP, default 500 */
-    int max_unspent_pp;       /* config.ini maxUnspentPP, default 1000000 */
+    HandDef hands[WORLD_MAX_HANDS];
+    TokenDef tokens[WORLD_MAX_TOKENS];
+    ChapterDef chapters[WORLD_MAX_CHAPTERS];
+    int chapter_count;
+    char equip_names[WORLD_MAX_EQUIP][40]; /* +EQUIP, FUN_004823c4 built-in names first */
+    WorldText story;                       /* +STORY body lines, file order */
+    WorldText credits;                     /* +CREDITS body lines, file order */
+    char credits_text[WORLD_CREDITS_MAX+1]; /* lines joined with "\r\n", FUN_004861c8 */
+    /* config.ini [General], read by FUN_0047c5c5 into a 100-byte buffer. The value in
+     * brackets is the original's DEFAULT STRING argument, not the InitInstance pre-init:
+     * startingGP is 1000 (0x4e2364) and spellSuccessPercent is "0" (0x4dcaf4). */
+    char gold_name[100];                   /* [GP] */
+    int pk_hand_percent;                   /* [100] */
+    int pk_magic_percent;                  /* [100] */
+    int spell_success_percent;             /* [0] */
+    int karma_points_are_also_war_points;  /* [0] */
+    int pk_trophy;                         /* [0] */
+    int monster_xp_are_also_war_points;    /* [0] */
+    int tactics_win_gives_war_points;      /* [0] */
+    int no_giving_gp;                      /* [0] */
+    int cookie_protection;                 /* [0] */
+    int pets_can_bite_people;              /* [1] */
+    int starting_gp;                       /* [1000] */
+    int max_unspent_pp;                    /* [1000000] */
+    int max_pk_attack_advantage;           /* [80] */
+    char world_home_url[200];              /* [] */
+    char tactics_source_url[200];          /* [] */
+    /* DAT_004fa95c: rotate-left-1 + XOR over the whole #include-expanded quest.txt
+     * (FUN_0047977a), then XOR the summed per-file byte counts (FUN_00479a02). Stored in
+     * the hero record at +0x6F0/+0x6C4/+0x1B1; a mismatch blocks soul switching. */
+    uint32_t crc1;
+    /* DAT_004fa960: seed 0x075BCD15 XOR the quest.txt buffer as dwords (FUN_0047983e). */
+    uint32_t crc2;
 } World;
 
 extern World g_world;
@@ -228,6 +296,34 @@ int world_tokenize(const char *line, char tokens[][256], int max);
 /* Borrowed music.ini values, map section then [common]; absent value is "". */
 const char *world_music(const char *root, const char *key);
 int world_music_count(const char *root);
+
+/* Token description text (+TOKENS rows and `TOKEN n,"text"` lines inside +SCENES).
+ * FUN_004814a7 answers "" for an unused or out-of-range id; never NULL. */
+const char *world_token_text(int id);
+/* Diary chapter i (0..chapter_count-1) or NULL. FUN_004817de order: a, b, c, title, link, text. */
+const ChapterDef *world_chapter(int index);
+/* +EQUIP display name for the ORIGINAL slot id 0..13 (FUN_00482431):
+ * 0 helmet, 1 armor, 2..9 the eight hand classes, 10 boots, 11 shield, 12 ring, 13 amulet.
+ * Out of range answers "Right-Hand" exactly like FUN_004825bf does for a bad hand id. */
+const char *world_equip_name(int slot);
+/* +HANDS name for hand 0..7 (FUN_004825bf); "Right-Hand" out of range. */
+const char *world_hand_name(int hand);
+/* Name for the port's hero.h HERO_SLOT_* value: 0..5 map to the original slots
+ * 0,1,10,11,12,13 and HERO_SLOT_RIGHT_HAND (8) answers the hero's hand class name. */
+const char *world_hero_slot_name(int hero_slot, int hand);
+/* Inverse of the +EQUIP table: name (case-insensitive) -> original slot id, -1 if unknown. */
+int world_equip_slot_by_name(const char *name);
+/* +STORY back-story lines in file order; *lines is NULL when the section is absent. */
+const char *world_story_line(int index);
+int world_story_count(void);
+/* +CREDITS joined with "\r\n" (FUN_004861c8); "" when the section is absent. */
+const char *world_credits_text(void);
+/* config.ini [General] goldName, the string the original prints in place of "GP". */
+const char *world_gold_name(void);
+
+/* State dump: world.crc1, world.crc2, world.cfg.*, world.tokens, world.chapters,
+ * world.equip.<slot>, world.music. Signature from engine/dump.h. */
+void world_dump(void (*emit)(const char *key, const char *value, void *user), void *user);
 
 /* Load map id (jpg, X4 jpg, .ter, .obl, .mon, objects). 0 on success. Caller owns Map. */
 int map_load(Map *map, int id);

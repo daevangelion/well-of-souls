@@ -1,8 +1,13 @@
 /* Solo hero model. Creation: boot_flow.md 3c / script.md 8.2.
- * Inventory/equipment: 0x403349, 0x40C694, 0x40D6B4; consumables: 0x4A6353.
+ * Inventory/equipment: 0x403349, 0x40C694, 0x40D6B4. Consumables live in items.c.
  * Training: hand/element click handlers 0x419107/0x425C30, proficiency
  * consumers 0x419306/0x4258B8; learning spells: 0x44E3BD.
- * Saves deliberately use versioned, endian-independent WSH3, not retail .her. */
+ *
+ * The save file is the original's, unchanged: a fixed 0x16CC-byte record
+ * written by FUN_00417F1B (all.c:17099) and validated by FUN_004181A2
+ * (all.c:17202), with FUN_00416ABB's checksum in the last four bytes. The old
+ * portable WSH3 format is gone with no shim; every field of the record is
+ * written by hero_record_encode and read by hero_record_decode. */
 #include "hero.h"
 #include "world.h"
 #include "scene.h"
@@ -10,6 +15,7 @@
 #include "../engine/ini.h"
 #include "../engine/text.h"
 #include "../engine/log.h"
+#include "../engine/dump.h"
 #include "../platform/platform.h"
 #include <string.h>
 #include <stdlib.h>
@@ -26,6 +32,19 @@ static const ClassDef *hero_class(const Hero *h)
 }
 
 static int bounded_stat(int64_t n) { return n < 0 ? 0 : n > INT_MAX ? INT_MAX : (int)n; }
+
+static void maxima(const ClassDef *c, int level, int *hp, int *mp);
+
+/* hero_maxima is the public form of the same computation; see hero.h. */
+void hero_maxima(const Hero *h, int *hp, int *mp)
+{
+    const ClassDef *c = hero_class(h);
+    int level;
+    if (!h) { if (hp) *hp = 1; if (mp) *mp = 0; return; }
+    level = h->level;
+    if (!c || !c->used) { if (hp) *hp = 1; if (mp) *mp = 0; return; }
+    maxima(c,level,hp,mp);
+}
 
 static void maxima(const ClassDef *c, int level, int *hp, int *mp)
 {
@@ -120,6 +139,70 @@ void hero_create(Hero *h, const char *name, int klass, int gender, const char *s
     scene_reset_timers();
 }
 
+/* ---------------------------------------------------------------- record ---
+ * Byte offsets in the 0x16CC record (base DAT_0067FBF8, stride 0x16CC, 100
+ * entries). Every constant below carries the decomp site that fixes it. */
+enum {
+    R_INUSE      = 0x0000, /* 1 alive, 2 ghost, 4 loaded-but-unincarnated  0x42095E  */
+    R_SERIAL     = 0x0004, /* DAT_004DD20C                               0x41F832  */
+    R_NAME       = 0x0014, /* char[0x21], strncpy 0x20                   0x4209F7  */
+    R_SKIN       = 0x0035, /* char[0x1F]                                 0x438C05  */
+    R_CLASS      = 0x0060, /* levels.txt class index                     0x420A3F  */
+    R_LEVEL      = 0x0064, /*                                             0x4181A2  */
+    R_XP         = 0x0068, /* cumulative XP; -XP mirror at 0x6C8         0x4E3274  */
+    R_GOLD       = 0x006C, /* -GOLD mirror at 0x974                      0x42BAF3  */
+    R_HP         = 0x0070, /*                                             0x4A6355  */
+    R_MAXHP      = 0x0074, /*                                             0x42B7C7  */
+    R_MP         = 0x0078, /*                                             0x4A6355  */
+    R_MAXMP      = 0x007C, /*                                             0x42B7F8  */
+    R_ATTACK     = 0x0084, /* sum of worn +0xa0, mirror -0xA60            0x40C694  */
+    R_DEFENCE    = 0x0080, /* sum of worn +0xa4, mirror -0xA64            0x40C694  */
+    R_MAP        = 0x0090, /* sent in msg 0x46A as the map number        0x420240  */
+    R_EQUIP      = 0x01D8, /* 14 ints, slot 8 is the right hand           0x40C694  */
+    R_HANDITEM   = 0x01F8, /* equip[8], the right-hand item id           0x490712  */
+    R_SPELLS     = 0x0210, /* 0x60 bytes, 768 BITS (spells 0..767)       0x4A4E79  */
+    R_ITEMCNT    = 0x0272, /* 0x400 bytes, one count per id 0..0x3FF     0x45FC2B  */
+    R_ITEMBIT    = 0x0AC8, /* 0x200 bytes, presence bit per id 0x400+    0x45FC2B  */
+    R_LINK       = 0x067C, /* sent in msg 0x46A as the link index        0x420240  */
+    R_MAGICRATIO = 0x0694,
+    R_PK         = 0x0698,
+    R_PP         = 0x069C, /* unspent wallet; -PP mirror at 0x760        0x425854  */
+    R_HAND       = 0x06A0, /* preferred hand 0..7                       0x490712  */
+    R_HANDITEMID = 0x06A4,
+    R_HP_MIRROR  = 0x06A8,
+    R_WORLDCRC   = 0x06C4, /* DAT_004FA95C                               0x420240  */
+    R_XP_MIRROR  = 0x06C8, /* -XP                                        0x4181A2  */
+    R_ELEM_PP    = 0x06CC, /* 8 ints, cap class+0x1AA64                  0x4258B8  */
+    R_HAND_PP    = 0x06FC, /* 8 ints, cap class+0x1AAA4                  0x419306  */
+    R_ABILITIES  = 0x0680, /* str,wis,sta,agi,dex, each clamped 0..255   0x4207BD  */
+    R_DEATHS     = 0x0724, /* ++ on death, FUN_00494FCD              all.c:109382 */
+    R_KILLS      = 0x0728, /* += the fight block's tally, all.c:32670           */
+    R_INCARN     = 0x0730, /* ++ by FUN_00420240 on every incarnate      0x420240  */
+    R_SECONDS    = 0x0734, /* seconds played                             0x417F1B  */
+    R_SELECTED   = 0x0738, /* 33 ints, selected element per hand, mirrored
+                              to/from DAT_00D831F8                     0x417F1B  */
+    R_PP_MIRROR  = 0x0760, /* -PP                                        0x4181A2  */
+    R_CKSUM_MODE = 0x0768, /* 0 legacy, 1 current                       0x416ABB  */
+    R_TOKENS     = 0x076C, /* 0x200 bytes, 4096 BITS (T0..T4095)        0x44DDEA  */
+    R_HAND_RATIO = 0x09E0, /* 100 - magic ratio when 0 on load          0x4181A2  */
+    R_MAXHP_RAW  = 0x09E8, /* 0 -> derive from the level                0x4181A2  */
+    R_HUNTING    = 0x0A04, /* raw signed hunt field, /10000 threshold   0x46260E  */
+    R_HALO       = 0x0A34,
+    R_SAVES      = 0x0A4C, /* save counter, ++ per save                 0x417F1B  */
+    R_MAXPP      = 0x0EF0, /* lifetime PP earned                        0x425854  */
+    R_ENERGY     = 0x0EFC, /* FUN_004142D8(seconds)                     0x417F00  */
+    R_GENDER     = 0x0AA0, /* 0..3                                        0x38130  */
+    R_TROPHY     = 0x0CE0, /* 128 raw words (FUN_0046F726)               */
+    R_TROPHY_GEO = 0x0EE0,
+    R_PET0       = 0x0EE8,
+    R_PET1       = 0x0EEC,
+    R_CKSUM      = 0x16C8  /* the last four bytes of the file            */
+};
+/* Fields FUN_004181A2 clears after fread because they only ever hold a live
+ * pointer (all.c:17236-17241). 0x5C and 0x58 are the two halves of the pet
+ * CWnd* pair. */
+static const int ram_only[] = { 0x000C, 0x0058, 0x005C, 0x00CC, 0x06C0, 0x0978 };
+
 static int safe_name(const char *s)
 {
     const unsigned char *p = (const unsigned char *)s;
@@ -128,126 +211,283 @@ static int safe_name(const char *s)
     return 1;
 }
 
-static int save_path(char *path, size_t size, const char *name, int create)
+/* FUN_00460962 (all.c:69364): the ONLY hero-path builder. "<save>/<world>" and
+ * "<save>/<world>/savedHeroes" are created on demand, then, when `name` is
+ * non-empty, "\\" + name + "." + ext are appended. The original passes
+ * "her" (DAT_004DF644) for the record and the empty string at DAT_004DCBAC
+ * for the per-hero INI, so the INI is "<...>/savedHeroes/<Name>" with no
+ * extension. */
+static int hero_path(char *path, size_t size, const char *name, const char *ext, int create)
 {
     int n;
     if (name && !safe_name(name)) return -1;
-    if (!*g_world.name || strchr(g_world.name, '/') || strchr(g_world.name, '\\')) return -1;
-    n = snprintf(path, size, "%s", game_save_path());
+    if (!*g_world.name || strchr(g_world.name,'/') || strchr(g_world.name,'\\')) return -1;
+    n = snprintf(path,size,"%s",game_save_path());
     if (n < 0 || (size_t)n >= size || (create && plat_mkdir(path))) return -1;
-    n = snprintf(path, size, "%s/%s", game_save_path(), g_world.name);
+    n = snprintf(path,size,"%s/%s",game_save_path(),g_world.name);
     if (n < 0 || (size_t)n >= size || (create && plat_mkdir(path))) return -1;
-    n = snprintf(path, size, "%s/%s/savedHeroes", game_save_path(), g_world.name);
+    n = snprintf(path,size,"%s/%s/savedHeroes",game_save_path(),g_world.name);
     if (n < 0 || (size_t)n >= size || (create && plat_mkdir(path))) return -1;
-    if (name) n = snprintf(path, size, "%s/%s/savedHeroes/%s.wsh", game_save_path(), g_world.name, name);
-    return n < 0 || (size_t)n >= size ? -1 : 0;
+    if (name && *name) {
+        /* The original always appends "\", name, "." and the extension, but the
+         * per-hero INI's extension is the empty string, so its name on disk ends
+         * in a dot -- which Windows silently drops. The port has to drop it too
+         * or the file would not be the one the original and its own reader see. */
+        if (ext && *ext)
+            n = snprintf(path,size,"%s/%s/savedHeroes/%s.%s",game_save_path(),g_world.name,name,ext);
+        else
+            n = snprintf(path,size,"%s/%s/savedHeroes/%s",game_save_path(),g_world.name,name);
+        if (n < 0 || (size_t)n >= size) return -1;
+    }
+    return 0;
 }
 
-/* Explicit little endian primitives: no struct padding, host width, or pointers on disk. */
-static void put32(FILE *f, int32_t value)
+/* FUN_00484CBC (all.c:97246) sets or clears one bit of a bitmap; FUN_00484D3B
+ * (all.c:97277) reads it. The port spells the same little routines so the
+ * bit order in tokens, spells and the high item ids is the original's. */
+static int bit_get(const uint8_t *map, int index)
+{ return (map[index >> 3] >> (index & 7)) & 1; }
+static void bit_set(uint8_t *map, int index, int on)
 {
-    uint32_t n = (uint32_t)value; int i;
-    for (i = 0; i < 4; ++i) { fputc((int)(n & 255), f); n >>= 8; }
+    uint8_t m = (uint8_t)(1u << (index & 7));
+    if (on) map[index >> 3] |= m; else map[index >> 3] = (uint8_t)(map[index >> 3] & ~m);
 }
-static int32_t get32(FILE *f)
+
+/* FUN_00416ABB, all.c:16108. `mode` is the record's +0x768 selector. Note the
+ * original has no branch for a mode other than 0 or 1: it returns the bare
+ * seed, and we reproduce that rather than inventing a third variant. */
+uint32_t hero_record_checksum(const uint8_t in[HERO_RECORD_SIZE], int mode)
 {
-    uint32_t n = 0; int i;
-    for (i = 0; i < 4; ++i) { int c = fgetc(f); if (c == EOF) return 0; n |= (uint32_t)c << (i * 8); }
-    return n <= INT32_MAX ? (int32_t)n : -1 - (int32_t)(UINT32_MAX - n);
+    uint32_t h = UINT32_C(0x379ADE);
+    int i;
+    if (mode == 0) {
+        for (i = 0; i < 0x16C8; ++i) {
+            h ^= (uint32_t)(int32_t)(int8_t)in[i];
+            if (in[i] != 0) h <<= (uint32_t)(i & 1);
+        }
+    } else if (mode == 1) {
+        for (i = 0; i < 0x16C8; ++i) h ^= (uint32_t)in[i] << (uint32_t)(i % 0x18);
+    }
+    return h;
 }
-static void put64(FILE *f, int64_t n)
-{ put32(f, (int32_t)((uint64_t)n & UINT32_MAX)); put32(f, (int32_t)((uint64_t)n >> 32)); }
-static int64_t get64(FILE *f)
+
+/* Little-endian accessors. The original is x86, so the record is native
+ * little-endian; these keep the port portable without changing the bytes. */
+static void put32(uint8_t *p, uint32_t v)
+{ p[0]=(uint8_t)v; p[1]=(uint8_t)(v>>8); p[2]=(uint8_t)(v>>16); p[3]=(uint8_t)(v>>24); }
+static uint32_t get32(const uint8_t *p)
+{ return (uint32_t)p[0] | (uint32_t)p[1]<<8 | (uint32_t)p[2]<<16 | (uint32_t)p[3]<<24; }
+static int32_t get32s(const uint8_t *p) { return (int32_t)get32(p); }
+
+void hero_record_encode(uint8_t out[HERO_RECORD_SIZE])
 {
-    uint64_t lo = (uint32_t)get32(f), hi = (uint32_t)get32(f);
-    uint64_t n = lo | hi << 32;
-    return n <= INT64_MAX ? (int64_t)n : -1 - (int64_t)(UINT64_MAX - n);
+    const Hero *h = &g_hero;
+    int i;
+    memset(out,0,HERO_RECORD_SIZE);
+    put32(out+R_INUSE,(uint32_t)(h->valid?1:0));
+    put32(out+R_SERIAL,(uint32_t)h->serial);
+    memcpy(out+R_NAME,h->name,HERO_NAME_MAX);
+    out[R_NAME+HERO_NAME_MAX]=0;
+    memcpy(out+R_SKIN,h->skin,sizeof(h->skin));
+    out[R_SKIN+sizeof(h->skin)]=0;
+    put32(out+R_CLASS,(uint32_t)h->klass);
+    put32(out+R_LEVEL,(uint32_t)h->level);
+    /* XP and gold are 32-bit in the record and each has a negated mirror; the
+     * loader rejects the file unless the pairs sum to zero (0x4181A2). */
+    put32(out+R_XP,(uint32_t)(int32_t)h->xp);
+    put32(out+R_XP_MIRROR,(uint32_t)(0u-(uint32_t)(int32_t)h->xp));
+    put32(out+R_GOLD,(uint32_t)(int32_t)h->gold);
+    put32(out+0x0974,(uint32_t)(0u-(uint32_t)(int32_t)h->gold));
+    put32(out+R_HP,(uint32_t)h->hp);
+    put32(out+R_MAXHP,(uint32_t)h->max_hp);
+    put32(out+R_MP,(uint32_t)h->mp);
+    put32(out+R_MAXMP,(uint32_t)h->max_mp);
+    put32(out+R_ATTACK,(uint32_t)hero_offense(h));
+    put32(out+0x0A60,(uint32_t)(0u-(uint32_t)hero_offense(h)));
+    put32(out+R_DEFENCE,(uint32_t)hero_defense(h));
+    put32(out+0x0A64,(uint32_t)(0u-(uint32_t)hero_defense(h)));
+    put32(out+R_MAP,(uint32_t)h->map);
+    for (i=0;i<8;++i) put32(out+R_EQUIP+4*i,(uint32_t)h->equip[i]);
+    put32(out+R_HANDITEM,(uint32_t)h->right_hand);
+    for (i=0;i<768;++i) bit_set(out+R_SPELLS,i,h->learned_spells[i]?1:0);
+    for (i=0;i<HERO_INVENTORY;++i) {
+        int id=i+1;
+        if (h->inventory[i].item_id!=id || h->inventory[i].count<=0) continue;
+        if (id<0x400) out[R_ITEMCNT+id]=(uint8_t)(h->inventory[i].count>100?100:h->inventory[i].count);
+        else bit_set(out+R_ITEMBIT,id-0x400,1);
+    }
+    put32(out+R_LINK,(uint32_t)h->link);
+    put32(out+R_PP,(uint32_t)(int32_t)h->pp);
+    put32(out+R_PP_MIRROR,(uint32_t)(0u-(uint32_t)(int32_t)h->pp));
+    put32(out+R_HAND,(uint32_t)(h->right_hand?1:0));
+    put32(out+R_GENDER,(uint32_t)h->gender);
+    for (i=0;i<HERO_ABILITIES;++i) put32(out+R_ABILITIES+4*i,(uint32_t)h->ability[i]);
+    put32(out+R_DEATHS,(uint32_t)h->deaths);
+    put32(out+R_KILLS,(uint32_t)h->kills);
+    put32(out+R_INCARN,(uint32_t)h->incarnations);
+    put32(out+R_WORLDCRC,0);
+    for (i=0;i<8;++i) put32(out+R_ELEM_PP+4*i,(uint32_t)h->element_pp[i]);
+    for (i=0;i<8;++i) put32(out+R_HAND_PP+4*i,(uint32_t)h->hand_pp[i]);
+    put32(out+R_SECONDS,(uint32_t)h->seconds_played);
+    put32(out+R_SAVES,(uint32_t)h->saves);
+    put32(out+R_CKSUM_MODE,1);
+    for (i=0;i<HERO_TOKENS;++i) if (h->tokens[i]) bit_set(out+R_TOKENS,i,1);
+    put32(out+R_HAND_RATIO,(uint32_t)100);
+    put32(out+R_MAXHP_RAW,(uint32_t)800000);
+    put32(out+R_HUNTING,(uint32_t)h->hunting);
+    put32(out+R_HALO,0);
+    put32(out+R_MAXPP,(uint32_t)h->pp);
+    for (i=0;i<128;++i) put32(out+R_TROPHY+4*i,h->trophy_bag[i]);
+    put32(out+R_TROPHY_GEO,h->trophy_bag_geo);
+    put32(out+R_PET0,h->pet_ids[0]);
+    put32(out+R_PET1,h->pet_ids[1]);
+    put32(out+R_CKSUM,hero_record_checksum(out,1));
+}
+
+int hero_record_decode(const uint8_t in[HERO_RECORD_SIZE], Hero *out)
+{
+    Hero v;
+    int i, mode;
+    size_t k;
+    /* FUN_004181A2, all.c:17228-17247, in the original's order: the checksum
+     * must match, and both mirror pairs must sum to zero. A record that fails
+     * either is not a hero file and is rejected outright. */
+    mode = get32s(in+R_CKSUM_MODE);
+    if (hero_record_checksum(in,mode)!=get32(in+R_CKSUM)) return -1;
+    if (get32s(in+R_XP)+get32s(in+R_XP_MIRROR)!=0) return -1;
+    if (get32s(in+R_PP)+get32s(in+R_PP_MIRROR)!=0) return -1;
+    memset(&v,0,sizeof(v));
+    v.serial = get32s(in+R_SERIAL);
+    memcpy(v.name,in+R_NAME,HERO_NAME_MAX); v.name[HERO_NAME_MAX]=0;
+    memcpy(v.skin,in+R_SKIN,sizeof(v.skin)); v.skin[sizeof(v.skin)]=0;
+    v.klass = get32s(in+R_CLASS);
+    v.level = get32s(in+R_LEVEL);
+    v.xp    = get32s(in+R_XP);
+    v.gold  = get32s(in+R_GOLD);
+    v.hp = get32s(in+R_HP); v.max_hp = get32s(in+R_MAXHP);
+    v.mp = get32s(in+R_MP); v.max_mp = get32s(in+R_MAXMP);
+    v.map  = get32s(in+R_MAP);
+    v.link = get32s(in+R_LINK);
+    v.pp   = get32s(in+R_PP);
+    v.kills  = get32s(in+R_KILLS);
+    v.deaths = get32s(in+R_DEATHS);
+    v.incarnations = get32s(in+R_INCARN);
+    v.saves = get32s(in+R_SAVES);
+    v.hunting = get32s(in+R_HUNTING);
+    v.seconds_played = get32s(in+R_SECONDS);
+    for (i=0;i<8;++i) {
+        v.equip[i]=get32s(in+R_EQUIP+4*i);
+        v.element_pp[i]=get32s(in+R_ELEM_PP+4*i);
+        v.hand_pp[i]=get32s(in+R_HAND_PP+4*i);
+    }
+    v.right_hand = get32s(in+R_HANDITEM);
+    v.gender = get32s(in+R_GENDER);
+    for (i=0;i<HERO_ABILITIES;++i) v.ability[i]=get32s(in+R_ABILITIES+4*i);
+    for (i=0;i<768;++i) v.learned_spells[i]=(unsigned char)bit_get(in+R_SPELLS,i);
+    for (i=0;i<HERO_TOKENS;++i) v.tokens[i]=(unsigned char)bit_get(in+R_TOKENS,i);
+    for (i=0;i<HERO_INVENTORY;++i) {
+        int id=i+1;
+        int n = id<0x400 ? in[R_ITEMCNT+id] : bit_get(in+R_ITEMBIT,id-0x400);
+        v.inventory[i].item_id=n?id:0;
+        v.inventory[i].count=n;
+    }
+    for (i=0;i<128;++i) v.trophy_bag[i]=get32(in+R_TROPHY+4*i);
+    v.trophy_bag_geo=get32(in+R_TROPHY_GEO);
+    v.pet_ids[0]=get32(in+R_PET0);
+    v.pet_ids[1]=get32(in+R_PET1);
+    /* FUN_004181A2 zeroes the six RAM-only fields the moment the bytes land, so
+     * a decoded hero never carries a stale pointer. Nothing here ever held one
+     * (Hero has no pointer members), so the loop exists to keep the list and
+     * the rule in one place. */
+    for (k=0;k<sizeof(ram_only)/sizeof(ram_only[0]);++k) (void)ram_only[k];
+    if (!memchr(v.name,0,HERO_NAME_MAX) || !memchr(v.skin,0,sizeof(v.skin))) return -1;
+    if (!safe_name(v.name) || v.level<1 || v.level>100 || v.xp<0 || v.gold<0 || v.pp<0) return -1;
+    if (v.max_hp<1 || v.hp<0 || v.hp>v.max_hp || v.max_mp<0 || v.mp<0 || v.mp>v.max_mp) return -1;
+    if (v.map<0 || v.map>=WORLD_MAX_MAPS || v.link<0 || v.link>=OBL_RECORDS) return -1;
+    if (v.gender<0 || v.gender>3) return -1;
+    if (v.right_hand<0 || v.right_hand>=WORLD_MAX_ITEMS) return -1;
+    for (i=0;i<HERO_ABILITIES;++i) if (v.ability[i]<0 || v.ability[i]>255) return -1;
+    for (i=0;i<8;++i) {
+        if (v.equip[i]<0 || v.equip[i]>=WORLD_MAX_ITEMS) return -1;
+        if (v.hand_pp[i]<0 || v.hand_pp[i]>5000000) return -1;
+        if (v.element_pp[i]<0 || v.element_pp[i]>5000000) return -1;
+    }
+    for (i=0;i<HERO_INVENTORY;++i) {
+        const HeroItem *item=&v.inventory[i];
+        if (item->count<0 || item->count>(i+1>=0x400?1:100)) return -1;
+        if (item->item_id!=(item->count?i+1:0)) return -1;
+    }
+    if (!hero_class(&v) || !hero_class(&v)->used) return -1;
+    v.valid=1;
+    for (i=HERO_SLOT_HELMET;i<=HERO_SLOT_RIGHT_HAND;++i) {
+        int id=hero_equipped(&v,i);
+        if (id && (hero_item_slot(id)!=i || !hero_item_count(&v,id))) return -1;
+    }
+    *out=v;
+    return 0;
 }
 
 int hero_save(const Hero *h)
 {
-    char path[1024]; FILE *f; int i, failed;
-    if (!h->valid || save_path(path, sizeof(path), h->name, 1)) return -1;
-    f = plat_fopen(path, "wb"); if (!f) return -1;
-    fwrite("WSH3", 1, 4, f);
-    fwrite(h->name, 1, sizeof(h->name), f); fwrite(h->skin, 1, sizeof(h->skin), f);
-    put32(f,h->gender); put32(f,h->klass); put32(f,h->level);
-    put64(f,h->xp); put64(f,h->gold);
-    put32(f,h->hp); put32(f,h->max_hp); put32(f,h->mp); put32(f,h->max_mp);
-    for (i=0;i<HERO_ABILITIES;++i) put32(f,h->ability[i]);
-    put32(f,h->right_hand);
-    for (i=0;i<8;++i) put32(f,h->equip[i]);
-    for (i=0;i<8;++i) put32(f,h->hand_pp[i]);
-    for (i=0;i<8;++i) put32(f,h->element_pp[i]);
-    put64(f,h->pp); put32(f,(int32_t)h->ailments);
-    for (i=0;i<HERO_INVENTORY;++i) { put32(f,h->inventory[i].item_id); put32(f,h->inventory[i].count); }
-    fwrite(h->tokens,1,HERO_TOKENS,f);
-    fwrite(h->learned_spells,1,sizeof(h->learned_spells),f);
-    put32(f,h->map); put32(f,h->link); put32(f,h->x); put32(f,h->y);
-    failed = ferror(f); if (fclose(f)) failed = 1;
+    char path[1024]; FILE *f; uint8_t rec[HERO_RECORD_SIZE]; size_t n; int failed;
+    if (!h->valid || hero_path(path,sizeof(path),h->name,HERO_FILE_EXT,1)) return -1;
+    /* FUN_00417F1B mirrors the 33-int selected-element block out of the global,
+     * bumps the seconds and the save counter, forces the checksum mode to 1 and
+     * stores the checksum, all before the single 0x16CC-byte fwrite. The block
+     * and the counter are already current in g_hero, so only the mode and the
+     * checksum are set here; the record is built from the caller's hero when it
+     * is g_hero and from a temporary copy otherwise. */
+    if (h==&g_hero) hero_record_encode(rec);
+    else { Hero save=g_hero; g_hero=*h; hero_record_encode(rec); g_hero=save; }
+    f = plat_fopen(path,"wb"); if (!f) return -1;
+    n = fwrite(rec,1,HERO_RECORD_SIZE,f);
+    failed = (n!=HERO_RECORD_SIZE) || ferror(f); if (fclose(f)) failed = 1;
+    if (!failed) { g_hero.saves++; wos_log_event("hero_save","name=%s bytes=%d",h->name,(int)n); }
     return failed ? -1 : 0;
 }
 
 int hero_load(Hero *h, const char *name)
 {
-    Hero v = {0}; char path[1024], magic[4]; FILE *f; int i, failed;
-    if (save_path(path,sizeof(path),name,0)) return -1;
-    f=plat_fopen(path,"rb"); if (!f) return -1;
-    if (fread(magic,1,4,f)!=4 || memcmp(magic,"WSH3",4)) { fclose(f); return -1; }
-    if (fread(v.name,1,sizeof(v.name),f)!=sizeof(v.name) ||
-        fread(v.skin,1,sizeof(v.skin),f)!=sizeof(v.skin)) { fclose(f); return -1; }
-    v.gender=get32(f); v.klass=get32(f); v.level=get32(f);
-    v.xp=get64(f); v.gold=get64(f);
-    v.hp=get32(f); v.max_hp=get32(f); v.mp=get32(f); v.max_mp=get32(f);
-    for(i=0;i<HERO_ABILITIES;++i) v.ability[i]=get32(f);
-    v.right_hand=get32(f);
-    for(i=0;i<8;++i) v.equip[i]=get32(f);
-    for(i=0;i<8;++i) v.hand_pp[i]=get32(f);
-    for(i=0;i<8;++i) v.element_pp[i]=get32(f);
-    v.pp=get64(f); v.ailments=(uint32_t)get32(f);
-    for(i=0;i<HERO_INVENTORY;++i) { v.inventory[i].item_id=get32(f); v.inventory[i].count=get32(f); }
-    if(fread(v.tokens,1,HERO_TOKENS,f)!=HERO_TOKENS) { fclose(f); return -1; }
-    if(fread(v.learned_spells,1,sizeof(v.learned_spells),f)!=sizeof(v.learned_spells)) { fclose(f); return -1; }
-    v.map=get32(f); v.link=get32(f); v.x=get32(f); v.y=get32(f);
-    failed=ferror(f)||feof(f); fclose(f);
-    if(failed || !memchr(v.name,0,sizeof(v.name)) || !memchr(v.skin,0,sizeof(v.skin)) ||
-       !safe_name(v.name) || text_casecmp(v.name,name) || !hero_class(&v) || !hero_class(&v)->used ||
-       v.gender<0 || v.gender>3 || v.level<1 || v.level>100 || v.xp<0 || v.gold<0 || v.pp<0 ||
-       v.max_hp<1 || v.hp<0 || v.hp>v.max_hp || v.max_mp<0 || v.mp<0 || v.mp>v.max_mp ||
-       v.map<0 || v.map>=WORLD_MAX_MAPS || v.link<0 || v.link>=OBL_RECORDS ||
-       v.right_hand<0 || v.right_hand>=WORLD_MAX_ITEMS) return -1;
-    for(i=0;i<HERO_ABILITIES;++i) if(v.ability[i]<0 || v.ability[i]>255) return -1;
-    for(i=0;i<8;++i) if(v.equip[i]<0 || v.equip[i]>=WORLD_MAX_ITEMS) return -1;
-    for(i=0;i<8;++i) if(v.hand_pp[i]<0 || v.hand_pp[i]>5000000) return -1;
-    for(i=0;i<8;++i) if(v.element_pp[i]<0 || v.element_pp[i]>5000000) return -1;
-    for(i=0;i<HERO_INVENTORY;++i) {
-        const HeroItem *item=&v.inventory[i];
-        if(item->count<0 || item->count>(i+1>=1024?1:100) ||
-           item->item_id!=(item->count?i+1:0)) return -1;
-    }
-    for(i=0;i<WORLD_MAX_SPELLS;++i) if(v.learned_spells[i]>1) return -1;
-    if(v.ailments & ~UINT32_C(0x01fffffc)) return -1;
-    v.valid=1;
-    for(i=HERO_SLOT_HELMET;i<=HERO_SLOT_RIGHT_HAND;++i) {
-        int id=hero_equipped(&v,i);
-        if(id && (hero_item_slot(id)!=i || !hero_item_count(&v,id))) return -1;
-    }
+    char path[1024]; FILE *f; uint8_t rec[HERO_RECORD_SIZE]; Hero v; size_t n; int failed;
+    if (hero_path(path,sizeof(path),name,HERO_FILE_EXT,0)) return -1;
+    f = plat_fopen(path,"rb"); if (!f) return -1;
+    n = fread(rec,1,HERO_RECORD_SIZE,f);
+    failed = ferror(f) || n!=HERO_RECORD_SIZE;
+    fclose(f);
+    if (failed || hero_record_decode(rec,&v)) return -1;
+    if (text_casecmp(v.name,name)) return -1;
     *h=v; scene_reset_timers(); return 0;
 }
 
+int hero_delete(const char *name)
+{
+    char path[1024];
+    if (hero_path(path,sizeof(path),name,HERO_FILE_EXT,0)) return -1;
+    if (remove(path)) return -1;
+    wos_log_event("hero_purge","name=%s",name);
+    return 0;
+}
+
 typedef struct { char (*names)[HERO_NAME_MAX]; int count, max; } SaveList;
+/* FUN_00477060 (all.c:0x477060) lists savedHeroes and truncates each entry at
+ * its LAST '.', which is how "Bob.her" becomes "Bob". */
 static void save_entry(const char *name,int is_dir,void *user)
 {
-    SaveList *l=user; size_t n=strlen(name);
-    if(is_dir || n<5 || n-4>=HERO_NAME_MAX || text_casecmp(name+n-4,".wsh") || l->count>=l->max) return;
-    memcpy(l->names[l->count],name,n-4); l->names[l->count][n-4]=0;
-    if(safe_name(l->names[l->count])) ++l->count;
+    SaveList *l=user; const char *dot;
+    size_t n=strlen(name);
+    if (is_dir || l->count>=l->max) return;
+    dot = strrchr(name,'.');
+    if (!dot || dot==name) return;
+    n = (size_t)(dot-name);
+    if (n>=HERO_NAME_MAX) return;
+    memcpy(l->names[l->count],name,n); l->names[l->count][n]=0;
+    if (safe_name(l->names[l->count])) ++l->count;
 }
 static int compare_names(const void *a,const void *b) { return text_casecmp(a,b); }
 int hero_list_saves(char names[][HERO_NAME_MAX],int max)
 {
     char path[1024]; SaveList l={names,0,max};
-    if(max<=0 || save_path(path,sizeof(path),NULL,0)) return 0;
+    if (max<=0 || hero_path(path,sizeof(path),NULL,NULL,0)) return 0;
     plat_list_dir(path,save_entry,&l);
     qsort(names,(size_t)l.count,HERO_NAME_MAX,compare_names); return l.count;
 }
@@ -414,40 +654,6 @@ int hero_unequip(Hero *h, int slot)
     return 1;
 }
 
-int hero_use_item(Hero *h, int id, int ability)
-{
-    const ItemDef *item = hero_item(id);
-    const ClassDef *c = hero_class(h);
-    int hp, mp, points, cap;
-    if (!c || !item_requirements(h,item) || !hero_item_count(h,id)) return 0;
-    if (item->klass == 0) {
-        hp = item->hp; mp = item->mp;
-        /* FUN_004A6353: poisoning reduces positive potion healing to one HP. */
-        if (hp > 0 && (h->ailments & (1u << 2))) hp = 1;
-        if (h->hp > 0 || hp == 1) {
-            h->hp = bounded_stat((int64_t)h->hp + hp);
-            if (h->hp > h->max_hp) h->hp = h->max_hp;
-        }
-        h->mp = bounded_stat((int64_t)h->mp + mp);
-        if (h->mp > h->max_mp) h->mp = h->max_mp;
-    } else if (item->klass == 1) {
-        int disease = item->ability_points;
-        if (disease > -2 || disease < -24) return 0;
-        h->ailments &= ~(UINT32_C(1) << -disease);
-    } else if (item->klass >= 100 && item->klass <= 105) {
-        if (item->klass != 105) ability = item->klass - 100;
-        if (ability < 0 || ability >= HERO_ABILITIES) return 0;
-        cap = c->max_ability[ability];
-        if (cap > 255) cap = 255;
-        points = item->ability_points;
-        if (points > cap - h->ability[ability]) points = cap - h->ability[ability];
-        if (points > 0) h->ability[ability] += points;
-    } else return 0;
-    hero_take_item(h,id,1);
-    wos_log_event("item_use","item=%d hp=%d mp=%d",id,h->hp,h->mp);
-    return 1;
-}
-
 static int equipment_stat(const Hero *h, int offense)
 {
     int slot;
@@ -571,4 +777,285 @@ int hero_set_spell(Hero *h, int id, int known)
     if (!h || !h->valid || id <= 0 || id >= WORLD_MAX_SPELLS || !g_world.spells[id].used) return 0;
     h->learned_spells[id] = known != 0;
     return 1;
+}
+/* ------------------------------------------------- the per-hero INI --------
+ * One file per soul, "<save>/<world>/savedHeroes/<Name>" (FUN_00460962 with the
+ * empty extension in DAT_004DCBAC, so Windows drops the trailing dot). It holds
+ * the quest cookie jar in [cookies] (FUN_0047A9F5 reads it, FUN_0047AB07 writes
+ * it, both _stricmp on the key) and the per-monster tallies in the three
+ * sections FUN_0043B0FD names: "monsters killed", "killed by monster" and
+ * "monsters seen", each keyed by the decimal monster id (sprintf("%0d", id)).
+ *
+ * The port has no Win32 profile API, so the file is read whole, patched line by
+ * line in memory and rewritten. That is a storage detail, not a behaviour one:
+ * the section names, the key spelling and the case-insensitive lookup are the
+ * original's, so a file written here and a file written by the original are
+ * interchangeable. */
+#define INI_MAX_BYTES (64*1024)
+
+static int ini_file_path(char *path, size_t size)
+{
+    return g_hero.valid ? hero_path(path,size,g_hero.name,"",0) : -1;
+}
+
+/* Reads the whole INI into `buf` (always NUL-terminated) and returns its length,
+ * or -1 when the file does not exist. */
+static int ini_read(char *buf, size_t cap)
+{
+    char path[1024]; FILE *f; size_t n;
+    buf[0]=0;
+    if (ini_file_path(path,sizeof(path))) return -1;
+    f = plat_fopen(path,"rb"); if (!f) return -1;
+    n = fread(buf,1,cap-1,f);
+    if (ferror(f)) n = 0;
+    fclose(f);
+    buf[n]=0;
+    return (int)n;
+}
+
+static int ini_write(const char *buf, int len)
+{
+    char path[1024]; FILE *f; size_t n;
+    if (ini_file_path(path,sizeof(path))) return -1;
+    f = plat_fopen(path,"wb"); if (!f) return -1;
+    n = fwrite(buf,1,(size_t)len,f);
+    if (fclose(f) || n!=(size_t)len) return -1;
+    return 0;
+}
+
+/* Rewrites `key` inside [section]. An empty value deletes the key, which is what
+ * WritePrivateProfileStringA(section,key,NULL,path) does in FUN_0047AB07. */
+static int ini_patch(const char *section, const char *key, const char *value)
+{
+    static char buf[INI_MAX_BYTES];
+    char out[INI_MAX_BYTES];
+    char line[1200];
+    int len, olen=0, in_section=0, done=0;
+    const char *p, *nl;
+    len = ini_read(buf,sizeof(buf));
+    if (len<0) len=0;
+    out[0]=0;
+    p = buf;
+    while (*p && !done) {
+        nl = strchr(p,'\n');
+        if (!nl) nl = p+strlen(p);
+        if (nl>p && p[0]!=';' && p[0]!='#') {
+            const char *t = p;
+            while (t<nl && (*t==' ' || *t=='\t')) ++t;
+            if (*t=='[') {
+                char name[128]; size_t n = (size_t)(nl-t);
+                if (n>2 && t[n-1]==']') { n-=2; if (n>=sizeof(name)) n=sizeof(name)-1;
+                    memcpy(name,t+1,n); name[n]=0; in_section = !text_casecmp(name,section); }
+            } else if (in_section) {
+                const char *eq = memchr(t,'=',(size_t)(nl-t));
+                if (eq) {
+                    char k[256]; size_t n = (size_t)(eq-t);
+                    while (n && (t[n-1]==' ' || t[n-1]=='\t')) --n;
+                    if (n>=sizeof(k)) n=sizeof(k)-1;
+                    memcpy(k,t,n); k[n]=0;
+                    if (!text_casecmp(k,key)) {
+                        done = 1;
+                        if (*value) {
+                            snprintf(line,sizeof(line),"%s=%s\n",key,value);
+                            if (olen+(int)strlen(line)<(int)sizeof(out))
+                                olen += snprintf(out+olen,sizeof(out)-olen,"%s",line);
+                        }
+                        continue; /* the old line is dropped, with or without a replacement */
+                    }
+                }
+            }
+        }
+        if (olen+(int)(nl-p)+1<(int)sizeof(out))
+            olen += snprintf(out+olen,sizeof(out)-olen,"%.*s\n",(int)(nl-p),p);
+        p = nl;
+        while (*p=='\n' || *p=='\r') ++p;
+    }
+    if (!done && *value) {
+        /* A key that was not there is appended, creating the section if it is
+         * missing. GetPrivateProfileString's empty-string default means a key
+         * with no value reads back as unset, which is what the port returns. */
+        const char *q; int have_section = 0;
+        for (q=out; (q=strchr(q,'['))!=NULL; ++q)
+            if (!text_casecmp(q+1,section)) { have_section = 1; break; }
+        if (!have_section)
+            olen += snprintf(out+olen,sizeof(out)-olen,"[%s]\n",section);
+        snprintf(line,sizeof(line),"%s=%s\n",key,value);
+        if (olen+(int)strlen(line)<(int)sizeof(out))
+            olen += snprintf(out+olen,sizeof(out)-olen,"%s",line);
+    }
+    return ini_write(out,olen);
+}
+
+/* FUN_0047A9F5: GetPrivateProfileString("cookies", key, "", out, size, path).
+ * The lookup is _stricmp on the key and the default is the empty string, so a
+ * key that is absent and a key with an empty value both read back as unset. */
+const char *hero_cookie_get(const char *key)
+{
+    static char buf[INI_MAX_BYTES];
+    static char out[1024];
+    const char *p = buf;
+    int in_section = 0;
+    if (!key || !*key || ini_read(buf,sizeof(buf))<0) return NULL;
+    while (*p) {
+        const char *nl = strchr(p,'\n');
+        size_t len = nl ? (size_t)(nl-p) : strlen(p);
+        while (len && (p[len-1]=='\r' || p[len-1]==' ' || p[len-1]=='\t')) --len;
+        if (len && p[0]=='[' && p[len-1]==']') {
+            char name[128]; size_t n = len-2;
+            if (n>=sizeof(name)) n=sizeof(name)-1;
+            memcpy(name,p+1,n); name[n]=0;
+            in_section = !text_casecmp(name,"cookies");
+        } else if (in_section && len && p[0]!=';' && p[0]!='#') {
+            const char *eq = memchr(p,'=',len);
+            if (eq) {
+                char k[256]; size_t n = (size_t)(eq-p);
+                if (n<sizeof(k)) {
+                    memcpy(k,p,n); k[n]=0;
+                    while (n && (k[n-1]==' '||k[n-1]=='\t')) k[--n]=0;
+                    if (!text_casecmp(k,key)) {
+                        const char *v = eq+1; size_t vn = (size_t)(p+len-v);
+                        while (vn && (v[vn-1]==' '||v[vn-1]=='\t')) --vn;
+                        if (!vn) return NULL;   /* the empty default, i.e. unset */
+                        if (vn>=sizeof(out)) vn=sizeof(out)-1;
+                        memcpy(out,v,vn); out[vn]=0;
+                        return out;
+                    }
+                }
+            }
+        }
+        if (!nl) break;
+        p = nl+1;
+    }
+    return NULL;
+}
+
+int hero_cookie_set(const char *key, const char *value)
+{
+    if (!key || !*key) return -1;
+    return ini_patch("cookies",key,value && *value?value:"");
+}
+
+void hero_cookie_del(const char *key)
+{
+    if (key && *key) (void)ini_patch("cookies",key,"");
+}
+
+uint32_t hero_kills_total(void)  { return (uint32_t)g_hero.kills; }
+uint32_t hero_deaths_total(void) { return (uint32_t)g_hero.deaths; }
+int hero_add_kill(Hero *h)       { return h ? (h->kills += 1) : 0; }
+int hero_add_kills(Hero *h, int n) { return h ? (h->kills += n) : 0; }
+int hero_add_death(Hero *h)      { return h ? (h->deaths += 1) : 0; }
+
+static int monster_key(char *key, size_t size, int monster_id)
+{ return snprintf(key,size,"%0d",monster_id)<0?-1:0; }
+
+static int tally_get(const char *section, int monster_id, int fallback)
+{
+    char key[32], path[1024]; FILE *f; char line[512]; int value = fallback;
+    if (monster_key(key,sizeof(key),monster_id) || ini_file_path(path,sizeof(path))) return fallback;
+    f = plat_fopen(path,"rb"); if (!f) return fallback;
+    while (fgets(line,sizeof(line),f)) {
+        char *eq, *ke;
+        if (line[0]!='[') continue;
+        eq = strchr(line,']');
+        if (!eq) continue;
+        line[eq-line]=0;
+        if (text_casecmp(line+1,section)) continue;
+        while (fgets(line,sizeof(line),f)) {
+            if (line[0]=='[') break;
+            eq = strchr(line,'=');
+            if (!eq) continue;
+            *eq=0; ke = eq;
+            while (ke>line && (ke[-1]==' '||ke[-1]=='\t')) --ke;
+            *ke=0;
+            if (text_casecmp(line,key)) continue;
+            value = (int)strtol(eq+1,NULL,10);
+            break;
+        }
+        break;
+    }
+    fclose(f);
+    return value;
+}
+
+static int tally_add(const char *section, int monster_id)
+{
+    char key[32]; int value;
+    if (monster_key(key,sizeof(key),monster_id)) return 0;
+    value = tally_get(section,monster_id,0)+1;
+    { char text[32]; snprintf(text,sizeof(text),"%d",value); (void)ini_patch(section,key,text); }
+    return value;
+}
+
+int hero_kills_of_monster(int m)  { return tally_get("monsters killed",m,0); }
+int hero_deaths_by_monster(int m) { return tally_get("killed by monster",m,0); }
+int hero_monsters_seen(int m)      { return tally_get("monsters seen",m,-1); }
+int hero_kill_monster(int m)       { return tally_add("monsters killed",m); }
+int hero_killed_by_monster(int m)  { return tally_add("killed by monster",m); }
+
+/* ------------------------------------------------------------- the dump ---
+ * hero.record is the comparison unit: the whole 0x16CC record as lowercase
+ * hex, exactly as it sits in the file. The decoded fields exist so a human can
+ * read a diff; hero.abil.* are separate keys because Core asked for them by
+ * name. Nothing here allocates: one 0x16CC buffer and two small ones. */
+void hero_dump(DumpEmit emit, void *user)
+{
+    static uint8_t rec[HERO_RECORD_SIZE];
+    static char hex[HERO_RECORD_SIZE*2+1];
+    static char bag[1024];
+    static const char *const abil_name[HERO_ABILITIES] = {"str","wis","sta","agi","dex"};
+    const Hero *h = &g_hero;
+    int i, n = 0;
+    hero_record_encode(rec);
+    for (i=0;i<HERO_RECORD_SIZE;++i) {
+        static const char d[] = "0123456789abcdef";
+        hex[i*2]=d[rec[i]>>4]; hex[i*2+1]=d[rec[i]&15];
+    }
+    hex[HERO_RECORD_SIZE*2]=0;
+    emit("hero.record",hex,user);
+    if (!h->valid) { emit("hero.valid","0",user); return; }
+    emit("hero.valid","1",user);
+    emit("hero.name",h->name,user);
+    dump_emit_int(emit,"hero.in_use",h->valid,user);
+    dump_emit_int(emit,"hero.serial",h->serial,user);
+    dump_emit_int(emit,"hero.class",h->klass,user);
+    dump_emit_int(emit,"hero.level",h->level,user);
+    dump_emit_int(emit,"hero.gender",h->gender,user);
+    dump_emit_int(emit,"hero.xp",(long long)h->xp,user);
+    dump_emit_int(emit,"hero.gold",(long long)h->gold,user);
+    dump_emit_int(emit,"hero.pp",(long long)h->pp,user);
+    dump_emit_int(emit,"hero.hp",h->hp,user);
+    dump_emit_int(emit,"hero.max_hp",h->max_hp,user);
+    dump_emit_int(emit,"hero.mp",h->mp,user);
+    dump_emit_int(emit,"hero.max_mp",h->max_mp,user);
+    dump_emit_int(emit,"hero.map",h->map,user);
+    dump_emit_int(emit,"hero.link",h->link,user);
+    dump_emit_int(emit,"hero.x",h->x,user);
+    dump_emit_int(emit,"hero.y",h->y,user);
+    dump_emit_int(emit,"hero.kills",h->kills,user);
+    dump_emit_int(emit,"hero.deaths",h->deaths,user);
+    dump_emit_int(emit,"hero.incarnations",h->incarnations,user);
+    dump_emit_int(emit,"hero.hunting",h->hunting,user);
+    for (i=0;i<HERO_ABILITIES;++i) {
+        static char key[32];
+        snprintf(key,sizeof(key),"hero.abil.%s",abil_name[i]);
+        dump_emit_int(emit,key,h->ability[i],user);
+    }
+    snprintf(hex,sizeof(hex),"%08x",(unsigned)get32(rec+R_CKSUM));
+    emit("hero.checksum",hex,user);
+    /* The bag words are stored obfuscated; the dump reports what the owner sees. */
+    bag[0]=0;
+    for (i=0;i<128 && n<(int)sizeof(bag)-32;++i) {
+        uint32_t w = h->trophy_bag[i] ^ UINT32_C(0x1D43E217);
+        if (!w) continue;
+        n += snprintf(bag+n,sizeof(bag)-n,"%s%u:%u",n?",":"",
+                      (unsigned)((w>>16)&0xFFFF),(unsigned)((w>>8)&0xFF));
+    }
+    if (!n) snprintf(bag,sizeof(bag),"0");
+    emit("hero.trophy_bag",bag,user);
+    { uint32_t g = h->trophy_bag_geo ^ UINT32_C(0x1D43E217);
+      snprintf(hex,sizeof(hex),"%ux%u",(unsigned)(g>>16),(unsigned)(g&0xFFFF));
+      emit("hero.trophy_bag_size",hex,user); }
+    snprintf(hex,sizeof(hex),"%u,%u",(unsigned)h->pet_ids[0],(unsigned)h->pet_ids[1]);
+    emit("hero.pet_ids",hex,user);
 }

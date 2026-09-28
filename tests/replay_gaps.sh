@@ -4,6 +4,7 @@
 #   # seed: N                      (default 1)
 #   # requires: evt1 evt2 ...     (each must appear as "EVT <name>" in the log)
 #   # requires-match: REGEX       (repeatable; some log line must match "^EVT REGEX", grep -E)
+
 # A replay passes when wos exits 0 (all `expect`s met) and every required event was logged.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)

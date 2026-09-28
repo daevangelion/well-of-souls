@@ -1,0 +1,78 @@
+# seed: 1
+# requires: shop_buy item_use panel_open travel trophy_bag_resize
+# requires-match: panels\.kind=Trophy\ Bag item_html|item_html_missing
+# Item classes end to end: potion (class 0), travel ticket (class 4, item 99
+# "Ticket Home" = 4.0.0.0.1), the trophy bag (dialog 0xE7) and the pet pen.
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+# Three states before the Well, not two: 1 main menu -> 2 the
+# "Where Do You Want To Play Today?" splash (FUN_0041D31F) -> 3 the world
+# list (FUN_0041D717). The original's own table is FUN_0041B891 (all.c:21078);
+# the port used to collapse the splash, so the script had drifted. The extra
+# RETURN is the plan's keyboard shortcut for the row click (msg 0x474).
+key RETURN
+wait 30
+key n
+wait 5
+text Collector
+key RETURN
+expect hero_ready 300
+expect map_enter 600
+keydown DOWN
+expect scene_enter 180
+keyup DOWN
+wait 20
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 5
+key y
+wait 5
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+wait 3
+key RETURN
+expect panel_open 180
+key b
+expect shop_buy 60
+click 330 270
+key RIGHT
+key b
+expect shop_buy 60
+key ESCAPE
+click 435 82
+shot /tmp/wos-gap-itemuse-items.bmp
+# Inventory is sorted: potion, ticket, helmet. Class 0 first.
+key u
+expect item_use 60
+key RIGHT
+shot /tmp/wos-gap-itemuse-ticket.bmp
+# The trophy bag: 3x4 to start, then the num.TrophyBagWidth cookie grows it.
+key g
+expect panel_open 60
+shot /tmp/wos-gap-itemuse-bag.bmp
+key c
+key ESCAPE
+key p
+expect panel_open 60
+shot /tmp/wos-gap-itemuse-pen.bmp
+key ESCAPE
+# Class 4: FUN_0047A871 sends the hero to map 0 link 0, dropped in.
+key RIGHT
+key u
+expect travel 120
+expect map_enter 300
+shot /tmp/wos-gap-itemuse-travel.bmp
+quit

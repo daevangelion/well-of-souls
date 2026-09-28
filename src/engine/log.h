@@ -9,4 +9,7 @@ int wos_log_seen(const char *name);
 uint64_t wos_log_serial(void);
 /* Serial of the latest `name` event if newer than `serial`, else 0. */
 uint64_t wos_log_seen_since(const char *name, uint64_t serial);
+
+/* DumpEmit adapter: emits the pair as one `EVT <key>=<value>` line. */
+void log_emit(const char *key, const char *value, void *user);
 #endif

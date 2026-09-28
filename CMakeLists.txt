@@ -71,7 +71,20 @@ if(WOS_BUILD_TESTS)
         endif()
         target_link_libraries(${selftest} PRIVATE SDL2::SDL2 m)
     endforeach()
-
+    # editors_selftest drives the authoring editors and the chat dispatcher against a scratch
+    # copy of the retail data. It needs game_main.c's globals (game_data_path) and every game
+    # module (editors.c calls game_go_front), so it links the whole game except the SDL entry
+    # point and supplies its own main(). It must sit OUTSIDE the loop above, or the
+    # target is created once per iteration and add_executable fails on the duplicate.
+    set(WOS_SELFTEST_GAME ${WOS_ROOT_SOURCES} ${WOS_GAME_SOURCES})
+    add_executable(editors_selftest tests/editors_selftest.c
+        ${WOS_SELFTEST_GAME} ${WOS_SELFTEST_COMMON})
+    target_include_directories(editors_selftest PRIVATE src)
+    set_property(SOURCE tests/editors_selftest.c APPEND PROPERTY COMPILE_OPTIONS -Wall -Wextra -UNDEBUG)
+    if(WOS_WERROR)
+        set_property(SOURCE tests/editors_selftest.c APPEND PROPERTY COMPILE_OPTIONS -Werror)
+    endif()
+    target_link_libraries(editors_selftest PRIVATE SDL2::SDL2 m)
     # The self-tests assert against the extracted retail data. Register them as ctest
     # cases only when that data is present: a data-less CI run still compiles and links
     # them (regression coverage) but does not report failures it cannot legitimately judge.
@@ -80,6 +93,7 @@ if(WOS_BUILD_TESTS)
         foreach(selftest engine_selftest world_selftest)
             add_test(NAME ${selftest} COMMAND ${selftest} "${WOS_DATA_DIR}")
         endforeach()
+        add_test(NAME editors_selftest COMMAND editors_selftest "${WOS_DATA_DIR}")
         message(STATUS "wos: retail data at ${WOS_DATA_DIR}; self-tests registered with ctest")
     else()
         message(STATUS "wos: no retail data at ${WOS_DATA_DIR}; self-tests built but not registered")

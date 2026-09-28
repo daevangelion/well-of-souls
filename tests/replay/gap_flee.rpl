@@ -1,0 +1,188 @@
+# FUN_00436c9d: fleeing. Offline, DAT_00502b14 is 0 for an ordinary encounter and the Tactics
+# abandon dialog (FUN_00447431) returns 0, so the hero is NEVER given a timer escape: pressing F
+# while its combatant is still 0x2F is refused outright with "You attempt to flee... but are
+# dragged back".
+#
+# The only way out is the original's 30 % interrupt, and that window is narrower than it looks.
+# FUN_00436c9d returns "blocked" on its first test whenever the hero's own record is 0x2F, and
+# FUN_00490723 sets 0x2F on whichever combatant acted. So after the hero attacks, every later F in
+# that round is refused before the roll is ever reached; the roll is only live while a MONSTER's
+# attack is animating on the hero and the hero has not yet acted in that round. Hence: never press
+# A here, just keep pressing F and let the monsters swing.
+#
+# FUN_0041B891's own table (all.c:21078) has THREE states before the Well, not two:
+#   1 main menu -> 2 "Where Do You Want To Play Today?" (splash, art\where.jpg, FUN_0041D31F)
+#   2 -> 3 "Choose Your World" + the world list (art\chapter.jpg, FUN_0041D717)
+#   3 -> take the highlighted row (msg 0x474) -> the Pick-a-Soul window
+# RETURN is the plan's keyboard shortcut for the click.
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+key RETURN
+wait 30
+key n
+wait 5
+text Tester
+key RETURN
+expect hero_ready 300
+expect map_enter 600
+hold RIGHT 60
+keydown DOWN
+expect battle_start 1500
+keyup DOWN
+# Refused: the hero has not acted, so rec[0x38C] is still 0x2F and FUN_00436c9d returns blocked
+# on its first test, before DAT_00502b14 or the 30 % roll are ever consulted.
+key f
+expect battle_flee_failed 300
+# Poll F through the monsters' attack animations until the 30 % roll lets go.
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+key f
+wait 4
+expect battle_fled 300
+expect map_enter 600
+quit

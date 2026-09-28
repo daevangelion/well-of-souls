@@ -1,9 +1,15 @@
-/* Solo combat. Reference: Souls.exe FUN_00480499, FUN_00490e7c,
- * FUN_004a7794; docs/re/battle.md. All durations are fixed 60 Hz steps. */
+/* Solo combat. Reference: Souls.exe FUN_00480499, FUN_00490e7c, FUN_00490723, FUN_0048f913,
+ * FUN_0048f816, FUN_004904eb, FUN_004a7794, FUN_004a6974, FUN_00436c9d, FUN_0042b867,
+ * FUN_0042bb5c, FUN_00494fcd; docs/re/battle.md and docs/re/rng_calls.md section 2.3.
+ * All pacing is the original's GetTickCount arithmetic through clock_ms(); there is no frame
+ * model (docs/re/timing.md). Every rand() is one crt_rand() at the same point, in the same order. */
 #include "battle.h"
+#include "front.h"
 #include "game.h"
 #include "hero.h"
+#include "items.h"
 #include "scene.h"
+#include "../engine/clock.h"
 #include "../engine/font.h"
 #include "../engine/log.h"
 #include "../engine/rng.h"
@@ -16,31 +22,82 @@
 #include <string.h>
 
 enum { ACTORS = 144, ROUND_START = 5, ROUND_ACT = 6, ROUND_DAMAGE = 7,
-       ACTION_GATE = 30, ROUND_IDLE = 120, LUNGE_FRAMES = 60, FLOAT_FRAMES = 90 };
+       /* FUN_00490723: GetTickCount() - roundStart > 2000 with nobody acting ends the round. */
+       ROUND_IDLE_MS = 2000,
+       /* FUN_0048b17a: the hero may not commit during the first 500 ms of a round it is in. */
+       HERO_GATE_MS = 500,
+       /* FUN_0048f913: GetTickCount() - rec[0x45C] > 1999 before a monster may flee or wander. */
+       MONSTER_IDLE_MS = 2000,
+       /* FUN_0048fe80: scene[0x3E05C], the shared attack duration. */
+       PHYSICAL_MS = 1000, SPELL_MS = 4000, SPECIAL_MS = 1250,
+       /* Damage-number float. Presentation only. */
+       FLOAT_MS = 1500,
+       /* FUN_004a4d70 `default: *param_5 = 0x10`, the scatter radius of a physical attack. */
+       THROW_RADIUS = 16 };
+/* FUN_00436c9d: the hero cannot simply walk out of a fight. */
+enum { FLEE_LOCK_MS = 30000,        /* DAT_00502b14 == 1 or 2 (Tactics / PK)             */
+       FLEE_LOCK_FIGHT2_MS = 20000, /* DAT_00502b14 == 3 (FIGHT2), and only undecided    */
+       FLEE_INTERRUPT_PCT = 30 };   /* interrupting an attack already aimed at the hero */
+/* DAT_00502b14, the sticky-fight mode. Offline random encounters are 0. */
+enum { STICKY_NONE = 0, STICKY_TACTICS = 1, STICKY_PK = 2, STICKY_FIGHT2 = 3 };
+/* Combatant turn state, rec[+0x38C]. */
+enum { TURN_DONE = 0x2f, TURN_READY = 0x5f, TURN_COMMITTED = 0x94 };
+
 typedef struct {
     int id, ally, hp, max_hp, mp, level, offense, defense, ability[5], element;
     uint32_t ailments;
     int ability_shift[HERO_ABILITIES];
-    int xp, gold, x, y, ready, attacks, last_action, damage, floating;
+    int xp, gold, x, y, ready, attacks, damage, floating;
+    int last_action;      /* GetTickCount() of the last action, rec[0x47C] */
     int sheet_index;
+    int ability_a, ability_b; /* rec[0x440] / rec[0x444], the two combat abilities */
+    int rating;            /* rec[0x6D8], FUN_00491bb7's derived attack rating */
+    int owner;             /* rec[+4]: -1 monster, >0 player account */
+    int turn;             /* rec[+0x38C] */
+    int fled;             /* rec[+0x1B4]: already walking off, never re-rolled */
+    int participation;    /* rec[0x11A] */
+    uint32_t last_turn;   /* rec[+0x45C], GetTickCount() of the last turn */
 } Combatant;
 static struct {
     Combatant actors[ACTORS];
     Sheet sheets[ACTORS];
-    int count, sheets_count, state, frame, round_start, cursor, target;
+    int count, sheets_count, state, cursor, target;
+    uint32_t tick, round_start, anim_start, flee_lock, hp_gauge_start, mp_gauge_start;
     int queued, attacker, victim, animation, hp_gauge, mp_gauge, regen_start;
+    int duration_ms, bound_spell;
     int regen_initial, xp, gold, damage, attack_training;
     int spell, chosen_spell, spell_menu, spell_selection, spell_count, known[WORLD_MAX_SPELLS];
-    int mp_start, mp_initial, attack_pp, fizzle, duration, bound_spell;
+    int mp_start, mp_initial, attack_pp, attack_rating, fizzle, mods, sticky, pets, engaged;
+    int throw_item, throw_radius, target_x, target_y;   /* FUN_004a4d70 / FUN_004a3a54 */
+    int participation_total;  /* DAT_00502830 */
+    int scene_kills;          /* DAT_004e4874 + 0x3E034: monsters killed this fight */
+    int monster_kills[WORLD_MAX_MONSTERS]; /* DAT_00d2c7d8, zeroed with the fight block */
+    int auto_resurrect;       /* DAT_00502a48: one free solo resurrect, cleared once spent */
+    int killer_id;             /* DAT_00502b04: the monster that last struck the hero */
+    int decided;              /* FUN_0048fd90 has already returned non-zero */
     char message[96];
     BattleResult result;
     Rect view;
 } fight;
 
+static BattleSceneEvent scene_event;
+static int compute_rating(const Combatant *a);
+/* battle_set_pets() runs before battle_begin_ex(), which resets the fight block, so the FIGHT
+ * '+n' pet count has to live outside it. */
+static int pending_pets;
+
 static int clamp(int64_t n, int low, int high)
 {
     return n < low ? low : n > high ? high : (int)n;
 }
+/* Every rand() in the original is exactly one crt_rand() here, in the same order
+ * (docs/re/rng_calls.md section 2.3). */
+static int rand1(void) { return crt_rand(); }
+/* rand() % bound. Always exactly one crt_rand(), so the count never drifts. */
+static int roll(int bound) { int r = crt_rand(); return bound > 0 ? r % bound : 0; }
+/* GetTickCount() arithmetic; the virtual tick wraps like the original's 32-bit one. */
+static uint32_t tick_now(void) { return clock_ms(); }
+static int past(uint32_t t0, uint32_t ms) { return (int32_t)(tick_now() - t0) > (int32_t)ms; }
 /* FUN_004a761f: repeated debuffs divide, repeated buffs multiply. */
 static int ability(const Combatant *a, int kind)
 {
@@ -52,10 +109,6 @@ static void battle_music(const char *key)
 {
     const Map *map = game_current_map();
     game_music(world_music(map && map->def ? map->def->root : g_world.name,key));
-}
-static int roll(int bound)
-{
-    return (int)rng_bounded(game_rng(), (uint32_t)bound);
 }
 /* FUN_00479509: the scale row applies only percentages 1..500. */
 static int scale(int value, int pct)
@@ -102,6 +155,14 @@ static int first_enemy(void)
         if (!fight.actors[i].ally && fight.actors[i].hp > 0) return i;
     return -1;
 }
+/* FUN_004a6d32 counts the active spell effects. Counter 0 is the only one the fight path reads:
+ * it blocks fleeing, the wander step and the fear roll, and FUN_0048f816 and FUN_00436c9d both
+ * test it. The counters live in a runtime effect table (0x54-byte rows at DAT_005078a4, indexed
+ * by effect id through FUN_004a6a46) that a resource loader fills and the decompilation does not
+ * contain, so the per-effect rows are [UNVERIFIED]. The port keys the counter off the ailment bit
+ * the spell already set; bit 10 is the effect the flee paths guard on. */
+#define BATTLE_EFFECT_COWARD (1u<<10)
+static int cowardice(const Combatant *a) { return (a->ailments & BATTLE_EFFECT_COWARD) != 0; }
 static void spawn(int signed_id)
 {
     Combatant *a;
@@ -114,11 +175,22 @@ static void spawn(int signed_id)
     a = &fight.actors[fight.count];
     a->id = id;
     a->ally = signed_id < 0;
+    a->owner = -1;
+    a->ability_a = clamp(ability(a,ABIL_WIS)/4+50,0,100);  /* FUN_00480499 */
+    a->ability_b = 100;
+    a->turn = TURN_DONE;
+    a->fled = 0;
+    a->participation = 0;
     monster_stats(a, m);
+    /* FUN_00491e45: rec[0x11F] = GetTickCount() - rand()%5000 - 3000. One rand. */
+    a->last_action = (int)(tick_now() - (uint32_t)roll(5000) - 3000u);
     ordinal = (fight.count - 1) % 9;
-    /* Nine-slot formation; logical ground y>=128 (battle.md section 3/4). */
-    a->x = a->ally ? 55 + (ordinal % 3) * 36 : 210 + (ordinal % 3) * 48;
+    /* Nine-slot formation; logical ground y>=128 (battle.md section 3/4). Enemies walk in from
+     * off-screen left (FUN_00491e45 rec[0x9E] = -(rand()%64)); allies from the right edge
+     * (FUN_00480499 rec[0x9E] = FUN_0048b13c() + rand()%32). One rand each way. */
+    a->x = a->ally ? 360 + roll(32) : -roll(64);
     a->y = 152 + (ordinal / 3) * 40;
+    a->last_turn = tick_now();
     a->sheet_index = -1;
     for (i = 1; i < fight.count; ++i) {
         const MonsterDef *other = &g_world.monsters[fight.actors[i].id];
@@ -129,60 +201,90 @@ static void spawn(int signed_id)
         if (!strcmp(m->skin,"mirror")) sheet_load_skin(&fight.sheets[a->sheet_index],g_hero.skin);
         else sheet_load_monster(&fight.sheets[a->sheet_index],m->skin);
     }
-    /* FUN_00491e45 initializes monsters' last-action tick to
-     * now - rand()%5000 - 3000, not a full eight-second charge. */
-    a->last_action = -(180 + roll(300));
     wos_log_event("battle_actor","slot=%d monster=%d hp=%d level=%d offense=%d defense=%d str=%d sta=%d charge=%d",
                   fight.count,id,a->hp,a->level,a->offense,a->defense,
-                  a->ability[ABIL_STR],a->ability[ABIL_STA],-a->last_action);
+                  a->ability[ABIL_STR],a->ability[ABIL_STA],
+                  (int)(tick_now()-(uint32_t)a->last_action));
     ++fight.count;
 }
-static void random_group(int difficulty, int distance_pct)
+/* FUN_00464daf: the .mon proximity resolver. Inside a placement's radius the monster is spawned on
+ * a 25 % roll; inside half of it a second copy on a 15 % roll; inside a quarter a third on 5 %.
+ * The two falloff fractions are 0.5 and 0.25 (_DAT_004cd548 / _DAT_004cd578, read from .data).
+ * Nothing spawned: the NEAREST valid placement, else monster id 1. */
+static int map_group(void)
+{
+    const Map *map = game_current_map();
+    int i, before = fight.count, closest = -1;
+    int64_t best = INT64_MAX;
+    if (map) {
+        for (i = 0; i < map->mon_count && i < MON_RECORDS; ++i) {
+            int id = map->mons[i].monster_id;
+            int64_t dx = ((int64_t)map->mons[i].x - g_hero.x) * 256;
+            int64_t dy = ((int64_t)map->mons[i].y - g_hero.y) * 256;
+            int64_t d2 = dx*dx + dy*dy, r = (int64_t)map->mons[i].radius * 256;
+            if (id <= 0 || id >= WORLD_MAX_MONSTERS || !g_world.monsters[id].used) continue;
+            if (r > 0 && d2 < r*r) {
+                if (roll(100) < 25) spawn(id);
+                if (d2 < r*r/2) { spawn(id); if (roll(100) < 15) spawn(id); }
+                if (d2 < r*r/4) { spawn(id); if (roll(100) < 5) spawn(id); }
+            }
+            if (d2 < best) { best = d2; closest = id; }
+        }
+    }
+    if (fight.count != before) return 1;
+    if (closest > 0) { spawn(closest); return 1; }
+    spawn(1);
+    return 1;
+}
+/* FUN_0049099b: groups.txt by the link's signed difficulty. `pct` is the clamped 20..80
+ * inclusion chance, already inverted for a negative difficulty by the map module. */
+static int groups_group(int difficulty, int pct)
 {
     const GroupDef *group;
-    const Map *map;
-    int i, n, all, before = fight.count;
-    if (difficulty == INT_MIN) return;
+    int i, n, before = fight.count, all;
+    if (difficulty == INT_MIN) return 0;
     if (difficulty < 0) difficulty = -difficulty;
     if (difficulty < WORLD_MAX_GROUPS && g_world.groups[difficulty].used && difficulty) {
         group = &g_world.groups[difficulty];
         n = clamp(group->count,0,GROUP_MAX_MEMBERS);
-        all = g_world.groups[0].count > 0 && g_world.groups[0].members[0] != 0;
-        /* FUN_0049099b: MapView supplies the clamped/sign-adjusted chance. */
-        for (i = 0; i < n; ++i) if (all || roll(100) < distance_pct) spawn(group->members[i]);
+        all = g_world.groups[0].used && g_world.groups[0].count > 0; /* DAT_00502a38 */
+        for (i = 0; i < n; ++i) if (all || roll(100) < pct) spawn(group->members[i]);
         if (fight.count == before && n) {
             int start = roll(n);
             for (i = 0; i < n && fight.count == before; ++i) spawn(group->members[(start+i)%n]);
         }
     }
-    if (fight.count != before) return;
-    map = game_current_map();
-    if (map && map->mon_count > 0) {
-        int closest = -1;
-        int64_t distance = INT64_MAX;
-        for (i = 0; i < map->mon_count && i < MON_RECORDS; ++i) {
-            int id = map->mons[i].monster_id;
-            int64_t x = (int64_t)map->mons[i].x-g_hero.x, y = (int64_t)map->mons[i].y-g_hero.y;
-            if (id > 0 && id < WORLD_MAX_MONSTERS && g_world.monsters[id].used && x*x+y*y < distance) {
-                closest = id; distance = x*x+y*y;
-            }
-        }
-        if (closest > 0) spawn(closest);
-    }
-    if (fight.count == before) spawn(1); /* FUN_00464daf fallback. */
+    return fight.count != before;
 }
-void battle_begin(const int *ids, int count, int difficulty, int distance_pct)
+void battle_set_pets(int pets)
+{
+    pending_pets = pets < 0 ? 0 : pets;
+}
+void battle_set_scene_event(BattleSceneEvent fn) { scene_event = fn; }
+/* FUN_0048e19a clears the fight block and the per-fight kill table, and jitters the block's
+ * base with one rand: `rand()%0x3E0A0 & 0xFFFFFFF0`. */
+void battle_begin_ex(const int *ids, int count, int difficulty, int distance_pct, unsigned mods)
 {
     Combatant *hero;
     int i;
     for (i = 0; i < fight.sheets_count; ++i) sheet_free(&fight.sheets[i]);
     memset(&fight,0,sizeof fight);
+    rand1(); /* FUN_0048e19A: rand()%0x3E0A0 & 0xFFFFFFF0 */
     fight.view = (Rect){0,0,364,416};
     fight.count = fight.sheets_count = 1;
     fight.state = ROUND_START;
     fight.result = BATTLE_RUNNING;
     fight.attacker = fight.victim = -1;
-    fight.hp_gauge = fight.mp_gauge = fight.regen_initial = 25;
+    fight.engaged = 1;              /* state 4 sets scene[0x78] = 1 */
+    fight.auto_resurrect = 1;      /* DAT_00502a48 */
+    fight.mods = mods | (pending_pets > 0 ? (unsigned)BATTLE_MOD_PET_HATE : 0u);
+    fight.pets = pending_pets;
+    fight.sticky = (mods & BATTLE_MOD_STICKY) ? STICKY_FIGHT2 : STICKY_NONE;
+    fight.tick = tick_now();
+    fight.round_start = fight.flee_lock = fight.tick;  /* _DAT_00502b18 */
+    fight.hp_gauge_start = fight.mp_gauge_start = fight.tick; /* _DAT_004f91cc / d0 */
+    fight.hp_gauge = fight.mp_gauge = 25;
+    fight.regen_initial = 25;
     fight.mp_initial = 25;
     distance_pct = clamp(distance_pct,0,100);
     hero = &fight.actors[0];
@@ -196,16 +298,79 @@ void battle_begin(const int *ids, int count, int difficulty, int distance_pct)
     hero->x = 80; hero->y = 204;
     hero->offense = hero_offense(&g_hero);
     hero->defense = hero_defense(&g_hero);
+    hero->turn = TURN_DONE;
+    hero->owner = 1;                     /* solo: the local player's account id */
+    hero->ability_a = 100;
+    hero->ability_b = 100;
+    hero->rating = compute_rating(hero);
     sheet_load_skin(&fight.sheets[0],g_hero.skin);
-    if (count > 0 && ids) for (i = 0; i < count && i < ACTORS-1; ++i) spawn(ids[i]);
-    else random_group(difficulty,distance_pct);
+    if (count > 0 && ids) {
+        for (i = 0; i < count && i < ACTORS-1; ++i) spawn(ids[i]);
+        /* FIGHT * (0x47f9c8): the listed monsters PLUS the normal random encounter. */
+        if (mods & BATTLE_MOD_RANDOM) {
+            int map_ids[GROUP_MAX_MEMBERS+1], map_count = 0;
+            int map_diff = difficulty, map_pct = distance_pct;
+            game_take_pending_fight(map_ids,GROUP_MAX_MEMBERS+1,&map_diff,&map_pct);
+            if (map_count) { int k; for (k = 0; k < map_count; ++k) spawn(map_ids[k]); }
+            else if (!groups_group(map_diff,map_pct)) map_group();
+        }
+    } else if (!groups_group(difficulty,distance_pct)) map_group();
     fight.target = first_enemy();
     battle_music("fight");
-    wos_log_event("battle_start","monsters=%d distance=%d",fight.count-1,distance_pct);
+    wos_log_event("battle_start","monsters=%d distance=%d sticky=%d pets=%d",
+                  fight.count-1,distance_pct,fight.sticky,fight.pets);
 }
+void battle_begin(const int *ids, int count, int difficulty, int distance_pct)
+{
+    battle_begin_ex(ids,count,difficulty,distance_pct,0);
+}
+/* FUN_0042b867 from the victory path (all.c:32450-32490, called from FUN_0042bb5c at
+ * all.c:32689-32692). The original draws exactly three rands, always all three - `rand()&0x400`
+ * (the item-table step), the start index, and `1 + (rand()&1)` picks - then walks the whole item
+ * table from that index, and for every candidate whose weight (items.txt arg13's "find
+ * probability", a chance in 2000) is non-zero and whose bound spell is usable, draws
+ * `rand()%2000 < weight`. A find needs the item within 5 levels of the hero and the highest-level
+ * monster killed this fight within 11. The handover itself is a server call, so offline the only
+ * effect is the "You found %s's %s" line. */
+static void victory_find(int picks, int start, int step)
+{
+    int i, n, id = start % WORLD_MAX_ITEMS, top = 0;
+    for (n = 1; n < WORLD_MAX_MONSTERS; ++n)          /* DAT_00d2c7d8, the fight's kill table */
+        if (fight.monster_kills[n] > 0 && g_world.monsters[n].used && g_world.monsters[n].level > top)
+            top = g_world.monsters[n].level;
+    if (id < 1) id = 1;
+    for (i = 0; i < picks; ++i) {
+        for (n = 0; n < WORLD_MAX_ITEMS; ++n) {
+            const ItemDef *item = &g_world.items[id];
+            int spell = item->spell_binding;
+            int weight = item->used ? item->find_probability : 0;
+            id = (id + (step ? 1 : 0x13ff)) % WORLD_MAX_ITEMS;
+            if (id < 1) id = 1;
+            if (weight <= 0) continue;
+            if (spell != 0 && (spell < 0 || spell >= WORLD_MAX_SPELLS || !g_world.spells[spell].used))
+                continue;
+            if (roll(2000) >= weight) continue;
+            if (item->level - g_hero.level >= 5) continue;      /* hero[0x64] - item[0x250] < 5 */
+            if (top - g_hero.level >= 0xb) continue;             /* top - hero[0x64] < 11 */
+            wos_log_event("battle_found_item","item=%d name=%s",id,item->name);
+            if (--picks < 1) return;
+        }
+    }
+}
+static void victory_trophy_roll(void)
+{
+    int step = rand1() & 0x400;
+    int start = rand1();
+    int picks = (rand1() & 1) + 1;
+    victory_find(picks,start,step);
+}
+static void hero_died(void);
 static void finish(BattleResult result)
 {
     fight.result = result;
+    /* FUN_0048fd90's caller stamps the post-fight grace (DAT_004e70a8) so the map's encounter
+     * roll does not re-trigger on the very next step; without it the 1 s grace never expires. */
+    map_note_battle_end();
     if (result == BATTLE_WON) {
         int xp = fight.xp, gold = fight.gold;
         int64_t old_xp = g_hero.xp, old_gold = g_hero.gold;
@@ -215,24 +380,63 @@ static void finish(BattleResult result)
             int64_t cap = (hero_xp_for_level(&g_hero,g_hero.level+2)-g_hero.xp+3)/2;
             xp = clamp(xp,0,clamp(cap,0,INT_MAX));
         }
+        /* FUN_0048b0c7: every actor with an owner adds its own participation to both its record
+         * and the fight total; the payout splits the pot by that ratio. */
+        {
+            int share_gold = fight.participation_total ?
+                (int)((int64_t)gold*fight.actors[0].participation/fight.participation_total) : gold;
+            int share_xp = fight.participation_total ?
+                (int)((int64_t)xp*fight.actors[0].participation/fight.participation_total) : xp;
+            wos_log_event("battle_share","participation=%d total=%d gold=%d xp=%d",
+                          fight.actors[0].participation,fight.participation_total,share_gold,share_xp);
+        }
         hero_award(&g_hero,xp,gold);
+        victory_trophy_roll();
         battle_music("victory");
-        wos_log_event("battle_won","xp=%d gold=%d",(int)(g_hero.xp-old_xp),(int)(g_hero.gold-old_gold));
+        wos_log_event("battle_won","xp=%d gold=%d share=%d/%d kills=%d",
+                      (int)(g_hero.xp-old_xp),(int)(g_hero.gold-old_gold),
+                      fight.actors[0].participation,fight.participation_total,fight.scene_kills);
     } else if (result == BATTLE_LOST) {
         g_hero.hp = 0;
         battle_music("lost");
+        hero_died();
         wos_log_event("battle_lost",NULL);
     }
 }
+/* FUN_00494fcd: the local hero dies. scene[0x3E034] counts the fight's kills; with the solo
+ * auto-resurrect flag (DAT_00502a48) the hero loses a tenth of a level of XP the first time and
+ * the flag is then cleared, so the next death is a real one. */
+static void hero_died(void)
+{
+    int64_t base = hero_xp_for_level(&g_hero,g_hero.level);
+    int64_t next = hero_xp_for_level(&g_hero,g_hero.level+1);
+    int64_t span = next - base;
+    int tenths = span > 0 ? (int)(((g_hero.xp - base)*10 + span - 1)/span) : 0;
+    if (tenths > 9) tenths = 9;
+    wos_log_event("battle_hero_death","level=%d xp=%lld tnl=%d kills=%d killer=%d resurrect=%d",
+                  g_hero.level,(long long)g_hero.xp,tenths,fight.scene_kills,fight.killer_id,
+                  fight.auto_resurrect);
+    if (fight.killer_id > 0) hero_killed_by_monster(fight.killer_id);
+    if (fight.auto_resurrect) {
+        /* FUN_0042b765: the XP interpolated at the fractional level the hero had reached, so
+ * the progress toward the next level is what is lost. */
+        g_hero.xp = clamp(base + span*tenths/10, 0, g_hero.xp);
+        fight.auto_resurrect = 0;
+        wos_log_event("hero_resurrect","xp=%lld",(long long)g_hero.xp);
+    } else {
+        /* DAT_00502a48 is clear, so this is a real death: the front end shows the death screen. */
+        front_hero_death(fight.killer_id > 0 ? g_world.monsters[fight.killer_id].name : NULL);
+    }
+    hero_add_death(&g_hero);
+}
 static int outcome(void)
 {
-    if (g_hero.hp <= 0) { finish(BATTLE_LOST); return 1; }
-    if (first_enemy() < 0) { finish(BATTLE_WON); return 1; }
+    if (g_hero.hp <= 0) { fight.decided = 1; finish(BATTLE_LOST); return 1; }
+    if (first_enemy() < 0) { fight.decided = 1; finish(BATTLE_WON); return 1; }
     return 0;
 }
-/* Corrected FUN_004a7794: FUN_0049b70f is an encrypted field reader,
- * NOT rand(). +628=level, +660=defense, +698=offense (004805b8..00480604).
- * Physical variance/crit alone use RNG (FUN_004a6974). */
+/* Corrected FUN_004a7794: FUN_0049b70f is an encrypted field reader, NOT rand().
+ * +628=level, +660=defense, +698=offense (004805b8..00480604). */
 static int physical_damage(Combatant *a, Combatant *b, int monster)
 {
     int miss = clamp(ability(b,ABIL_AGI)-ability(a,ABIL_DEX),0,50);
@@ -241,7 +445,7 @@ static int physical_damage(Combatant *a, Combatant *b, int monster)
     if (miss && roll(100) < miss) return -1;
     power = (int64_t)(a->level+100)*(ability(a,ABIL_STR)+65)*(a->offense+5)/6500;
     if (monster) {
-        int elapsed = clamp(fight.frame-a->last_action,0,480);
+        int elapsed = clamp(fight.tick-(uint32_t)a->last_action,0,480);
         power = power*(a->level+75)/100;
         power = power*elapsed/480;
         if (power < 1) power = 1;
@@ -255,6 +459,8 @@ static int physical_damage(Combatant *a, Combatant *b, int monster)
     raw = raw*200/(b->defense+200);
     d = clamp(raw,1,32000);
     base = clamp((int64_t)d*9/10,1,32000);
+    /* FUN_004a6974: variance is one rand, the crit gate is `rand()%param_5 == 0`, and the crit
+     * itself is `2*base` for a monster or `rand()%3+2` for a player - always the same 2..4 rands. */
     if (d > 1) d = roll(d)/5 + base;
     if (roll(50) == 0) d = (monster ? 2 : roll(3)+2)*base;
     return clamp(d,1,32000);
@@ -264,6 +470,7 @@ static int ai_target(int actor)
     int legal[ACTORS], n = 0, i;
     for (i = 0; i < fight.count; ++i)
         if (fight.actors[i].hp > 0 && fight.actors[i].ally != fight.actors[actor].ally) legal[n++] = i;
+    /* FUN_0048e62c: one uniform pick out of the legal list. */
     return n ? legal[roll(n)] : -1;
 }
 /* Spell element resistance table, FUN_00482116. */
@@ -296,17 +503,40 @@ static int spell_cost(const Combatant *a, const SpellDef *s)
 {
     return clamp((int64_t)s->mp_cost*((a->ailments & (1u<<3)) ? 2 : 1),0,INT_MAX);
 }
-/* FUN_0048e773: intelligence limits both element distance and affinity. */
-static int monster_knows(const Combatant *a, const SpellDef *s)
+/* FUN_0048e773 exactly: (spell element, req affinity, own element, wisdom, own-element-only).
+ * The own-element branch divides by 8 with the x87 rounding the binary does; the normal branch
+ * clamps the element distance to 0..4 and needs wisdom/40 >= distance. A chaos element
+ * (>= 8) is never cast unless the monster is locked to its own element. */
+static int spell_affinity(int element, int affinity, int own, int wisdom, int own_only)
 {
-    const MonsterDef *m = &g_world.monsters[a->id];
-    int distance, wisdom = ability(a,ABIL_WIS);
-    if (!s->used || (s->flags&1) || wisdom <= 0 || spell_cost(a,s) > a->mp) return 0;
-    if ((m->flags&2) || s->element > 7)
-        return s->element == a->element && s->req_affinity <= wisdom/8;
-    distance = (s->element-a->element+256)&7;
-    if (distance > 4) distance = 8-distance;
-    return distance <= wisdom/40 && s->req_affinity <= wisdom/(distance*8+8);
+    int d;
+    if (own_only) {
+        if (own != element) return 0;
+        return ((wisdom + (wisdom >> 31 & 7)) >> 3) >= affinity;
+    }
+    if (element >= 0) {
+        if (element >= 8) return 0;                 /* chaos spells are never chosen */
+        d = element - own;
+        if (d < 0) d += 8;
+        if (4 < d) d = 8 - d;
+    } else d = 1;
+    if (d < 0) d = 0;
+    if (4 < d) d = 4;
+    if (wisdom / 40 < d) return 0;
+    return wisdom / (d*8+8) >= affinity;
+}
+/* FUN_0048b119: the summon codes carried in a spell's power field ([0x128]). */
+static int is_summon(int power)
+{
+    return power == -300 || (power < -199 && power > -204);
+}
+/* FUN_00491b6a via FUN_00491bb7: the combatant's derived attack rating, rec[0x6D8]. The two
+ * FUN_0049b70f reads are the encrypted copies of defense (+0x660) and offense (+0x698); the two
+ * raw terms are the combat abilities at +0x444 and +0x440. */
+static int compute_rating(const Combatant *a)
+{
+    if (a->owner <= 0) return 0;
+    return (a->offense + 0x11) * (a->defense*4 + 0x5c) + a->ability_b*0x16 + a->ability_a*0x57;
 }
 static int prefix(const char *s, const char *word)
 {
@@ -325,7 +555,8 @@ static int commanded_spell(int actor, int *target)
     if (prefix(p,"heal")) {
         for (i = WORLD_MAX_SPELLS-1; i > 0; --i)
             if (g_world.spells[i].element == 0 && g_world.spells[i].damage > 0 &&
-                monster_knows(a,&g_world.spells[i]) && a->hp < a->max_hp/2) {
+                spell_affinity(g_world.spells[i].element,g_world.spells[i].req_affinity,a->element,
+                                 ability(a,ABIL_WIS),g_world.monsters[a->id].flags & 2) && a->hp < a->max_hp/2) {
                 *target = actor; return i;
             }
         return 0;
@@ -339,7 +570,8 @@ static int commanded_spell(int actor, int *target)
             char *end;
             long id = strtol(p,&end,10);
             if (end == p) break;
-            if (id > 0 && id < WORLD_MAX_SPELLS && monster_knows(a,&g_world.spells[id]) &&
+            if (id > 0 && id < WORLD_MAX_SPELLS && spell_affinity(g_world.spells[id].element,g_world.spells[id].req_affinity,a->element,
+                                 ability(a,ABIL_WIS),g_world.monsters[a->id].flags & 2) &&
                 roll(++n) == 0) chosen = (int)id;
             p = end;
             if (*p != ',') break;
@@ -348,7 +580,8 @@ static int commanded_spell(int actor, int *target)
     } else {
         for (i = 1; i < WORLD_MAX_SPELLS; ++i)
             if (g_world.spells[i].used && prefix(p,g_world.spells[i].name) &&
-                monster_knows(a,&g_world.spells[i])) {
+                spell_affinity(g_world.spells[i].element,g_world.spells[i].req_affinity,a->element,
+                                 ability(a,ABIL_WIS),g_world.monsters[a->id].flags & 2)) {
                 chosen = i; p += strlen(g_world.spells[i].name); break;
             }
     }
@@ -360,38 +593,109 @@ static int commanded_spell(int actor, int *target)
     }
     return chosen;
 }
-static int monster_spell(int actor, int *target)
+/* FUN_0048e810 exactly. `mode` is the original's param_2 (1 forces "no spell", -1); `slot` is
+ * param_3 (-1 scans the whole array, otherwise it is the slot FUN_00490645 already picked, which
+ * also forces the healing pass to look only there). Returns the spell id, 0 for a physical attack
+ * or -1 when the monster does nothing this turn.
+ *
+ * Pass 1 is a deterministic walk of spells 0x2FF..1 looking for a heal ([0x134] == 0 and element
+ * 0) with a usable target. Pass 2 is the ring walk: ONE seed rand, then 0x300 steps of
+ * (seed + k) % 0x300 for k = 0x2FF..0. A summon candidate is taken unconditionally the first
+ * time and costs a rand every time after (`local_18 == -1 || rand()%3000 < wisdom` short
+ * circuits), so the draw count is exactly (summon candidates - 1). The walk is closed by one
+ * rand for the `wisdom <= r%500` gate and a second only when that gate passes. */
+static int monster_action(int actor, int mode, int slot)
 {
     Combatant *a = &fight.actors[actor];
     const MonsterDef *m = &g_world.monsters[a->id];
-    int i, best = 0, score = -1, command = commanded_spell(actor,target);
-    if (command >= 0) return command;
-    if (m->flags&16) return 0;
-    /* FUN_0048e810 prioritizes life healing below half HP, then chooses
-     * strongest effective attack with wisdom/500 spell cadence. */
-    if (a->element == 0 && a->hp <= a->max_hp/2) {
-        for (i = WORLD_MAX_SPELLS-1; i > 0; --i) {
-            const SpellDef *s = &g_world.spells[i];
-            if (s->element == 0 && s->damage > 0 && monster_knows(a,s)) { *target = actor; return i; }
+    int wisdom = ability(a,ABIL_WIS);
+    int best = 0, best_score = 0, summon = -1, n, s;
+
+    if (a->element == 0) {                    /* FUN_0048e810's `rec[0x2A4] == 0` gate */
+        for (n = WORLD_MAX_SPELLS-1; n > 0; --n) {
+            const SpellDef *sp = &g_world.spells[n];
+            int lo = slot < 0 ? 0 : slot, hi = slot < 0 ? ACTORS : slot+1;
+            if (!sp->used || sp->all_targets || sp->element) continue;
+            if (!spell_affinity(0,sp->req_affinity,0,wisdom,m->flags & 2)) continue;
+            if (sp->min_level > a->level || (sp->flags & 1)) continue;
+            if (is_summon(sp->damage)) continue;
+            for (s = lo; s < hi; ++s) {
+                Combatant *r = &fight.actors[s];
+                if (s >= fight.count || r->hp < 0 || r->ally != a->ally) continue;
+                /* power == -1 revives a dead ally; the `power > 0` arm tests
+                 * power <= (hp - maxhp)*4, which can never hold for a living actor. */
+                if (sp->damage == -1 ? (r->hp < 1 && !r->ally)
+                                     : (r->hp > 0 && a->level <= r->hp/2
+                                        && sp->damage <= (r->hp - r->max_hp)*4)) {
+                    fight.target = s;
+                    return n;
+                }
+            }
         }
     }
-    if (!(m->flags&8) && roll(500) >= ability(a,ABIL_WIS)) return 0;
-    for (i = 1; i < WORLD_MAX_SPELLS; ++i) {
-        const SpellDef *s = &g_world.spells[i];
-        if (s->element && s->damage >= 0 && monster_knows(a,s)) {
-            int value = s->damage*(500-resistance(s->element,fight.actors[*target].element));
-            if (value > score) { best = i; score = value; }
+    if (mode) return -1;
+
+    {
+        int seed = rand1();
+        for (n = 0x2ff; n >= 0; --n) {
+            int id = (seed + n) % 0x300, score;
+            const SpellDef *sp;
+            if (id <= 0 || id >= WORLD_MAX_SPELLS) continue;
+            sp = &g_world.spells[id];
+            if (!sp->used) continue;
+            if (!spell_affinity(sp->element,sp->req_affinity,a->element,wisdom,m->flags & 2)) continue;
+            if (!sp->element) continue;                     /* [0x124] != 0: not a heal */
+            if (sp->min_level > a->level || (sp->flags & 1)) continue;
+            if (is_summon(sp->damage) && !(m->flags & 4)) continue;  /* "may summon" */
+            if (sp->damage < 0) {
+                if (summon == -1 || rand1() % 3000 < wisdom) summon = id;
+            } else {
+                score = sp->damage * (!fight.target || fight.actors[fight.target].ally
+                                      ? 100
+                                      : 500 - resistance(sp->element,fight.actors[fight.target].element));
+                if (score != best_score && best_score <= score) { best_score = score; best = id; }
+            }
         }
     }
+    {   /* FUN_0048e810's closing gate: one rand always, a second only if wisdom <= r%500. */
+        int r = rand1();
+        if (wisdom <= r % 500) {
+            int r2 = rand1();
+            if (wisdom <= r2 % 1000 || (best = summon, summon < 0)) best = 0;
+        }
+    }
+    if (best) fight.target = fight.target >= 0 && fight.target < fight.count ? fight.target
+                                                                       : first_enemy();
     return best;
 }
+static int monster_spell(int actor, int *target)
+{
+    int spell = monster_action(actor, 0, -1);
+    if (spell < 0) return 0;
+    if (spell > 0) {
+        const SpellDef *sp = &g_world.spells[spell];
+        if (sp->element == 0) *target = actor;
+        else if (*target < 0 || !legal_target(actor,*target,spell)) *target = spell_target(actor,spell);
+    }
+    return spell;
+}
+/* FUN_004a7456: the cast-success roller. `base` is 50 below ratio 5, 100 from 95, and
+ * 50 + (ratio-5)*50/90 in between; a nonzero practice value pulls it toward 100 by
+ * `100 - (100-pp)*(100-base)/100`. config.ini spellSuccessPercent then scales it, clamped at
+ * 100, and the result is truncated after +0.5. The original does this in x87 doubles. */
 static int cast_success(int ratio, int pp)
 {
-    /* FUN_004a7456: ratio gives 50..100%; PP reduces remaining failure
-     * probability by up to half, and the final +.5 rounds to nearest. */
-    int base = ratio <= 5 ? 5000 : ratio >= 95 ? 10000 : 5000+(ratio-5)*5000/90;
-    int trained = pp > 0 ? (int)((int64_t)50*pp/(pp+5000)) : 0;
-    return (10000-(100-trained)*(10000-base)/100+50)/100;
+    double base, pct;
+    if (ratio <= 5) base = 50.0;
+    else if (ratio >= 95) base = 100.0;
+    else base = 50.0 + (ratio-5)*50.0/90.0;
+    if (pp > 0) base = 100.0 - (100.0-(double)pp)*(100.0-base)/100.0;
+    pct = g_world.spell_success_percent;
+    if (pct != 100.0) {
+        double scaled = pct*base*0.01;
+        base = scaled > 100.0 ? 100.0 : scaled;
+    }
+    return (int)(base + 0.5);
 }
 static int spell_damage(int actor, int target, int spell, int targets)
 {
@@ -429,9 +733,39 @@ static int spell_damage(int actor, int target, int spell, int targets)
     }
     raw = raw*200/(b->defense/2+200);
     d = clamp(raw,1,32000); base = clamp((int64_t)d*9/10,1,32000);
+    /* FUN_004a6974, same rand shape as the physical branch. */
     if (d > 1) d = roll(d)/5+base;
     if (!roll(50)) d = (actor ? 2 : roll(3)+2)*base;
     return clamp(d,1,32000);
+}
+/* FUN_00480875: a monster's XP award is its table value scaled by the ratio of the combatant's
+ * level to the table level (NOT a rand - docs/re/battle.md section 2's reading is wrong).
+ * FUN_004946b2 pays out `rand()%(gold+1) + gold/2` and the XP, both clamped to 0x7FFF. */
+static void kill_payout(Combatant *b)
+{
+    const MonsterDef *m = &g_world.monsters[b->id];
+    int gold = b->gold;
+    if (!b->ally && b->id > 0 && b->id < WORLD_MAX_MONSTERS) {
+        ++fight.scene_kills;
+        ++fight.monster_kills[b->id];
+        /* FUN_00494fcd: the persistent per-monster kill count is the hero's INI table, which is
+         * what quest `IF KB <id>` / `IF KM <id>` read (FUN_0043b0fd). */
+        hero_kill_monster(b->id);
+        /* FUN_00494fcd also drops a trophy here, NOT in the payout: the local hero's own
+         * participation share of rec[0x468] must exceed 10 % of DAT_00502830
+         * (disassembly 0x495239..0x49526D), then FUN_0046fcc4(monster id) rolls the bag. */
+        if (fight.participation_total > 0 &&
+            fight.actors[0].participation*100/fight.participation_total > 10) {
+            wos_log_event("battle_trophy","monster=%d",b->id);
+            trophy_bag_award_kill(b->id);
+        }
+        fight.gold = clamp((int64_t)fight.gold + roll(gold+1) + gold/2, 0, 32767);
+        if (m->used) {
+            int xp = m->exp > 0 ? m->exp : b->xp;
+            if (m->level > 0 && b->level != m->level) xp = (int)((int64_t)b->level*xp/m->level);
+            fight.xp = clamp((int64_t)fight.xp + clamp(xp,0,60000), 0, INT_MAX);
+        }
+    }
 }
 static void apply_spell(void)
 {
@@ -481,16 +815,13 @@ static void apply_spell(void)
         }
         else {
             int miss = spell_helpful(s) ? 0 : clamp(ability(b,ABIL_AGI)-ability(&fight.actors[actor],ABIL_DEX),0,50);
-            if (miss && roll(100) < miss) { b->damage = INT_MIN; b->floating = FLOAT_FRAMES; continue; }
+            if (miss && roll(100) < miss) { b->damage = INT_MIN; b->floating = (int)tick_now(); continue; }
             damage = spell_damage(actor,i,fight.spell,targets);
             b->hp = clamp((int64_t)b->hp-damage,0,b->max_hp);
         }
-        b->damage = damage; b->floating = FLOAT_FRAMES;
+        b->damage = damage; b->floating = (int)tick_now();
         if (!i) { g_hero.hp = b->hp; g_hero.ailments = b->ailments; }
-        if (alive && !b->hp && !b->ally) {
-            fight.xp = clamp((int64_t)fight.xp+b->xp,0,INT_MAX);
-            fight.gold = clamp((int64_t)fight.gold+roll(b->gold+1)+b->gold/2,0,32767);
-        }
+        if (alive && !b->hp) kill_payout(b);
         wos_log_event("spell_cast","caster=%s spell=%d target=%d dmg=%d",actor?"monster":"hero",fight.spell,i,damage);
     }
 }
@@ -541,32 +872,67 @@ static void start_attack(int actor, int target)
         effective = category >= 0 && category < 8 ? (int64_t)(gauge+15)*pp[category]/30 : 0;
         fight.attack_pp = clamp(effective,0,INT_MAX-5000);
         fight.attack_training = effective > 0 ? (int)(10000*effective/(effective+5000)) : 0;
+        /* rec[+0x390] is the attacker's 0..100 attack rating; FUN_004a7456 consumes it as a
+         * percentage, so it has to be in 0..100. The port derives it from the same training the
+         * payout uses, as a fraction of the 10000-point curve. */
+        fight.attack_rating = clamp(fight.attack_training/100,0,100);
         if (category >= 0 && category < 8) {
             int gain = kind == HERO_TRAIN_ELEMENT ? s->req_affinity*10+20 : 20;
             hero_gain_training(&g_hero,kind,category,gain);
         }
         if (kind == HERO_TRAIN_ELEMENT) {
-            fight.mp_gauge = fight.mp_initial = 0; fight.mp_start = fight.frame;
-        } else { fight.hp_gauge = fight.regen_initial = 0; fight.regen_start = fight.frame; }
+            fight.mp_gauge = 0; fight.mp_start = fight.tick;
+        } else { fight.hp_gauge = 0; fight.regen_start = fight.tick; }
         if (!s || !spell_helpful(s)) hero_add_pp(&g_hero,a->ability[ABIL_WIS]*200/255+5);
         fight.queued = 0;
         fight.message[0] = 0;
+        /* _DAT_00502b18: the flee lock is measured from the hero's last committed action. */
+        fight.flee_lock = tick_now();
     }
     a->mp -= cost;
     if (!actor) g_hero.mp = a->mp;
+    fight.attack_rating = a->rating;
     fight.spell = spell; fight.bound_spell = bound; fight.fizzle = 0;
-    fight.duration = spell ? 240 : LUNGE_FRAMES; /* 0048fe80: physical1s, spell4s. */
+    /* FUN_0048fe80: 1000 ms physical, 4000 ms spell, 1250 ms for the -3/-4/-5 specials. */
+    fight.duration_ms = spell ? SPELL_MS : PHYSICAL_MS;
     if (spell) {
         int ratio = actor ? clamp(ability(a,ABIL_WIS)/4+50,0,100) : g_world.classes[g_hero.klass].magic_ratio;
-        if (s->element > 0 && s->element < 8 && roll(100) >= cast_success(ratio,fight.attack_pp)) {
+        if (s->element > 0 && s->element < 8 && roll(100) >= cast_success(ratio,fight.attack_rating)) {
             fight.fizzle = 1;
             wos_log_event("spell_fizzle","caster=%s spell=%d target=%d",actor?"monster":"hero",spell,target);
             snprintf(fight.message,sizeof fight.message,"%s fizzles",s->name);
         }
-    } else fight.damage = physical_damage(a,&fight.actors[target],actor != 0);
-    a->last_action = fight.frame; a->ready = 0; ++a->attacks;
+    } else if (!actor && fight.throw_radius) {
+        /* FUN_004a4d70 leaves the scatter radius at its default 0x10 for a physical attack
+         * (case 0 falls through to `default: *radius = 0x10`), and FUN_004a3a54 then draws the
+         * paired `x += rand()%(r*2) - r`, `y += rand()%(r*2) - r`, guarded on r != 0. */
+        fight.target_x = fight.actors[target].x + roll(fight.throw_radius*2) - fight.throw_radius;
+        fight.target_y = fight.actors[target].y + roll(fight.throw_radius*2) - fight.throw_radius;
+        items_arm_throw(fight.throw_item);
+        wos_log_event("battle_throw_scatter","radius=%d x=%d y=%d",fight.throw_radius,
+                      fight.target_x,fight.target_y);
+    } else {
+        if (!actor) {
+            int item = g_hero.right_hand;
+            fight.throw_item = 0; fight.throw_radius = 0;
+            if (item > 0 && item < WORLD_MAX_ITEMS && g_world.items[item].klass == ITEM_THROWABLE) {
+                fight.throw_item = item;
+                fight.throw_radius = THROW_RADIUS;
+            }
+        }
+        fight.damage = physical_damage(a,&fight.actors[target],actor != 0);
+    }
+    a->rating = compute_rating(a);   /* FUN_00491bb7, rec[0x6D8] */
+    /* FUN_0048fe80 rec[0x428]++ (the attack count) and FUN_0048b0c7, which credits an actor only
+     * when it has an owner - in solo that is the hero alone, so it always takes the whole pot. */
+    a->last_turn = a->last_action = fight.tick;
+    a->turn = TURN_DONE; a->ready = 0; ++a->attacks;
+    if (actor && !fight.actors[actor].ally) fight.killer_id = fight.actors[actor].id;
+    if (!actor) { a->participation = a->attacks; fight.participation_total = a->participation; }
     fight.attacker = actor; fight.victim = target; fight.animation = 0;
+    fight.anim_start = tick_now();
     fight.state = ROUND_DAMAGE; fight.cursor = (actor+1)%fight.count;
+    if (scene_event) scene_event(actor && spell ? "spell" : "attack", actor, 0);
 }
 static int inside(Rect r, int x, int y)
 {
@@ -580,6 +946,18 @@ static Rect actor_rect(int i)
     Rect v = fight.view;
     return (Rect){v.x+(a->x-cell/2)*v.w/360,v.y+(a->y-cell)*v.h/256,
                   cell*v.w/360,cell*v.h/256};
+}
+/* FUN_0048b1ad target-selection click: validate the target, then queue
+ * rec[0xBA] = spell, rec[0xBB] = target, rec[0x38C] = 0x2F. */
+int battle_click_actor(int slot)
+{
+    if (fight.result != BATTLE_RUNNING || fight.spell_menu) return 0;
+    if (slot < 0 || slot >= fight.count) return 0;
+    if (!legal_target(0,slot,fight.chosen_spell)) return 0;
+    fight.target = slot;
+    fight.queued = 1;
+    if (scene_event) scene_event("click", slot, 0);
+    return 1;
 }
 static void spell_menu_update(const Input *in)
 {
@@ -601,24 +979,145 @@ static void spell_menu_update(const Input *in)
         fight.spell_menu = 0;
     }
 }
+/* FUN_0048f816: the cowardice flee. The monster is unaligned (rec[0x114] == 0) and not flagged
+ * never-flee (monsters.txt arg3 flag 32, read through FUN_0048f7e6). Each live player combatant
+ * more than 20 levels below it contributes `(delta*100)/500`; above 50, with wisdom > 100 and
+ * HP > 0, the chance rises by `100 - rand()*100/HP`. One or two rands, in that order. */
+static int coward_flee(Combatant *m, int *out_hero)
+{
+    int i;
+    *out_hero = -1;
+    if (g_world.monsters[m->id].flags & 32) return 0;
+    for (i = 0; i < fight.count; ++i) {
+        const Combatant *o = &fight.actors[i];
+        int delta, chance, r;
+        if (o->hp <= 0 || o->ally || o == m) continue;
+        delta = o->level - m->level;
+        if (delta <= 20) continue;
+        chance = delta*100/500;
+        if (chance > 50 && ability(m,ABIL_WIS) > 100 && m->hp > 0) {
+            r = rand1();
+            chance = chance - (r*100)/m->hp + 100;
+        }
+        r = rand1();
+        if (r % 100 < chance) { *out_hero = i; return 1; }
+    }
+    return 0;
+}
+/* FUN_0048f913's monster block. It runs for every monster whose owner is -1, is not already done
+ * and has been idle more than 2000 ms (GetTickCount() - rec[0x45C] > 1999), before any actor is
+ * picked. A monster that reaches here always ends its turn at 0x2F, so it never acts from it.
+ * A cowardice effect (FUN_004a6d32's first counter) suppresses both the fear and the wander. */
+static void monster_idle_pass(void)
+{
+    int slot;
+    for (slot = 1; slot < fight.count; ++slot) {
+        Combatant *a = &fight.actors[slot];
+        int afraid, chance;
+        if (a->ally || a->hp <= 0 || a->turn == TURN_DONE) continue;
+        if (!past(a->last_turn,MONSTER_IDLE_MS-1)) continue;
+        afraid = cowardice(a);
+        chance = (roll(10) + 4) * 10;            /* FUN_0048f913's `(rand()+4)*10`, one rand */
+        if (chance > 100) chance = 100;
+        if (!a->fled) {
+            if (!afraid && a->x > 20) {
+                int hero_slot;
+                if (coward_flee(a,&hero_slot)) {
+                    a->fled = 1; a->x = -30;
+                    wos_log_event("battle_monster_flee","slot=%d monster=%d mode=cowardice target=%d",
+                                  slot,a->id,hero_slot);
+                    snprintf(fight.message,sizeof fight.message,
+                             "%s takes fear and flees.",g_world.monsters[a->id].name);
+                }
+            }
+            if (!a->fled) {
+                int r = rand1();
+                if (r % 100 < chance) {
+                    int target = -1, spell;
+                    /* FUN_0048f56c: the monsters.txt arg-20 pet-verb command runs first and owns
+                     * both the target (local_28) and the spell (local_24). */
+                    spell = commanded_spell(slot,&target);
+                    if (target < 0) target = ai_target(slot);  /* FUN_0048e62c retarget */
+                    a->turn = TURN_DONE;
+                    a->last_turn = tick_now();
+                    if (target < 0) continue;   /* no legal target left: it leaves the fight */
+                    /* local_24 == 0 and !(monsters.txt arg3 flag 0x10): only then does the
+                     * monster run its own FUN_0048e810 spell pick. */
+                    if (spell <= 0 && !(g_world.monsters[a->id].flags & 16))
+                        spell = monster_spell(slot,&target);
+                    /* Flag 4 lets a pet/escort be dragged in instead: FUN_0048ebe3, gated by
+                     * `rand()%1000 < 250` (0xFA). */
+                    if (spell > 0 && (g_world.monsters[a->id].flags & 4) && roll(1000) < 250) {
+                        int ally = 0;
+                        for (ally = 0; ally < fight.count; ++ally)
+                            if (fight.actors[ally].ally && fight.actors[ally].hp > 0) break;
+                        if (ally < fight.count) { target = ally; spell = 0; }
+                    }
+                    wos_log_event("battle_monster_flee","slot=%d monster=%d mode=generic target=%d spell=%d",
+                                  slot,a->id,target,spell);
+                } else if (!afraid) {
+                    /* The failed flee wanders instead: a paired rand, always both (0x48f913). */
+                    a->x += roll(10) - 5;
+                    a->y += roll(10) - 5;
+                }
+                continue;
+            }
+        }
+        if (a->x < -10) { a->turn = TURN_DONE; a->hp = 0; }  /* FUN_0048e16e clears the record */
+    }
+}
+/* FUN_00436c9d: may the hero leave the fight? 1 = yes, 0 = "dragged back". Offline there is no
+ * Tactics abandon dialog (FUN_00447431 returns 0), so an ordinary random encounter has no timer
+ * escape at all: only the 30 % interrupt of an attack already aimed at the hero gets you out. */
+static int hero_can_flee(void)
+{
+    int blocked = 1;
+    if (g_hero.max_hp < 1) return 1;
+    if (fight.actors[0].turn == TURN_DONE && fight.engaged) return 0;
+    fight.actors[0].turn = TURN_DONE;
+    if (cowardice(&fight.actors[0])) return 0;
+    if (fight.sticky == STICKY_TACTICS || fight.sticky == STICKY_PK) {
+        if (past(fight.flee_lock,FLEE_LOCK_MS)) blocked = 0;
+    } else if (fight.sticky == STICKY_FIGHT2) {
+        if (past(fight.flee_lock,FLEE_LOCK_FIGHT2_MS) && !fight.decided) blocked = 0;
+    }
+    if (fight.victim == 0 && fight.state == ROUND_DAMAGE &&
+        !past(fight.anim_start,(uint32_t)fight.duration_ms) &&
+        roll(100) < FLEE_INTERRUPT_PCT)
+        blocked = 0;
+    if (g_hero.max_hp < 1) blocked = 1;
+    return !blocked;
+}
 BattleResult battle_update(const Input *in)
 {
     int i, actor = -1;
     if (fight.result != BATTLE_RUNNING) return fight.result;
     if (fight.spell_menu) { spell_menu_update(in); return fight.result; }
     if (in && in->pressed['s']) { battle_open_spells(); return fight.result; }
+    fight.tick = tick_now();
     fight.actors[0].hp = g_hero.hp; fight.actors[0].mp = g_hero.mp;
     fight.actors[0].ailments = g_hero.ailments;
-    ++fight.frame;
-    for (i = 0; i < fight.count; ++i) if (fight.actors[i].floating) --fight.actors[i].floating;
     if (outcome()) return fight.result;
     if (in && (in->pressed['f'] || in->pressed[PLAT_KEY_ESCAPE])) {
-        finish(BATTLE_FLED); return fight.result;
+        if (hero_can_flee()) {
+            finish(BATTLE_FLED);
+            snprintf(fight.message,sizeof fight.message,"You flee.");
+            wos_log_event("battle_fled","sticky=%d held=%u",fight.sticky,
+                          (unsigned)(tick_now()-fight.flee_lock));
+        } else {
+            snprintf(fight.message,sizeof fight.message,
+                     "You attempt to flee... but are dragged back");
+            wos_log_event("battle_flee_failed","sticky=%d held=%u",fight.sticky,
+                          (unsigned)(tick_now()-fight.flee_lock));
+        }
+        return fight.result;
     }
-    fight.hp_gauge = clamp(fight.regen_initial+(int64_t)(fight.frame-fight.regen_start)*
-                           (fight.actors[0].ability[ABIL_STR]/2+100)/600,0,100);
-    fight.mp_gauge = clamp(fight.mp_initial+(int64_t)(fight.frame-fight.mp_start)*
-                           (fight.actors[0].ability[ABIL_WIS]/2+100)/600,0,100);
+    /* FUN_00478840: the panel timer recomputes both gauges from scratch every tick, so the 25 a
+     * new round starts with is immediately overwritten. */
+    fight.hp_gauge = clamp((int)(((int64_t)(tick_now()-fight.regen_start)*
+                                  (fight.actors[0].ability[ABIL_STR]/2+100))/10000),0,100);
+    fight.mp_gauge = clamp((int)(((int64_t)(tick_now()-fight.mp_start)*
+                                  (fight.actors[0].ability[ABIL_WIS]/2+100))/10000),0,100);
     if (fight.target < 0 || !legal_target(0,fight.target,fight.chosen_spell))
         fight.target = spell_target(0,fight.chosen_spell);
     if (in) {
@@ -630,39 +1129,41 @@ BattleResult battle_update(const Input *in)
         }
         if (in->pressed['a'] || in->pressed[PLAT_KEY_SPACE]) fight.queued = 1;
         if (in->mouse_pressed & (1u << 1)) {
-            for (i = fight.count-1; i >= 0; --i) {
-                if (legal_target(0,i,fight.chosen_spell) && inside(actor_rect(i),in->mouse_x,in->mouse_y)) {
-                    fight.target = i; fight.queued = 1; break;
-                }
-            }
+            for (i = fight.count-1; i >= 0; --i)
+                if (legal_target(0,i,fight.chosen_spell) && inside(actor_rect(i),in->mouse_x,in->mouse_y))
+                    { battle_click_actor(i); break; }
         }
     }
     if (fight.state == ROUND_START) {
-        for (i = 0; i < fight.count; ++i) fight.actors[i].ready = fight.actors[i].hp > 0;
-        fight.round_start = fight.frame;
+        for (i = 0; i < fight.count; ++i) {
+            Combatant *c = &fight.actors[i];
+            c->ready = c->hp > 0 && !c->fled;
+            c->turn = c->ready ? TURN_READY : TURN_DONE;
+        }
+        fight.round_start = fight.tick;
         fight.state = ROUND_ACT;
     } else if (fight.state == ROUND_DAMAGE) {
-        if (++fight.animation >= fight.duration) {
+        if (past(fight.anim_start,(uint32_t)fight.duration_ms)) {
             Combatant *victim = &fight.actors[fight.victim];
             if (fight.spell) apply_spell();
             else {
                 victim->damage = fight.damage < 0 ? INT_MIN : fight.damage;
-                victim->floating = FLOAT_FRAMES;
-                wos_log_event("battle_hit","frame=%d attacker=%d target=%d dmg=%d",
-                              fight.frame,fight.attacker,fight.victim,fight.damage);
+                victim->floating = (int)tick_now();
+                wos_log_event("battle_hit","ms=%u attacker=%d target=%d dmg=%d",
+                              (unsigned)(tick_now()-fight.anim_start),fight.attacker,fight.victim,fight.damage);
                 if (fight.damage >= 0) victim->hp = clamp((int64_t)victim->hp-fight.damage,0,victim->max_hp);
                 if (fight.victim == 0) g_hero.hp = victim->hp;
-                else if (!victim->hp && !victim->ally) {
-                    fight.xp = clamp((int64_t)fight.xp+victim->xp,0,INT_MAX);
-                    fight.gold = clamp((int64_t)fight.gold+roll(victim->gold+1)+victim->gold/2,0,32767);
-                }
+                if (victim->hp <= 0) kill_payout(victim);
+                items_spend_throw();   /* FUN_0048f667 */
             }
             fight.attacker = fight.victim = -1;
             fight.state = ROUND_ACT;
             outcome();
         }
-    } else if (fight.frame-fight.round_start >= ACTION_GATE) {
+    } else {
         int ready = 0;
+        /* FUN_0048f913's monster flee/wander block runs before any actor is picked. */
+        monster_idle_pass();
         for (i = 0; i < fight.count; ++i) {
             int n = (fight.cursor+i)%fight.count;
             if (fight.actors[n].hp > 0 && fight.actors[n].ready) {
@@ -670,18 +1171,21 @@ BattleResult battle_update(const Input *in)
                 if (n != 0 || fight.queued) { actor = n; break; }
             }
         }
+        /* FUN_0048b17a: the hero may not commit during the first 500 ms of its round. */
+        if (actor == 0 && !past(fight.round_start,HERO_GATE_MS-1)) actor = -1;
         if (actor >= 0) {
             int target = actor == 0 ? fight.target : ai_target(actor);
             if (target >= 0) start_attack(actor,target);
-        } else if (!ready || fight.frame-fight.round_start >= ROUND_IDLE) fight.state = ROUND_START;
+        } else if (!ready || past(fight.round_start,ROUND_IDLE_MS)) fight.state = ROUND_START;
     }
     return fight.result;
 }
 /* Bhaskara's integer sine approximation over [0,pi], endpoints 0, midpoint 256. */
 static int lunge(int t)
 {
-    int p = t*(LUNGE_FRAMES-t);
-    return 16*p*256/(5*LUNGE_FRAMES*LUNGE_FRAMES-4*p);
+    int n = PHYSICAL_MS;
+    int p = t*(n-t);
+    return 16*p*256/(5*n*n-4*p);
 }
 static void sprite(Framebuffer *fb, const Sheet *s, int pose, int x, int y, int flip, Rect v)
 {
@@ -705,6 +1209,7 @@ void battle_render(Framebuffer *fb, Rect view)
 {
     int i;
     Rect old_clip = fb->clip;
+    uint32_t now = tick_now();
     if (view.w <= 0 || view.h <= 0 || fight.result == BATTLE_NONE) return;
     fight.view = view;
     fb_clip_intersect(fb,view);
@@ -712,14 +1217,15 @@ void battle_render(Framebuffer *fb, Rect view)
         Combatant *a = &fight.actors[i];
         const Sheet *s = &fight.sheets[a->sheet_index];
         int x = a->x, y = a->y, pose = 1, flip = i == 0;
-        int sx, sy, w;
+        int sx, sy, w, anim;
         char label[80];
         const char *name = i == 0 ? g_hero.name : g_world.monsters[a->id].name;
-        if (a->hp <= 0 && !a->floating) continue;
-        if (a->hp < a->max_hp/4 || a->floating > FLOAT_FRAMES-18) pose = 3;
+        if (a->hp <= 0 && !(a->floating && !past((uint32_t)a->floating,FLOAT_MS))) continue;
+        if (a->hp < a->max_hp/4 || (a->floating && !past((uint32_t)a->floating,FLOAT_MS))) pose = 3;
         if (fight.attacker == i) {
             Combatant *b = &fight.actors[fight.victim];
-            int fraction = fight.spell ? 0 : lunge(fight.animation);
+            int elapsed = (int)(now - fight.anim_start);
+            int fraction = fight.spell ? 0 : lunge(clamp(elapsed,0,PHYSICAL_MS));
             x += (b->x-a->x)*fraction/256;
             y += (b->y-a->y)*fraction/256;
             pose = 2;
@@ -734,18 +1240,19 @@ void battle_render(Framebuffer *fb, Rect view)
         fb_fill(fb,(Rect){sx-w/2,sy-8,a->max_hp ? w*a->hp/a->max_hp : 0,5},a->ally?0x50d080:0xe05050);
         snprintf(label,sizeof label,"%.20s",name);
         font_draw(fb,sx-font_width(label)/2,sy-18,label,0xffffff);
-        if (a->floating) {
+        if (a->floating && !past((uint32_t)a->floating,FLOAT_MS)) {
+            anim = (int)(now - (uint32_t)a->floating);
             if (a->damage == INT_MIN) snprintf(label,sizeof label,"MISS");
             else if (a->damage < 0) snprintf(label,sizeof label,"+%d",-a->damage);
             else snprintf(label,sizeof label,"-%d",a->damage);
-            font_draw(fb,sx-font_width(label)/2,sy-30-(FLOAT_FRAMES-a->floating)/4,label,0xffff70);
+            font_draw(fb,sx-font_width(label)/2,sy-30-anim/4,label,0xffff70);
         }
     }
     if (fight.state == ROUND_DAMAGE && fight.spell && !fight.fizzle) {
         static const uint32_t colors[8] = {0x80ff80,0x60a0ff,0x40d070,0xb08040,0xb080d0,0xff7040,0xffffff,0xffff70};
         int el = g_world.spells[fight.spell].element;
         Rect r = actor_rect(fight.victim);
-        fb_blend(fb,r,colors[el&7],(unsigned)(40+(fight.animation%30)*4));
+        fb_blend(fb,r,colors[el&7],(unsigned)(40+((now-fight.anim_start)%30)*4));
     }
     font_draw(fb,view.x+6,view.y+view.h-36,fight.message,0xffdc80);
     font_draw(fb,view.x+6,view.y+view.h-24,"A/SPACE: Act TAB: Target S: Spells",0xffffff);
@@ -772,3 +1279,81 @@ void battle_render(Framebuffer *fb, Rect view)
 }
 BattleResult battle_result(void) { return fight.result; }
 int battle_active(void) { return fight.result == BATTLE_RUNNING; }
+void battle_dump(DumpEmit emit, void *user)
+{
+    char key[48], value[64];
+    int i;
+    dump_emit_int(emit,"battle.state",fight.state,user);
+    dump_emit_int(emit,"battle.result",fight.result,user);
+    dump_emit_int(emit,"battle.count",fight.count,user);
+    dump_emit_int(emit,"battle.target",fight.target,user);
+    dump_emit_int(emit,"battle.attacker",fight.attacker,user);
+    dump_emit_int(emit,"battle.victim",fight.victim,user);
+    dump_emit_int(emit,"battle.spell",fight.spell,user);
+    dump_emit_int(emit,"battle.participation_total",fight.participation_total,user);
+    dump_emit_int(emit,"battle.scene_kills",fight.scene_kills,user);
+    dump_emit_int(emit,"battle.auto_resurrect",fight.auto_resurrect,user);
+    dump_emit_int(emit,"battle.sticky",fight.sticky,user);
+    dump_emit_int(emit,"battle.hp_gauge",fight.hp_gauge,user);
+    dump_emit_int(emit,"battle.mp_gauge",fight.mp_gauge,user);
+    for (i = 0; i < fight.count; ++i) {
+        const Combatant *a = &fight.actors[i];
+        snprintf(key,sizeof key,"battle.slot%d.id",i);
+        snprintf(value,sizeof value,"%d",a->id); emit(key,value,user);
+        snprintf(key,sizeof key,"battle.slot%d.hp",i);
+        snprintf(value,sizeof value,"%d",a->hp); emit(key,value,user);
+        snprintf(key,sizeof key,"battle.slot%d.maxhp",i);
+        snprintf(value,sizeof value,"%d",a->max_hp); emit(key,value,user);
+        snprintf(key,sizeof key,"battle.slot%d.mp",i);
+        snprintf(value,sizeof value,"%d",a->mp); emit(key,value,user);
+        snprintf(key,sizeof key,"battle.slot%d.charge",i);
+        snprintf(value,sizeof value,"%d",(int)(tick_now()-(uint32_t)a->last_action)); emit(key,value,user);
+        snprintf(key,sizeof key,"battle.slot%d.x",i);
+        snprintf(value,sizeof value,"%d",a->x); emit(key,value,user);
+        snprintf(key,sizeof key,"battle.slot%d.y",i);
+        snprintf(value,sizeof value,"%d",a->y); emit(key,value,user);
+        snprintf(key,sizeof key,"battle.slot%d.state",i);
+        snprintf(value,sizeof value,"%d",a->turn); emit(key,value,user);
+        snprintf(key,sizeof key,"battle.slot%d.participation",i);
+        snprintf(value,sizeof value,"%d",a->participation); emit(key,value,user);
+    }
+}
+/* FUN_00432c28, the /battle, /battle2 and /battle3 simulators: an outer loop over the group
+ * table and an inner one over its members. `mode` is the original's third parameter - 1 for
+ * /battle (every member against the hero), 0 for /battle2 (member against member) and 2 for
+ * /battle3. The original resolves each pairing through FUN_00432ac8, which sweeps the whole
+ * item table to find the best weapon before rolling; the port reuses the live fight's spawn and
+ * damage path with the hero's equipped right hand, so the formula is the same but the item
+ * sweep is not. Emits the same battle_* events a live fight does. */
+void battle_run_simulator(int mode)
+{
+    int g, i, members = 0;
+    for (g = 1; g < WORLD_MAX_GROUPS; ++g) {
+        const GroupDef *group = &g_world.groups[g];
+        int n;
+        if (!group->used) continue;
+        n = clamp(group->count,0,GROUP_MAX_MEMBERS);
+        for (i = 0; i < n; ++i) {
+            int id = group->members[i];
+            int attacker, target, damage;
+            if (id <= 0 || id >= WORLD_MAX_MONSTERS || !g_world.monsters[id].used) continue;
+            battle_begin_ex(&id,1,INT_MIN,0,0);
+            attacker = mode ? 1 : (i % (fight.count-1)) + 1;
+            if (attacker >= fight.count) attacker = fight.count-1;
+            target = mode ? 0 : (attacker % (fight.count-1)) + 1;
+            if (target >= fight.count || target == attacker) target = attacker == 0 ? 1 : 0;
+            fight.attacker = attacker; fight.victim = target; fight.spell = 0;
+            damage = physical_damage(&fight.actors[attacker],&fight.actors[target],attacker != 0);
+            wos_log_event("battle_hit","ms=0 attacker=%d target=%d dmg=%d simulator=%d",
+                          attacker,target,damage,mode);
+            if (damage >= 0)
+                fight.actors[target].hp = clamp((int64_t)fight.actors[target].hp-damage,0,
+                                                fight.actors[target].max_hp);
+            if (!mode) ++members;
+        }
+        wos_log_event("battle_sim_group","g=%d mode=%d result=%s",g,mode,members?"members":"empty");
+        /* /battle2 alone prints the original's per-group "---" (string 0x4ea558, all.c:37673). */
+        if (!mode) wos_log_event("battle_sim_separator","g=%d",g);
+        members = 0;
+    }
+}

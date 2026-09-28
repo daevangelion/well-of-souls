@@ -1,0 +1,52 @@
+# Authoring editors, driven from the front end: Title -> main menu -> "Play now" ->
+# the world splash -> Choose Your World -> "... or Create Your Own World ..." (front state 9/10)
+# -> the Link Editor. Place a link, place a monster, paint one terrain cell, save, leave.
+#
+# This replay MUTATES the world binaries, so it must be run against a copy of extracted/;
+# tests/editors_replay.sh does that and byte-diffs the result.
+# requires: editor_open editor_link_add editor_monster editor_terrain editor_save editor_screen
+# The title screen turns any key into the main menu, so no boot_menu expect is needed.
+key RETURN
+wait 20
+key RETURN
+wait 20
+key x
+wait 60
+# "--- or Create Your Own World ---" is FUN_0041D3CC's 1000x1000-space rect (1000,1000)-
+# (875,875); after its 750 ms slide it lands at (560,420) with the text's width, so the
+# on-screen part is x 560..640, y 420..428.
+click 600 424
+# editor_open is logged by editors_load_map before editors_enter() screen_sets, so it must be
+# expected first: an `expect` that matches advances the replay's baseline past that event.
+expect editor_open 300
+expect editor_screen 300
+# 1 = link tool: click to put the cursor on the map, then N to claim the lowest free .obl
+# record at the cursor (the editor's "Add" entry). Every shipped sprite covers almost the whole
+# map, so the click selects an existing link and N is what actually places one.
+key 1
+wait 2
+click 700 30
+expect editor_link_select 120
+key n
+expect editor_link_add 120
+# 3 = monster tool: a click places into the lowest free .mon record. (60,60) is cell
+# (15,15), 67 cells from the nearest shipped monster.
+key 3
+wait 2
+click 60 60
+expect editor_monster 120
+# 2 = terrain tool: a click paints the brush square, the right button erases it.
+key 2
+wait 2
+click 200 200
+expect editor_terrain 120
+# Leaving with unsaved links raises FUN_0045C7D7's MessageBox: "Save your link changes for map
+# %s?" / "Hmmm.." with MB_YESNO, drawn in framebuffer at (200,258) Yes / (340,258) No.
+# The `dialog` op can answer it as `dialog 61441 ok` (EDITOR_DIALOG_SAVE_LINKS) once Core routes
+# the op to editors_dialog_op; Y / N / Enter / Esc and the two buttons work today.
+key ESCAPE
+expect editor_prompt 120
+key y
+expect editor_save 300
+expect editor_leave 300
+quit

@@ -4,6 +4,14 @@
 expect boot_menu 900
 key RETURN
 wait 30
+# FUN_0041B891's own table (all.c:21078) has THREE states before the Well, not two:
+#   1 main menu -> 2 "Where Do You Want To Play Today?" (splash, art\where.jpg, FUN_0041D31F)
+#   2 -> 3 "Choose Your World" + the world list (art\chapter.jpg, FUN_0041D717)
+#   3 -> take the highlighted row (msg 0x474) -> the Pick-a-Soul window
+# The old port collapsed the splash; the three states are the original's, so the script
+# spends one more RETURN on them. RETURN is the plan's keyboard shortcut for the click.
+key RETURN
+wait 30
 key RETURN
 wait 30
 key n

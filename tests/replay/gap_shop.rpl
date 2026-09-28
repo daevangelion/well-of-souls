@@ -6,6 +6,13 @@ key RETURN
 wait 30
 key RETURN
 wait 30
+# Three states before the Well, not two: 1 main menu -> 2 the
+# "Where Do You Want To Play Today?" splash (FUN_0041D31F) -> 3 the world
+# list (FUN_0041D717). The original's own table is FUN_0041B891 (all.c:21078);
+# the port used to collapse the splash, so the script had drifted. The extra
+# RETURN is the plan's keyboard shortcut for the row click (msg 0x474).
+key RETURN
+wait 30
 key n
 wait 5
 text Trader

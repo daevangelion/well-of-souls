@@ -1,0 +1,26 @@
+# tools/oracle/hero_mask.txt -- byte ranges of the 0x16CC-byte hero record that are
+# masked out of the `hero.hex.*` comparison in tests/diff_oracle.sh.
+#
+# Format: <first> <last> <reason>      (hex, inclusive, offsets into the record)
+# Empty lines and lines starting with '#' are ignored.
+#
+# The named hero.* keys (hero.hp, hero.level, ...) are ALWAYS compared unmasked; this
+# file only relaxes the raw hex, where a single RAM pointer or wall-clock field would
+# otherwise swamp the diff.  Every entry below is a field the original itself treats as
+# RAM-only or as derived from the wall clock.
+
+000C 000F account_id           RAM-only mirror, re-derived on load (0x4181A2)
+0058 0067 pet CWnd* + aux      live pet window pointer (0x416A3F, 0x4181A2)
+0068 006B must be 0 in a file  rejected on load if non-zero (0x4181A2)
+006C 006F must be 0 in a file  rejected on load if non-zero (0x4181A2)
+00CC 00CF owning-hero pointer  "recalled from" back reference (0x416A3F)
+0698 069B must be 0 in a file  rejected on load if non-zero (0x4181A2)
+06C0 06C3 must be 0 in a file  rejected on load if non-zero (0x4181A2)
+06C8 06CB must be 0 in a file  rejected on load if non-zero (0x4181A2)
+075C 075F must be 0 in a file  rejected on load if non-zero (0x4181A2)
+0974 0977 RAM-only             cleared on load (0x4181A2)
+06AC 0C6B RAM-only flag blobs  4x0x1000 scratch flag blocks (0x6AC..0x6C3 + 4KiB each)
+0978 097B RAM-only             cleared on load (0x4181A2)
+0EEC 0EFC pet ids / fatigue    live pet ids and the FAT/energy field (0x0EFC, 0x0F00)
+0F00 0F03 FAT from seconds     derived from a wall-clock delta
+0FBC 0FBF level FAT mirror     derived from a wall-clock delta

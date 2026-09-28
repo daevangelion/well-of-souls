@@ -37,7 +37,9 @@ static uint32_t rd32(Cur *c) {
 }
 static void skip(Cur *c, size_t n) { if (c->end - c->p < n) { c->bad = 1; c->p = c->end; } else c->p += n; }
 static int at(const unsigned char *b, size_t len, size_t off, unsigned char *out) {
-    if (off >= len) return 0; *out = b[off]; return 1;
+    if (off >= len) return 0;
+    *out = b[off];
+    return 1;
 }
 
 /* Raw-deflate one-shot: 2-byte zlib header skipped by the caller (we start at the

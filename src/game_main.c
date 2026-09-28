@@ -1,36 +1,153 @@
 #include "game_main.h"
 #include "platform/platform.h"
+#include "engine/clock.h"
+#include "engine/dscript.h"
+#include "engine/dump.h"
+#include "engine/fb.h"
 #include "engine/log.h"
 #include "engine/replay.h"
 #include "engine/rng.h"
 #include "engine/screen.h"
 #include "engine/text.h"
-#include "game/scene.h"
+#include "engine/ui.h"
+#include <errno.h>
+
+/* The `dialog` script op. Panels-2 owns the implementation and the control-id
+ * table; this is the port's call site. The declaration is weak so the port
+ * links (and the .rpl tests run) before panels.c has converted, and so a build
+ * that drops panels entirely still links. DialogOp must stay field-for-field
+ * identical to panels.h's. */
+typedef struct { int id; int ctrl; int value; int ok; } DialogOp;
+__attribute__((weak)) int panel_dialog_op(const DialogOp *op);
+
+/* SceneVM-2 owns the quest VM's ms-driven TIMER/COUNTDOWN and is removing the
+ * old per-frame entry point. The weak declaration bridges the migration: the
+ * call disappears with the symbol. */
+__attribute__((weak)) void scene_tick(void);
+
+
+__attribute__((weak)) int front_dialog_op(int dialog_id, const char *const *kv, int n, int ok);
+#include "game/options.h"
+static void scene_tick_if_any(void) { if (scene_tick) scene_tick(); }
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+
 static const char *data_path;
 static const char *save_path;
 static char default_save_path[4096];
 static int quitting;
+
 const char *game_data_path(void) { return data_path; }
 const char *game_save_path(void) { return save_path; }
-void game_request_quit(void) { quitting=1; }
-static int unsigned_arg(const char *s,uint32_t *out)
+void game_request_quit(void) { quitting = 1; }
+
+/* --- module state dumps -----------------------------------------------------
+ * One entry per module. A module that has not converted yet has no entry and is
+ * simply skipped, so the build and the .rpl tests keep working during the
+ * migration. `label` is what `at <ms> dump <label>` names; the key registry
+ * itself is owned by the Oracle (docs/re/oracle.md) and mirrored here. */
+typedef void (*DumpFn)(DumpEmit, void *);
+#define WOS_DUMP(n) extern void n##_dump(DumpEmit, void *);
+WOS_DUMP(hero) WOS_DUMP(map) WOS_DUMP(scene) WOS_DUMP(battle)
+WOS_DUMP(panels) WOS_DUMP(items) WOS_DUMP(minigame) WOS_DUMP(options)
+#undef WOS_DUMP
+#define WOS_WEAK __attribute__((weak))
+WOS_WEAK void hero_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void map_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void scene_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void battle_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void panels_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void items_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void minigame_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void options_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+
+typedef struct { const char *label; DumpFn fn; } DumpEntry;
+static const DumpEntry dump_table[] = {
+    { "clock",  0 },
+    { "rng",    0 },
+    { "hero",   hero_dump },
+    { "map",    map_dump },
+    { "scene",  scene_dump },
+    { "battle", battle_dump },
+    { "panels", panels_dump },
+    { "items",  items_dump },
+    { "minigame", minigame_dump },
+    { "options", options_dump }
+};
+#define DUMP_ENTRIES ((int)(sizeof(dump_table) / sizeof(dump_table[0])))
+
+static void dump_builtin(DumpEmit emit, void *user)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)clock_ms());
+    emit("clock.ms", buf, user);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)clock_time_s());
+    emit("clock.time_s", buf, user);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)crt_rand_state());
+    emit("rng.state", buf, user);
+    snprintf(buf, sizeof(buf), "%llu", (unsigned long long)crt_rand_calls());
+    emit("rng.calls", buf, user);
+}
+
+static void dump_emit_file(const char *key, const char *value, void *user)
+{
+    fprintf((FILE *)user, "%s=%s\n", key, value);
+}
+
+static int run_dumps(const char *path)
+{
+    FILE *file;
+    int i, failed = 0;
+    if (!path) return 0;
+    file = plat_fopen(path, "wb");
+    if (!file) {
+        wos_log_event("dump_open_failed", "path=%s", path);
+        return -1;
+    }
+    for (i = 0; i < DUMP_ENTRIES; ++i) {
+        const char *label = dump_table[i].label;
+        dump_emit_file("label", label, file);
+        if (!strcmp(label, "clock") || !strcmp(label, "rng")) dump_builtin(dump_emit_file, file);
+        else if (dump_table[i].fn) dump_table[i].fn(dump_emit_file, file);
+        else failed = 1;
+    }
+    if (fclose(file)) failed = 1;
+    wos_log_event("dump_written", "path=%s", path);
+    return failed;
+}
+
+static void dump_one(const char *label)
+{
+    int i;
+    wos_log_event("dump", "label=%s", label);
+    for (i = 0; i < DUMP_ENTRIES; ++i) {
+        if (strcmp(dump_table[i].label, label)) continue;
+        if (!strcmp(label, "clock") || !strcmp(label, "rng")) dump_builtin(log_emit, NULL);
+        else if (dump_table[i].fn) dump_table[i].fn(log_emit, NULL);
+        return;
+    }
+    wos_log_event("dump_unknown", "label=%s", label);
+}
+
+static int unsigned_arg(const char *s, uint32_t *out)
 {
     char *end; unsigned long n;
-    if(!*s || *s=='-') return -1;
-    errno=0; n=strtoul(s,&end,10);
-    if(errno || *end || n>UINT32_MAX) return -1;
-    *out=(uint32_t)n; return 0;
+    if (!*s || *s == '-') return -1;
+    errno = 0; n = strtoul(s, &end, 10);
+    if (errno || *end || n > UINT32_MAX) return -1;
+    *out = (uint32_t)n; return 0;
 }
-static uint64_t seen(const char *name,uint64_t since,void *user)
-{ (void)user; return wos_log_seen_since(name,since); }
-static void bmp_u32(unsigned char *p,uint32_t n)
+
+static uint64_t seen(const char *name, uint64_t since, void *user)
+{ (void)user; return wos_log_seen_since(name, since); }
+
+static void bmp_u32(unsigned char *p, uint32_t n)
 { p[0]=(unsigned char)n; p[1]=(unsigned char)(n>>8); p[2]=(unsigned char)(n>>16); p[3]=(unsigned char)(n>>24); }
-static int save_shot(const Framebuffer *fb,const char *path)
+
+static int save_shot(const Framebuffer *fb, const char *path)
 {
-    unsigned char header[54]={0},row[PLAT_SCREEN_W*3+3];
+    unsigned char header[54]={0}, row[PLAT_SCREEN_W*3+3];
     size_t stride; int x,y,failed=0; FILE *file;
     if(fb->w<=0 || fb->w>PLAT_SCREEN_W || fb->h<=0 || fb->h>PLAT_SCREEN_H) return -1;
     stride=((size_t)fb->w*3+3)&~(size_t)3;
@@ -53,14 +170,133 @@ static int save_shot(const Framebuffer *fb,const char *path)
     if(failed) return -1;
     wos_log_event("shot","path=%s",path); return 0;
 }
+
 static void usage(void)
-{ fputs("Usage: wos --data DIR [--save DIR] [--headless] [--replay FILE] [--log FILE] [--seed N] [--max-frames N] [--shot-every N DIR]\n",stderr); }
-int game_main(int argc,char **argv)
 {
-    const char *replay_path=NULL,*log_path=NULL,*shot_dir=NULL;
-    uint32_t seed=1,max_frames=0,frame=0,next_tick,phase=0,shot_every=0;
-    int capped=0,headless=0,i,result=0,initialized=0;
-    char *script=NULL; Replay *replay=NULL; size_t error_line;
+    fputs("Usage: wos --data DIR [--save DIR] [--headless] [--replay FILE] [--script FILE]\n"
+          "          [--log FILE] [--dump FILE] [--time EPOCH_S] [--max-frames N]\n"
+          "          [--seed N] [--shot-every N DIR]\n", stderr);
+}
+
+/* --- seeding ----------------------------------------------------------------
+ * The original seeds the CRT twice inside FUN_004269AF (0x004269AF), the
+ * CWinApp-derived global-constructor class, at all.c:27953 and all.c:27987:
+ *     tVar3 = time(NULL); srand(tVar3);   rand();   <- all.c:27953
+ *     ... FUN_00427D89(); ...                       (34 lines later)
+ *     tVar3 = time(NULL); srand(tVar3);              <- all.c:27987
+ * The second seed wins, but the single rand() between them is a real consumer,
+ * so the port does exactly: seed, draw once, seed again. --seed pins the
+ * `time()` value so a replay reproduces; otherwise it is the virtual time(). */
+static void seed_crt(uint32_t pin, int have_pin)
+{
+    uint32_t t = have_pin ? pin : clock_time_s();
+    crt_srand(t);
+    (void)crt_rand();
+    t = have_pin ? pin : clock_time_s();
+    crt_srand(t);
+    wos_log_event("rng_seeded", "seed=%lu", (unsigned long)t);
+}
+
+/* The 20 Hz idle work of FUN_0040A7C7 (0x0040A7C7). Its four callees are the
+ * SRNet perf graph FUN_0042895C, a heap probe FUN_00416CD3, a sound poke
+ * FUN_00401F8D and the Lag-O-Meter accumulate FUN_0047397B. None is a solo-play
+ * rule, and FUN_0042895C's discarded rand() is SRNet-only (docs/re/rng_calls.md
+ * section 2.1), so solo play consumes no RNG on the 20 Hz path. */
+/* The 20 Hz tick and the 25 ms world tick, i.e. the real shape of
+ * FUN_0040A7C7 (0x0040A7C7) -> FUN_0042895C (0x0042895C) -> FUN_0041BDB4
+ * (0x0041BDB4). FUN_0042895C burns ONE discarded rand() on every call, before
+ * its 25 ms sub-gate, so the port must consume one crt_rand() per 20 ms tick or
+ * the whole stream shifts (docs/re/rng_calls.md 2.1, all.c:30576).
+ *
+ * It then gates on `GetTickCount() - _DAT_004e48cc < 0x19` (all.c:30578) and,
+ * only if `DAT_004e483c` is a live window, runs the entire game world:
+ * FUN_0041BDB4. The world is therefore 40 Hz, not 60 Hz and not 20 Hz. */
+#define WORLD_GATE_OWNER ((void *)&idle_ticks)
+static unsigned idle_ticks;
+
+static int world_tick_due(void)
+{
+    if (!clock_gate(WORLD_GATE_OWNER, 0, 25u)) return 0;
+    if (++idle_ticks % 40u == 0u)      /* one log line per virtual second */
+        wos_log_event("world_tick", "ms=%lu count=%u",
+                      (unsigned long)clock_ms(), idle_ticks);
+    return 1;
+}
+
+/* One `dialog` line is N control assignments followed by the terminating
+ * ok|cancel. FrontHero-2 owns the New Soul dialogs (138, 149) and takes the pairs
+ * as strings because one of its controls is a text field; Panels-2 owns the item
+ * and shop dialogs and takes them as ints. Both are offered every op, and each
+ * returns 0 for ids it does not own, so the dispatch order is not significant. */
+static void apply_dialog_op(const DscriptOp *op)
+{
+    char keys[DSCRIPT_KV_MAX][32], values[DSCRIPT_KV_MAX][32];
+    const char *kp[DSCRIPT_KV_MAX];
+    DialogOp d;
+    int k, n = op->control_count;
+    for (k = 0; k < n; ++k) {
+        snprintf(keys[k], sizeof(keys[k]), "%d", op->control[k]);
+        snprintf(values[k], sizeof(values[k]), "%d", op->value[k]);
+        kp[k] = keys[k];
+    }
+    /* "the terminating ok|cancel" as the last pair, so a panel sees the same
+     * call shape whether or not the script listed any control first. */
+    snprintf(keys[n], sizeof(keys[n]), "ok");
+    snprintf(values[n], sizeof(values[n]), "%d", op->ok);
+    kp[n] = keys[n];
+    ++n;
+    d.id = op->id; d.ctrl = -1; d.value = op->ok; d.ok = op->ok;
+    panel_dialog_op(&d);
+    if (front_dialog_op) front_dialog_op(op->id, kp, n, op->ok);
+    options_dialog_op(op->id, kp, n, op->ok);
+}
+
+static void apply_script_op(const DscriptOp *op, Input *input)
+{
+    PlatEvent ev;
+    int i;
+    memset(&ev, 0, sizeof(ev));
+    switch (op->kind) {
+    case DS_CLICK: case DS_RCLICK: case DS_DOWN: case DS_UP: case DS_MOVE:
+        ev.type = PLAT_EV_MOUSE_MOVE; ev.x = op->x; ev.y = op->y;
+        input_event(input, &ev);
+        if (op->kind == DS_MOVE) break;
+        ev.type = op->kind == DS_UP ? PLAT_EV_MOUSE_UP : PLAT_EV_MOUSE_DOWN;
+        ev.button = op->button ? op->button : 1;
+        input_event(input, &ev);
+        break;
+    case DS_KEY:
+        ev.type = PLAT_EV_KEY_DOWN; ev.key = op->key; input_event(input, &ev);
+        ev.type = PLAT_EV_KEY_UP;   ev.key = op->key; input_event(input, &ev);
+        break;
+    case DS_TEXT: {
+        const char *s = op->text;
+        while (*s) {
+            size_t n = strlen(s); if (n > 31) n = 31;
+            /* Do not split UTF-8 continuation bytes across platform events. */
+            while (n > 28 && s[n] && ((unsigned char)s[n] & 0xc0) == 0x80) --n;
+            memset(&ev, 0, sizeof(ev));
+            ev.type = PLAT_EV_TEXT; memcpy(ev.text, s, n); s += n;
+            input_event(input, &ev);
+        }
+        break;
+    }
+    case DS_DIALOG:
+        apply_dialog_op(op);
+        break;
+    case DS_DUMP: dump_one(op->text); break;
+    case DS_END: game_request_quit(); break;
+    default: break;
+    }
+    (void)i;
+}
+
+int game_main(int argc, char **argv)
+{
+    const char *replay_path=NULL, *script_path=NULL, *log_path=NULL, *dump_path=NULL, *shot_dir=NULL;
+    uint32_t seed=0, epoch=0, max_frames=0, frame=0, shot_every=0, phase=0;
+    int capped=0, headless=0, i, result=0, initialized=0, have_seed=0, have_epoch=0;
+    char *text=NULL; Replay *replay=NULL; Dscript *script=NULL; size_t error_line;
     uint32_t *pixels=NULL; Framebuffer fb; Input input={0};
     data_path=NULL; save_path=NULL; quitting=0;
     for(i=1;i<argc;++i) {
@@ -70,8 +306,11 @@ int game_main(int argc,char **argv)
         if(!strcmp(arg,"--data")) data_path=argv[++i];
         else if(!strcmp(arg,"--save")) { save_path=argv[++i]; if(!*save_path) { usage(); return 1; } }
         else if(!strcmp(arg,"--replay")) replay_path=argv[++i];
+        else if(!strcmp(arg,"--script")) script_path=argv[++i];
         else if(!strcmp(arg,"--log")) log_path=argv[++i];
-        else if(!strcmp(arg,"--seed")) { if(unsigned_arg(argv[++i],&seed)) { usage(); return 1; } }
+        else if(!strcmp(arg,"--dump")) dump_path=argv[++i];
+        else if(!strcmp(arg,"--time")) { if(unsigned_arg(argv[++i],&epoch)) { usage(); return 1; } have_epoch=1; }
+        else if(!strcmp(arg,"--seed")) { if(unsigned_arg(argv[++i],&seed)) { usage(); return 1; } have_seed=1; }
         else if(!strcmp(arg,"--max-frames")) { capped=1; if(unsigned_arg(argv[++i],&max_frames)) { usage(); return 1; } }
         else if(!strcmp(arg,"--shot-every")) {
             if(i+2>=argc || unsigned_arg(argv[++i],&shot_every) || !shot_every) { usage(); return 1; }
@@ -86,11 +325,18 @@ int game_main(int argc,char **argv)
         save_path=default_save_path;
     }
     if(wos_log_open(log_path)) { fputs("Cannot open event log\n",stderr); return 1; }
+    if(replay_path && script_path) { fputs("--replay and --script are exclusive\n",stderr); result=1; goto cleanup; }
     if(replay_path) {
-        script=text_read_file(replay_path,NULL); replay=malloc(sizeof(*replay));
-        if(!script || !replay) { fputs("Cannot load replay\n",stderr); result=1; goto cleanup; }
-        if(replay_parse(replay,script,&error_line)) {
+        text=text_read_file(replay_path,NULL); replay=malloc(sizeof(*replay));
+        if(!text || !replay) { fputs("Cannot load replay\n",stderr); result=1; goto cleanup; }
+        if(replay_parse(replay,text,&error_line)) {
             fprintf(stderr,"REPLAY FAIL parse line %lu\n",(unsigned long)error_line); result=2; goto cleanup;
+        }
+    } else if(script_path) {
+        text=text_read_file(script_path,NULL); script=malloc(sizeof(*script));
+        if(!text || !script) { fputs("Cannot load script\n",stderr); result=1; goto cleanup; }
+        if(dscript_parse(script,text,&error_line)) {
+            fprintf(stderr,"SCRIPT FAIL parse line %lu\n",(unsigned long)error_line); result=2; goto cleanup;
         }
     }
     if(plat_init("Well of Souls",PLAT_SCREEN_W,PLAT_SCREEN_H,headless?PLAT_INIT_HEADLESS:0)) {
@@ -99,23 +345,64 @@ int game_main(int argc,char **argv)
     initialized=1; pixels=malloc(PLAT_SCREEN_W*PLAT_SCREEN_H*sizeof(*pixels));
     if(!pixels) { result=1; goto cleanup; }
     if(shot_dir && plat_mkdir(shot_dir)) { fputs("Cannot create screenshot directory\n",stderr); result=1; goto cleanup; }
-    fb_init(&fb,pixels,PLAT_SCREEN_W,PLAT_SCREEN_H); rng_seed(game_rng(),seed);
+    fb_init(&fb,pixels,PLAT_SCREEN_W,PLAT_SCREEN_H);
+    clock_reset();
+    if(have_epoch) clock_set_time_base(epoch);
+    seed_crt(seed,have_seed);
+    options_load();
     if(game_boot()) { result=1; goto cleanup; }
-    next_tick=plat_ticks_ms();
+    if(!replay && !script) clock_attach_realtime();
+
+    /* The original's loop is CWinApp::Run at 0x0040A8D9: a bare PeekMessage pump
+     * whose order is INPUT -> TIMER -> IDLE/PAINT, and whose idle path runs only
+     * while the message queue is empty. --script makes the virtual clock the only
+     * thing that decides when a step happens, so the step count is a function of
+     * the script and of nothing else. --replay keeps the legacy per-frame
+     * 1000/60 ms virtual step so the existing .rpl acceptance tests are
+     * bit-identical. */
     while(!quitting) {
         PlatEvent event; const Screen *screen;
         input_begin(&input);
         while(plat_poll_event(&event)) if(!replay || event.type==PLAT_EV_QUIT) input_event(&input,&event);
         if(input.quit) break;
-        if(replay) {
+
+        if(script) {
+            /* INPUT first: at an equal timestamp a scheduled event is dispatched
+             * before a timer that is also due, which is the original's order. */
+            for(;;) {
+                const DscriptOp *op = dscript_take(script, clock_ms());
+                if(!op) break;
+                apply_script_op(op,&input);
+            }
+            {
+                uint32_t next = dscript_next_time(script, clock_ms());
+                if(next == UINT32_MAX) break;             /* nothing scheduled remains */
+                if(script->has_end && clock_ms() >= script->end_ms) break;
+                {
+                    uint32_t idle = clock_20hz_next();
+                    uint32_t target = idle < next ? idle : next;
+                    if(target > clock_ms()) clock_advance(target - clock_ms());
+                }
+            }
+        } else if(replay) {
             PlatEvent events[REPLAY_EVENTS_MAX]; size_t n,j;
             int status=replay_step(replay,events,&n,seen,NULL);
             if(status==2) { fprintf(stderr,"REPLAY FAIL expect %s\n",replay->failed_event); result=2; break; }
-            if(status==1) break;
+            if(status==1 && !n) break;
             for(j=0;j<n;++j) input_event(&input,&events[j]);
+            phase += 1000; clock_advance(phase / 60); phase %= 60;
         }
-        if(capped && frame>=max_frames) { result=3; break; }
-        scene_tick(); /* global quest TIMER/COUNTDOWN clock, independent of the current screen */
+        /* TIMER: every WM_TIMER due now, oldest deadline first (FUN_0040A8D9
+         * dispatches the queue, and the timers are the lowest-priority entries). */
+        clock_dispatch_timers();
+        /* IDLE (FUN_0040A7C7, 20 ms) -> world (FUN_0042895C's 25 ms sub-gate ->
+         * FUN_0041BDB4). The world step runs once per 25 ms of virtual time in
+         * --script mode, which is the original's rate; the legacy --replay mode
+         * keeps its per-frame step so the .rpl acceptance tests are unchanged. */
+        if (clock_idle_due()) (void)crt_rand();
+        if (capped && frame >= max_frames) { result = 3; break; }
+        if (script && !world_tick_due()) continue;
+        scene_tick_if_any();
         screen=screen_current(); if(screen && screen->update) screen->update(&input);
         fb_reset_clip(&fb); fb_clear(&fb,0);
         screen=screen_current(); if(screen && screen->render) screen->render(&fb);
@@ -129,16 +416,14 @@ int game_main(int argc,char **argv)
                 fputs("Cannot write periodic screenshot\n",stderr); result=1; break;
             }
         }
-        if(!replay) {
-            uint32_t now;
-            phase+=1000; next_tick+=phase/60; phase%=60; now=plat_ticks_ms();
-            if((int32_t)(next_tick-now)>0) plat_sleep_ms(next_tick-now);
-            /* Limit catch-up after suspension without changing simulation step size. */
-            else if((uint32_t)(now-next_tick)>250) next_tick=now;
+        if(!replay && !script) {
+            uint32_t idle = clock_20hz_next(), now = clock_ms();
+            if((int32_t)(idle - now) > 0) plat_sleep_ms(idle - now);
         }
     }
+    if(run_dumps(dump_path)) { fputs("Cannot write dump\n",stderr); if(!result) result=1; }
 cleanup:
-    screen_set(NULL); free(pixels); free(replay); free(script);
+    screen_set(NULL); free(pixels); free(replay); free(script); free(text);
     if(initialized) plat_shutdown();
     wos_log_close(); return result;
 }
