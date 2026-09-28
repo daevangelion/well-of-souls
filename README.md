@@ -58,14 +58,21 @@ With no overrides it uses a pre-extracted `../../extracted` tree and the pinned
 TimGM6mb bank. Unpacking the installer needs `mono` and `7z` on PATH. A custom
 soundfont is staged under the fixed `TimGM6mb.sf2` name the engine loads at runtime.
 
-**Runtime supply (no bundled data).** The game data is copyrighted and is not
-bundled in the APK. On first launch the app asks you to supply the original
-`WellOfSouls.exe` installer — pick it with the system file picker, or download
-it from a URL — and decodes it **on-device** with a native Clickteam installer
-decoder (`src/platform/sdl2/cic_unpack.c`, validated byte-exact against cicdec).
-The decoded game is stored in internal storage and reused on later launches.
-The desktop build keeps the same decoder for host-side unpacking but never links
-the codecs into the game binary.
+**Runtime supply (the default).** The game data is copyrighted and is **not**
+bundled in the APK by default (`-PwosBundleData=true` embeds it, or supply an
+installer to the Gradle build as above). On first launch the app asks you to
+supply the original `WellOfSouls.exe` installer — pick it with the system file
+picker, or download it from a URL — and decodes it **on-device** with a native
+Clickteam installer decoder (`src/platform/sdl2/cic_unpack.c`, validated
+byte-exact against cicdec). The decoded game is stored in internal storage and
+reused on later launches. The desktop build keeps the same decoder for host-side
+unpacking but never links the codecs into the game binary.
+
+**Soundfont at runtime (optional).** MIDI needs a SoundFont2 bank; without one
+the game runs silently. A "WoS Soundfont" launcher icon lets you pick or
+download any bank, stored as `user-soundfont.sf2`; `find_soundfont()` checks it
+before the bundled TimGM6mb, so a supplied bank wins without a rebuild. (The
+TimGM6mb bank is still bundled by default as a fallback.)
 
 ## Tests
 
