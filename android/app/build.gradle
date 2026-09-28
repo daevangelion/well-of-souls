@@ -26,12 +26,15 @@ def soundfontUrl     = opt('wosSoundfontUrl', 'WOS_SOUNDFONT_URL')
 def soundfontSha     = opt('wosSoundfontSha256', 'WOS_SOUNDFONT_SHA256')
 def soundfontLicense = opt('wosSoundfontLicense', 'WOS_SOUNDFONT_LICENSE')
 
-// Data root: unpack into the build dir when an installer is supplied, else use a
-// pre-extracted tree next to the project.
+// Data bundling is opt-in: by default the APK ships no game data and the app asks the
+// user to supply the installer at runtime (see WosActivity). Set -PwosBundleData=true
+// (or supply an installer / pre-extracted tree) to embed the data in the APK instead.
+def bundleData = (findProperty('wosBundleData') ?: System.getenv('WOS_BUNDLE_DATA'))?.toString()?.trim()?.toBoolean() ?: false
 def provisionData = !!(installer || installerUrl)
 def dataRoot = provisionData
     ? new File(layout.buildDirectory.get().asFile, 'gameData')
     : file('../../extracted')
+def embedData = bundleData || provisionData   // embed only when asked or provisioned
 
 def fetchSoundfont = tasks.register('fetchSoundfont', Exec) {
     commandLine file('../../tools/fetch_soundfont.sh').absolutePath
@@ -95,34 +98,39 @@ android {
 def packageGameAssets = tasks.register('packageGameAssets', Sync) {
     dependsOn fetchSoundfont
     if (provisionData) dependsOn prepareGameData
-    inputs.dir dataRoot
-    from(dataRoot) { into 'wos-data' }
+    if (embedData) {
+        inputs.dir dataRoot
+        from(dataRoot) { into 'wos-data' }
+    }
     from(soundfontCache) { include 'TimGM6mb.sf2', 'TimGM6mb.LICENSE.txt' }
     from('../../src/third_party/TinySoundFont.LICENSE')
     into packagedAssets
     doFirst {
-        if (!new File(dataRoot, 'Souls.exe').isFile()) {
+        if (embedData && !new File(dataRoot, 'Souls.exe').isFile()) {
             throw new GradleException(provisionData
                 ? "Installer did not unpack to ${dataRoot} (mono and 7z must be on PATH)"
                 : "Missing extracted game data. Run tools/fetch_game_data.sh, or pass " +
-                  "-PwosInstaller=<file> / -PwosInstallerUrl=<url> to the Gradle build.")
+                  "-PwosInstaller=<file> / -PwosInstallerUrl=<url>, or drop -PwosBundleData to supply at runtime.")
         }
     }
     doLast {
-        def digest = java.security.MessageDigest.getInstance('SHA-256')
-        def entries = fileTree(dataRoot).files.sort { a, b -> a.path <=> b.path }.collect { f ->
-            def name = dataRoot.toPath().relativize(f.toPath()).toString().replace('\\', '/')
-            if (name.contains('\n') || name.contains('\r') || name.contains('\t')) {
-                throw new GradleException("Unsupported asset name: ${name}")
-            }
-            digest.reset()
-            f.withInputStream { input ->
-                byte[] buffer = new byte[65536]
-                for (int n; (n = input.read(buffer)) > 0;) digest.update(buffer, 0, n)
-            }
-            "${digest.digest().encodeHex()}\t${f.length()}\t${name}\n"
-        }.join('')
-        new File(packagedAssets.get().asFile, 'wos-manifest.txt').setText(entries, 'UTF-8')
+        if (embedData) {
+            // A sorted size/hash manifest drives transactional first-launch extraction and APK upgrades.
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            def entries = fileTree(dataRoot).files.sort { a, b -> a.path <=> b.path }.collect { f ->
+                def name = dataRoot.toPath().relativize(f.toPath()).toString().replace('\\', '/')
+                if (name.contains('\n') || name.contains('\r') || name.contains('\t')) {
+                    throw new GradleException("Unsupported asset name: ${name}")
+                }
+                digest.reset()
+                f.withInputStream { input ->
+                    byte[] buffer = new byte[65536]
+                    for (int n; (n = input.read(buffer)) > 0;) digest.update(buffer, 0, n)
+                }
+                "${digest.digest().encodeHex()}\t${f.length()}\t${name}\n"
+            }.join('')
+            new File(packagedAssets.get().asFile, 'wos-manifest.txt').setText(entries, 'UTF-8')
+        }
     }
 }
 tasks.named('preBuild').configure { dependsOn packageGameAssets }

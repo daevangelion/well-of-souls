@@ -50,6 +50,17 @@ static tsf *find_soundfont(void)
     int n;
     if (env && *env) font = load_soundfont(env, 0);
     if (font) return font;
+    home = SDL_getenv("HOME");
+#ifdef _WIN32
+    if (!home || !*home) home = SDL_getenv("USERPROFILE");
+#endif
+    /* A user-supplied bank (written by the app's first-run supply flow) takes
+     * precedence over the bundled/default one. */
+    if (home && *home) {
+        n = SDL_snprintf(path, sizeof(path), "%s/user-soundfont.sf2", home);
+        if (n >= 0 && n < (int)sizeof(path)) font = load_soundfont(path, 0);
+        if (font) return font;
+    }
     base = SDL_GetBasePath();
     if (base) {
         n = SDL_snprintf(path, sizeof(path), "%sTimGM6mb.sf2", base);
@@ -60,10 +71,6 @@ static tsf *find_soundfont(void)
 #ifdef __ANDROID__
     font = load_soundfont("TimGM6mb.sf2", 1);
     if (font) return font;
-#endif
-    home = SDL_getenv("HOME");
-#ifdef _WIN32
-    if (!home || !*home) home = SDL_getenv("USERPROFILE");
 #endif
     if (home && *home) {
         n = SDL_snprintf(path, sizeof(path), "%s/.cache/wos-soundfont/TimGM6mb.sf2", home);
