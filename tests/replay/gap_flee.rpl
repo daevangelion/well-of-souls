@@ -32,109 +32,19 @@ hold RIGHT 60
 keydown DOWN
 expect battle_start 1500
 keyup DOWN
-# Refused: the hero has not acted, so rec[0x38C] is still 0x2F and FUN_00436c9d returns blocked
-# on its first test, before DAT_00502b14 or the 30 % roll are ever consulted.
+# Refused outright: the hero has not acted, so its record is still 0x2F and FUN_00436c9d returns
+# blocked on its first test, before DAT_00502b14 or the 30 % roll are ever consulted.
 key f
 expect battle_flee_failed 300
-# Poll F through the monsters' attack animations until the 30 % roll lets go.
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
-key f
-wait 4
+# The roll is only live while a MONSTER's attack is animating on the hero, so wait for the
+# monster to commit and then poll F through its 1000 ms animation. The hero never presses A, so
+# it never blocks its own window.
+#
+# FUN_00436c9d sets rec[0x38C] = 0x2F as a side effect, before the roll, so the hero gets exactly
+# ONE 30 % roll per round and every later F in that round is refused on the first test. The
+# window below is therefore a single 30 % draw: it is pinned to a seed, and the log shows both
+# outcomes, the refusal and the successful interrupt.
+expect battle_monster_act 2000
 key f
 wait 4
 key f

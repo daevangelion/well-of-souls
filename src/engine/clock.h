@@ -37,7 +37,10 @@
 
 /* Virtual GetTickCount(): milliseconds since the port's t0. Wraps like Win32. */
 uint32_t clock_ms(void);
-/* Virtual time(NULL): whole seconds since the epoch base (see clock_set_time_base). */
+/* The original's time(NULL): the WALL clock in seconds, i.e. the same value as
+ * plat_time_s(), pin included. It is deliberately not derived from the virtual
+ * millisecond clock: FUN_00409722's date check and the two boot srand calls read
+ * time(), and the differential harness pins it. */
 uint32_t clock_time_s(void);
 /* Real host milliseconds, for the interactive pacing only. Never used for rules. */
 uint32_t clock_real_ms(void);
@@ -74,15 +77,14 @@ int  clock_dispatch_timers(void);
  * i.e. the idle tick fires at most once per 20 ms of virtual time. Returns 1
  * and consumes one tick when an idle tick is due.
  *
- * The stamp re-arms from the PREVIOUS BOUNDARY, never from the observed time,
- * so a driver that jumps the clock by N ms still costs floor(N/20) idle ticks
- * rather than one. That is what the live original does: its idle loop spins and
- * lands on each 20 ms boundary, so the tick COUNT over an idle span is
- * floor(N/20). Stepping the script clock straight to the next .dsc event would
- * otherwise change that count and desynchronise the differential replay.
- * game_main.c's script loop uses clock_20hz_next() to land exactly on each
- * boundary; that is the same quantity the original records in _DAT_004dd510
- * (VA 0x004DD510). */
+ * The stamp is re-armed with the OBSERVED time, exactly as FUN_0040a7c7 does
+ * (`_DAT_004dd510 = GetTickCount()`), so a stall of N ms costs ONE idle tick, not
+ * floor(N/20). The original calls GetTickCount twice per idle pass and never
+ * replays the boundaries it slept through, and the differential harness must
+ * match that even on a spin-wait path where the virtual clock jumps.
+ * Determinism under a script comes from the loop, not from this gate: game_main.c
+ * steps the clock onto each 20 ms boundary with clock_20hz_next(), so the gate
+ * sees now - last == 20 and fires exactly once per boundary. */
 int  clock_idle_due(void);
 /* Virtual ms of the next 20 ms idle boundary (last stamp + 20). */
 uint32_t clock_20hz_next(void);

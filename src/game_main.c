@@ -88,6 +88,8 @@ static void dump_builtin(DumpEmit emit, void *user)
     emit("rng.state", buf, user);
     snprintf(buf, sizeof(buf), "%llu", (unsigned long long)crt_rand_calls());
     emit("rng.calls", buf, user);
+    snprintf(buf, sizeof(buf), "%llu", (unsigned long long)crt_srand_calls());
+    emit("rng.srand_calls", buf, user);
 }
 
 static void dump_emit_file(const char *key, const char *value, void *user)
@@ -251,6 +253,33 @@ static void apply_dialog_op(const DscriptOp *op)
     options_dialog_op(op->id, kp, n, op->ok);
 }
 
+/* FUN_00409722 (0x00409722): the game's date-validity gate, and the ONLY MessageBoxA
+ * call site in the binary (0x004097B7, return address 0x004097BD, caption "Check Your
+ * Computer's Clock"). It builds two bounds with mktime on a memset-0 tm, so tm_year is
+ * years-since-1900: 0x6B = 107 -> 2007-02-01 and 0x81 = 129 -> 2029-12-01, and it accepts
+ * DAT_0053866C (the time(NULL) stamp taken at boot, all.c:5803) only if lo <= t <= hi.
+ * Outside the window it shows a modal box and returns 1.
+ *
+ * The value compared is the WALL CLOCK, not the virtual clock: the original reads
+ * DAT_0053866C, which is the time(NULL) stamp taken at boot. So this uses plat_time_s(),
+ * and the check behaves the same in a headless replay as it does live.
+ *
+ * The port logs the verdict and returns it but does NOT abort: the original's caller
+ * FUN_004097D5 (0x004097D5) decides what the failure means, and that is not yet read.
+ * Note the field order: tm_mday = 1 with tm_mon = 1 is 1 February (tm_mon is 0-based), and
+ * tm_mon = 0xb is December. */
+static int clock_date_check(uint32_t t_s)
+{
+    /* Seconds from the epoch to 2007-02-01T00:00:00Z and 2029-12-01T00:00:00Z. */
+    static const uint32_t lo = 1170288000u;
+    static const uint32_t hi = 1890777600u;
+    int ok = (t_s >= lo && t_s <= hi);
+    wos_log_event("clock_check", "ms=%lu time=%lu lo=%lu hi=%lu ok=%d",
+                  (unsigned long)clock_ms(), (unsigned long)t_s,
+                  (unsigned long)lo, (unsigned long)hi, ok);
+    return ok;
+}
+
 static void apply_script_op(const DscriptOp *op, Input *input)
 {
     PlatEvent ev;
@@ -289,6 +318,40 @@ static void apply_script_op(const DscriptOp *op, Input *input)
     default: break;
     }
     (void)i;
+}
+
+/* FUN_00409722 (0x00409722) raises the only MessageBoxA in the binary -- 0x004097B7,
+ * return address 0x004097BD -- with these two strings, s_Check_Your_Computer_s_Clock_
+ * 004dd7e4 and s_It_would_appear_that_your_comput_004dd720. Style 0, so it is modal and
+ * the game blocks on it until dismissed. */
+static const char CLOCK_BOX_CAPTION[] = "Check Your Computer's Clock";
+static const char CLOCK_BOX_BODY[] =
+    "It would appear that your computer's calendar is set to the incorrect date.  "
+    "Since many features of the game depend upon an accurate time setting, I suggest "
+    "you set it now, then restart the game.";
+
+/* The in-framebuffer stand-in for that modal MessageBoxA. Blocks until dismissed, exactly
+ * as the Win32 box does, and never returns a code: the original continues either way. */
+static void clock_box_modal(Framebuffer *fb)
+{
+    Input in = {0};
+    int waiting = 1;
+    wos_log_event("clock_box_shown", "caption=%s", CLOCK_BOX_CAPTION);
+    while (waiting) {
+        PlatEvent ev;
+        input_begin(&in);
+        while (plat_poll_event(&ev)) input_event(&in, &ev);
+        if (in.quit) { game_request_quit(); return; }
+        if (in.released[PLAT_KEY_RETURN] || in.released[PLAT_KEY_ESCAPE] ||
+            in.released[PLAT_KEY_SPACE] || in.mouse_released)
+            waiting = 0;
+        fb_reset_clip(fb);
+        fb_clear(fb, 0);
+        ui_panel(fb, (Rect){ 60, 120, PLAT_SCREEN_W - 120, 200 },
+                 CLOCK_BOX_CAPTION, CLOCK_BOX_BODY);
+        plat_present(fb->pixels, fb->w, fb->h);
+    }
+    wos_log_event("clock_box_dismissed", "ms=%lu", (unsigned long)clock_ms());
 }
 
 int game_main(int argc, char **argv)
@@ -350,6 +413,11 @@ int game_main(int argc, char **argv)
     if(have_epoch) clock_set_time_base(epoch);
     seed_crt(seed,have_seed);
     options_load();
+    if (!clock_date_check(clock_time_s())) {
+        /* The original blocks here on a modal MessageBoxA and then continues into the
+         * same init path, so the port shows the same box and does the same. */
+        clock_box_modal(&fb);
+    }
     if(game_boot()) { result=1; goto cleanup; }
     if(!replay && !script) clock_attach_realtime();
 

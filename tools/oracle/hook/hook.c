@@ -118,20 +118,46 @@ static void vfill_systemtime(SYSTEMTIME *st)
 static uint32_t g_holdrand;
 static volatile LONG g_rand_calls;
 static volatile LONG g_srand_calls;
+static void tr(const char *fmt, ...);
 static volatile LONG g_rand_trace;
+/* One handle, opened once.  Two reasons, both learned the hard way: an fopen per
+ * call costs more than the call, and a RELATIVE name lands wherever the CWD
+ * happens to be -- the game does SetCurrentDirectory(install root) in
+ * InitInstance, so the first 1408 boot rands were writing into the launcher's
+ * directory and the rest into the game directory.  WOS_TRACE names the file
+ * explicitly; it must be a Windows path. */
+static HANDLE g_traceh = INVALID_HANDLE_VALUE;
+
+static void trace_open(void)
+{
+    char path[512];
+    DWORD n = GetEnvironmentVariableA("WOS_TRACE", path, sizeof path);
+    if (!n || n >= sizeof path) strcpy(path, "randtrace.txt");
+    g_traceh = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    tr("DllMain: randtrace=%d file=%s handle=%p", (int)g_rand_trace, path, (void *)g_traceh);
+}
+static void trace_line(const char *fmt, ...)
+{
+    char buf[128];
+    va_list ap;
+    DWORD n;
+    if (g_traceh == INVALID_HANDLE_VALUE) return;
+    va_start(ap, fmt);
+    n = (DWORD)vsnprintf(buf, sizeof buf - 2, fmt, ap);
+    va_end(ap);
+    if (n > sizeof buf - 2) n = sizeof buf - 2;
+    buf[n] = '\r'; buf[n + 1] = '\n';
+    WriteFile(g_traceh, buf, n + 2, &n, NULL);
+}
 
 static int __cdecl hook_rand(void)
 {
     g_holdrand = g_holdrand * 214013u + 2531011u;
     InterlockedIncrement(&g_rand_calls);
-    if (g_rand_trace) {
-        FILE *f = fopen("randtrace.txt", "ab");
-        if (f) {
-            fprintf(f, "%d %08X\n", (int)g_rand_calls,
-                    (unsigned)(uintptr_t)__builtin_return_address(0));
-            fclose(f);
-        }
-    }
+    if (g_rand_trace)
+        trace_line("%d %08X", (int)g_rand_calls,
+                   (unsigned)(uintptr_t)__builtin_return_address(0));
     return (int)((g_holdrand >> 16) & 0x7FFFu);
 }
 static void __cdecl hook_srand(unsigned seed)
@@ -941,58 +967,124 @@ static void dump_bmp(const char *label)
     free(bits);
 }
 
+/* The dump is written in the PORT's key vocabulary, not a private one.
+ * `src/game_main.c`'s dump table maps a `dump <label>` to exactly one module, and
+ * each module emits its own namespace, so the oracle has to answer with the
+ * same namespace for the same label or the diff is meaningless:
+ *
+ *   label clock|rng -> clock.ms clock.time_s rng.state rng.calls
+ *   label hero      -> hero.record hero.valid hero.name hero.in_use hero.serial
+ *                      hero.level hero.gender hero.map hero.link hero.hp hero.mp
+ *                      hero.abil.{str,wis,sta,agi,dex} hero.checksum
+ *   any other label -> the harness keys, plus oracle.* extras
+ *
+ * `hero.record` is the whole 0x16CC record as ONE lowercase hex key, which is
+ * the form src/game/hero.c emits; the 64-byte `hero.hex.*` lines are kept as a
+ * debug extra so a human can diff a single range.
+ *
+ * Everything the oracle knows that the port has no key for is prefixed
+ * `oracle.` and is excluded from the diff by tools/oracle/cmp_dump.py.  A key
+ * the PORT emits that the oracle has no source for is reported as
+ * `no-source`, never silently dropped: that is the list of work still owed. */
+static int label_is(const char *l, const char *want) { return strcmp(l, want) == 0; }
+static int label_module(const char *l)
+{
+    static const char *names[] = { "clock","rng","hero","map","scene","battle",
+                                   "panels","items","minigame","options", NULL };
+    int i;
+    for (i = 0; names[i]; i++) if (label_is(l, names[i])) return 1;
+    return 0;
+}
 static void do_dump(const char *label)
 {
     char path[700];
     FILE *f;
     unsigned char *hero;
     uintptr_t b = g_base;
-    int i, live;
+    int i, live, is_hero = label_is(label, "hero");
     wsprintfA(path, "%s\\%s.txt", g_outdir, label);
     f = fopen(path, "wb");
-    if (!f) return;
+    if (!f) { tr("oracle: cannot write %s", path); return; }
     hero = (unsigned char *)(b + (0x0067FBF8u - IMAGE_BASE));
     fprintf(f, "label=%s\n", label);
+
+    /* --- the harness keys, in the port's spelling -------------------------
+     * Only for the labels the port answers with them: `dump <label>` maps to
+     * exactly one module on both sides, and putting clock.* in a `dump hero`
+     * would make every hero label a mismatch over a key that is not the
+     * hero's. */
+    if (label_is(label, "clock") || label_is(label, "rng")) {
+        fprintf(f, "clock.ms=%u\n", vnow());
+        fprintf(f, "clock.time_s=%u\n", vtime_s());
+        fprintf(f, "rng.state=%u\n", g_holdrand);
+        fprintf(f, "rng.calls=%d\n", (int)g_rand_calls);
+    }
+
+    /* --- the hero record, in the port's spelling -------------------------- */
+    if (is_hero) {
+        char nm[33];
+        int k;
+        fprintf(f, "hero.record=");
+        for (i = 0; i < (int)0x16CC; i++) fprintf(f, "%02x", hero[i]);
+        fputc('\n', f);
+        /* hero.valid mirrors src/game/hero.c, and so does the early return: the
+         * port emits hero.record + hero.valid and nothing else when no hero is
+         * loaded, so the oracle must not invent the rest.  The record counts as
+         * loaded only for the three in-use values FUN_0041F832/FUN_0042095E can
+         * leave (1 alive, 2 ghost, 4 loaded-but-unincarnated); anything else in
+         * that slot is uninitialised memory, not a hero. */
+        if (*(int *)(hero + 0x000) < 1 || *(int *)(hero + 0x000) > 4) {
+            fprintf(f, "hero.valid=0\n");
+            goto hero_done;
+        }
+        fprintf(f, "hero.valid=1\n");
+        for (k = 0; k < 32 && ((const char *)hero)[0x14 + k]; k++)
+            nm[k] = ((const char *)hero)[0x14 + k];
+        nm[k] = 0;
+        fprintf(f, "hero.name=%s\n", nm);
+        fprintf(f, "hero.in_use=%d\n",  *(int *)(hero + 0x000));
+        fprintf(f, "hero.serial=%d\n",  *(int *)(hero + 0x004));
+        fprintf(f, "hero.level=%d\n",   *(int *)(hero + 0x064));
+        fprintf(f, "hero.map=%d\n",     *(int *)(hero + 0x090));
+        fprintf(f, "hero.gender=%d\n",  *(int *)(hero + 0x1A8));
+        fprintf(f, "hero.link=%d\n",    *(int *)(hero + 0x67C));
+        fprintf(f, "hero.hp=%d\n",      *(int *)(hero + 0x6BC));
+        fprintf(f, "hero.mp=%d\n",      *(int *)(hero + 0x6C0));
+        fprintf(f, "hero.abil.str=%d\n", *(int *)(hero + 0x1A0));
+        fprintf(f, "hero.abil.wis=%d\n", *(int *)(hero + 0x1A4));
+        fprintf(f, "hero.abil.sta=%d\n", *(int *)(hero + 0x1A8 - 8));
+        fprintf(f, "hero.abil.agi=%d\n", *(int *)(hero + 0x1A0 + 8));
+        fprintf(f, "hero.abil.dex=%d\n", *(int *)(hero + 0x1A0 + 12));
+        fprintf(f, "hero.checksum=%08x\n", (unsigned)*(unsigned *)(hero + 0x16C8));
+hero_done: ;
+    }
+
+    /* --- oracle-only: everything the port has no key for ------------------ */
     fprintf(f, "oracle.seq=%d\n", g_dump_seq++);
-    fprintf(f, "clock.ms=%u\n", vnow());
-    fprintf(f, "clock.time_s=%u\n", vtime_s());
-    fprintf(f, "clock.timers_live=%d\n", (live = timer_live_count(), live));
-    fprintf(f, "clock.next_deadline=%u\n", timer_next_deadline());
-    fprintf(f, "rng.state=%u\n", g_holdrand);
-    fprintf(f, "rng.calls=%d\n", (int)g_rand_calls);
-    fprintf(f, "rng.srand_calls=%d\n", (int)g_srand_calls);
-    fprintf(f, "front.state=%d\n", *(int *)(b + (0x004DF8A4u - IMAGE_BASE)));
-    fprintf(f, "front.serial=%d\n", *(int *)(b + (0x004DD20Cu - IMAGE_BASE)));
-    fprintf(f, "front.network_type=%d\n", *(int *)(b + (0x004E6910u - IMAGE_BASE)));
-    fprintf(f, "front.map=%d\n", *(int *)(b + (0x004E0DDCu - IMAGE_BASE)));
+    fprintf(f, "oracle.gate_stamp=%u\n",
+            *(volatile DWORD *)(b + (VA_GATE_STAMP - IMAGE_BASE)));
+    fprintf(f, "oracle.steps=%ld\n", (long)g_steps);
+    fprintf(f, "oracle.timers_live=%d\n", (live = timer_live_count(), live));
+    fprintf(f, "oracle.next_deadline=%u\n", timer_next_deadline());
+    fprintf(f, "oracle.srand_calls=%d\n", (int)g_srand_calls);
+    fprintf(f, "oracle.front_state=%d\n", *(int *)(b + (0x004DF8A4u - IMAGE_BASE)));
+    fprintf(f, "oracle.front_serial=%d\n", *(int *)(b + (0x004DD20Cu - IMAGE_BASE)));
+    fprintf(f, "oracle.front_network=%d\n", *(int *)(b + (0x004E6910u - IMAGE_BASE)));
+    fprintf(f, "oracle.front_map=%d\n", *(int *)(b + (0x004E0DDCu - IMAGE_BASE)));
     {
         const char *w = (const char *)(b + (0x004E0BD0u - IMAGE_BASE));
         char wbuf[64]; int k;
         for (k = 0; k < 63 && w[k]; k++) wbuf[k] = (w[k] >= 32 && w[k] < 127) ? w[k] : '?';
         wbuf[k] = 0;
-        fprintf(f, "front.world=%s\n", wbuf);
+        fprintf(f, "oracle.front_world=%s\n", wbuf);
     }
-    fprintf(f, "hero.inuse=%d\n", *(int *)(hero + 0x000));
-    fprintf(f, "hero.serial=%d\n", *(int *)(hero + 0x004));
-    {
-        const char *nm = (const char *)(hero + 0x014);
-        char nbuf[33]; int k;
-        for (k = 0; k < 32 && nm[k]; k++) nbuf[k] = (nm[k] >= 32 && nm[k] < 127) ? nm[k] : '?';
-        nbuf[k] = 0;
-        fprintf(f, "hero.name=%s\n", nbuf);
-    }
-    fprintf(f, "hero.level=%d\n",   *(int *)(hero + 0x064));
-    fprintf(f, "hero.map=%d\n",     *(int *)(hero + 0x090));
-    fprintf(f, "hero.gender=%d\n",  *(int *)(hero + 0x1A8));
-    fprintf(f, "hero.link=%d\n",    *(int *)(hero + 0x67C));
-    fprintf(f, "hero.hp=%d\n",      *(int *)(hero + 0x6BC));
-    fprintf(f, "hero.mp=%d\n",      *(int *)(hero + 0x6C0));
-    fprintf(f, "hero.invocations=%d\n", *(int *)(hero + 0x1CC));
-    fprintf(f, "hero.seconds=%d\n", *(int *)(hero + 0x1CD));
-    fprintf(f, "hero.checksum=0x%08X\n", *(unsigned *)(hero + 0x16C8));
-    for (i = 0; i < (int)0x16CC; i += 64) {            /* 64 bytes per line, diff friendly */
+    fprintf(f, "oracle.hero_inuse=%d\n", *(int *)(hero + 0x000));
+    fprintf(f, "oracle.hero_seconds=%d\n", *(int *)(hero + 0x01CD));
+    fprintf(f, "oracle.hero_invocations=%d\n", *(int *)(hero + 0x01CC));
+    if (!label_module(label)) fprintf(f, "oracle.unknown_label=1\n");
+    for (i = 0; i < (int)0x16CC; i += 64) {            /* debug form, 64 bytes a line */
         int j, n = (int)0x16CC - i; if (n > 64) n = 64;
-        fprintf(f, "hero.hex.%04X=", i);
+        fprintf(f, "oracle.hero_hex.%04X=", i);
         for (j = 0; j < n; j++) fprintf(f, "%02X", hero[i + j]);
         fputc('\n', f);
     }
@@ -1124,18 +1216,40 @@ static int pump_step_inner(void)
     return 0;
 }
 
+/* WOS_MSGLOG=1 logs EVERY message the app's own pump takes, with the virtual clock, the
+ * message id, the target window and the remove flag.  It is the measurement behind the
+ * idle-rate model in docs/re/oracle.md section 3.4: the question is not "does the queue
+ * ever have something in it" but "what is always in it".  Off unless asked for, because
+ * it is one trace_line per PeekMessage and a run is ~2e5 of them. */
+static volatile LONG g_msglog;
+static volatile LONG g_msglog_n;
+static volatile LONG g_idle_pass;
+static void msglog(LPMSG m, const char *fn, UINT rm, BOOL got)
+{
+    if (!g_msglog) return;
+    tr("msglog %s %s rm=%u id=%04X hwnd=%p w=%08lX l=%08lX idle=%ld n=%ld",
+       fn, got ? "GOT" : "EMPTY", rm, got ? m->message : 0u, got ? (void *)m->hwnd : 0,
+       got ? (unsigned long)m->wParam : 0ul, got ? (unsigned long)m->lParam : 0ul,
+       (long)g_idle_pass, (long)InterlockedIncrement(&g_msglog_n));
+}
+
 static volatile LONG g_peeks;
 static BOOL WINAPI hook_PeekMessageA(LPMSG m, HWND h, UINT a, UINT b, UINT rm)
 {
+    BOOL r;
     if (InterlockedIncrement(&g_peeks) < 8)
         tr("hook_PeekMessageA: call %ld rm=%08X", (long)g_peeks, rm);
     pump_step();
-    return real_PeekMessageA(m, h, a, b, rm);
+    r = real_PeekMessageA(m, h, a, b, rm);
+    if (!r) InterlockedIncrement(&g_idle_pass);
+    msglog(m, "Peek", rm, r);
+    return r;
 }
 
 static volatile LONG g_gets;
 static BOOL WINAPI hook_GetMessageA(LPMSG m, HWND h, UINT a, UINT b)
 {
+    BOOL r;
     InterlockedIncrement(&g_gets);
     tr("hook_GetMessageA: call %ld", (long)g_gets);
     if (!pump_step()) {
@@ -1144,7 +1258,9 @@ static BOOL WINAPI hook_GetMessageA(LPMSG m, HWND h, UINT a, UINT b)
         if (!real_PeekMessageA(&probe, NULL, 0, 0, PM_NOREMOVE))
             PostThreadMessage(GetCurrentThreadId(), WM_NULL, 0, 0);  /* never block */
     }
-    return real_GetMessageA(m, h, a, b);
+    r = real_GetMessageA(m, h, a, b);
+    if (r) msglog(m, "Get", PM_REMOVE, r);
+    return r;
 }
 
 /* ------------------------------------------------------------- the script thread */
@@ -1171,7 +1287,6 @@ static void script_init(void)
     }
     n = GetEnvironmentVariableA("WOS_OUT", g_outdir, sizeof g_outdir);
     if (!n || n >= sizeof g_outdir) strcpy(g_outdir, ".");
-    g_rand_trace = GetEnvironmentVariableA("WOS_RANDTRACE", g_scratch, sizeof g_scratch) != 0;
     tr("script_init: WOS_OUT=%s randtrace=%d parsing %s", g_outdir, (int)g_rand_trace, v);
     if (!parse_script(v)) { tr("script_init: FATAL parse failed"); return; }
     tr("script_init: parsed %d events, end=%u", g_nev, g_end_ms);
@@ -1748,6 +1863,12 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r)
         tr("DllMain: attaching, log=%s, self=%p exe=%p, stack=%p..%p", g_logon ? g_logpath : "<off>",
            (void *)h, (void *)GetModuleHandleA(NULL),
            (void *)((uintptr_t)&h), (void *)((uintptr_t)&h + 0x10000));
+        /* WOS_RANDTRACE is read HERE, not in script_init: the game burns ~1400
+         * rands during boot, long before the first pump step, and a trace armed
+         * at script_init misses every one of them.  Tracing costs an fopen per
+         * call, so it stays off unless the variable is set. */
+        g_rand_trace = GetEnvironmentVariableA("WOS_RANDTRACE", g_scratch, sizeof g_scratch) != 0;
+        if (g_rand_trace) trace_open();
         install_detours();
     }
     return 1;

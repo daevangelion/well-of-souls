@@ -86,7 +86,12 @@ typedef struct { int x, y; } PathPoint;
 static PathPoint path[PATH_NODES_MAX];
 static int path_count;                 /* DAT_004f2168 */
 static int path_cursor = -1;           /* DAT_004f216c */
-static int waypoints_enabled;          /* option 27, "automatic Way Point calculations" */
+/* FUN_00467312(7) = option 27, "Enable automatic Way Point calculations". The runtime table
+ * at DAT_004F2A58 (record 27, {7, 1, ...}) and CWinApp::GetProfileIntA's default argument
+ * both say 1, so retail has waypoints ON out of the box and a map click runs
+ * FUN_0046206D -> FUN_00461DCC. Core's options_load() calls map_set_waypoints() with the
+ * user's saved value; this initialiser is the same default and nothing else writes it. */
+static int waypoints_enabled = 1;
 
 /* --- idle auto-wander (FUN_004620F3 tail + FUN_004610D9) ----------------- */
 static uint32_t wander_tick;           /* _DAT_004f2184 */
@@ -757,52 +762,24 @@ static int encounter_roll(int nearest, int moving, uint32_t now)
     return 2;
 }
 
-static void add_monster(int *ids, int *n, int id)
-{
-    if (*n < FIGHT_MAX && valid_monster(id)) ids[(*n)++] = id;
-}
-
-/* FUN_00464DAF (0x464DAF), the .mon proximity resolver. Distance is EUCLIDEAN in doubles
- * and the radius is a plain double compare; the two inner bands use the .rdata doubles
- * 0.5 (0x4CD548) and 0.25 (0x4CD578). Rands: one for the 25 % gate, one inside the 0.5
- * band, one inside the 0.25 band -- each consumed only when its band is entered. */
-static int encounter_mon_roster(int *ids)
-{
-    int n = 0, i, hx = w_x >> 8, hy = w_y >> 8;
-    for (i = 0; i < MON_RECORDS; ++i) {
-        const MonPlace *m = &map.mons[i];
-        double d, radius;
-        if (!valid_monster(m->monster_id) || m->radius <= 0) continue;
-        radius = (double)m->radius;
-        d = sqrt((double)(m->x - hx) * (m->x - hx) + (double)(m->y - hy) * (m->y - hy));
-        if (d >= radius) continue;
-        if (crt_rand() % 100 < 25) add_monster(ids, &n, m->monster_id);
-        if (d < radius * 0.5) {
-            add_monster(ids, &n, m->monster_id);
-            if (crt_rand() % 100 < 15) add_monster(ids, &n, m->monster_id);
-        }
-        if (d < radius * 0.25) {
-            add_monster(ids, &n, m->monster_id);
-            if (crt_rand() % 100 < 5) add_monster(ids, &n, m->monster_id);
-        }
-    }
-    return n;
-}
-
-/* FUN_0049099B (0x49099B) group selection lives in the battle module; the .mon fallback
- * and the distance percentage are the map's. */
+/* FUN_0046260E only ROLLS: on a hit it sets *param_3 = 2, zeroes DAT_004e70ac, plays
+ * "fight.wav" and returns the local player's id, which makes FUN_00462958 stop the hero
+ * via FUN_00461A07 and PostMessage(WM_0x475, self, 2). It never resolves monsters.
+ *
+ * The roster is resolved exactly once, later, by FUN_0049099B (0x49099B) -- the single
+ * caller of FUN_00464DAF is 0x4909EC, inside it -- when the fight state machine reaches
+ * case 4. So the map hands over the difficulty and the distance and nothing else: a
+ * monster list resolved here would spend randoms the original does not and the fight
+ * would diverge. FUN_00464DAF's tail also guarantees at least one monster, so this side
+ * must not suppress the fight when the list would be empty. */
 static void encounter_start(int nearest, int distance, const Link *link)
 {
-    int ids[FIGHT_MAX], n, pct, group = link->difficulty;
-    n = encounter_mon_roster(ids);
-    if (!n && (!group || group >= WORLD_MAX_GROUPS ||
-               !g_world.groups[group].used || g_world.groups[group].count < 1)) return;
-    pct = clamp(distance, 20, 80);
+    int group = link->difficulty, pct = clamp(distance, 20, 80);
     if (group < 0) { group = -group; pct = 100 - pct; }
     w_speed = 0; w_tick = 0;
     g_hero.link = nearest;
-    game_set_pending_fight(ids, n, link->difficulty, pct);
-    wos_log_event("encounter", "group=%d distance=%d monsters=%d", link->difficulty, pct, n);
+    game_set_pending_fight(NULL, 0, link->difficulty, pct);
+    wos_log_event("encounter", "group=%d distance=%d", link->difficulty, pct);
     play_sfx("fight.wav");
     game_enter_scene(2, link);
 }

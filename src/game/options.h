@@ -21,9 +21,10 @@
 #include "../engine/dump.h"
 
 #define OPTIONS_COUNT 33       /* indices 0..32; DAT_006840D0 spans 0x21 dwords */
+#define OPTIONS_TABLE_COUNT 32 /* records in DAT_004F2A58; id 9 has none */
 #define OPTIONS_PROFILE_SECTION "Preferences"
 
-/* The option the retail build ships OFF and that gates the pathfinder. */
+/* The option that gates the pathfinder. Its default is 1 -- ON in retail. */
 #define OPTION_ENABLE_WAYPOINTS 7
 
 /* Reads the option, 0 for any index outside 0..OPTIONS_COUNT-1 (FUN_00467312). */
@@ -49,9 +50,11 @@ int         option_named_get(int n);
 void        option_named_set(int n, int value);
 const char *option_named_key(int n);
 
-/* Load from / save to <game_save_path()>/options.ini. options_load() also pushes
- * the waypoint option into the map module, because the original applies it when
- * the profile is read rather than consulting the array per query. */
+/* Load from / save to <game_save_path()>/options.ini, applying each record's
+ * default when its key is absent, exactly as FUN_00466EF3's GetProfileInt does.
+ * options_load() also pushes the waypoint option into the map module, because the
+ * original applies it when the profile is read rather than consulting the array
+ * per query. Option 7's default is 1, i.e. waypoints are ON in retail. */
 void options_load(void);
 void options_save(void);
 int  options_loaded(void);

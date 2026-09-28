@@ -1,4 +1,5 @@
 #include "../src/engine/clock.h"
+#include "../src/engine/encint.h"
 #include "../src/engine/dscript.h"
 #include "../src/engine/replay.h"
 #include "../src/engine/ini.h"
@@ -145,12 +146,26 @@ static void test_clock(void)
     clock_advance(1);
     assert(clock_idle_due());
     assert(!clock_idle_due());
-    /* A 1000 ms jump must cost 50 idle ticks, not one. */
+    /* A stall costs ONE idle tick, not floor(N/20): FUN_0040a7c7 re-stamps with the
+     * OBSERVED time (`_DAT_004dd510 = GetTickCount()`) and never replays the boundaries
+     * it slept through, so the differential harness has to agree even on a spin-wait
+     * path where the virtual clock jumps. */
     idle_count = 0;
     clock_advance(1000);
     while (clock_idle_due()) if (++idle_count == 200) break;
+    assert(idle_count == 1);
+    /* Stepping onto each boundary, which is what the script loop does, still gives
+     * exactly one tick per 20 ms: 50 over the closed interval [0,1000]. */
+    clock_reset();
+    idle_count = 0;
+    for (idle20 = 0; idle20 <= 1000; idle20 = clock_20hz_next()) {
+        clock_set_now(idle20);
+        if (clock_idle_due()) ++idle_count;
+    }
     assert(idle_count == 50);
-    /* The gate never runs backwards or double-counts a boundary. */
+    /* The gate never runs backwards, and clock_20hz_next() is the next boundary. */
+    clock_set_now(10);
+    assert(clock_ms() == 1000);
     idle20 = clock_20hz_next();
     assert(idle20 == clock_ms() + 20);   /* the next boundary, never the current one */
 
@@ -221,7 +236,7 @@ static void test_clock(void)
     assert(clock_time_s() == 1002);
     clock_set_now(1);           /* never rewinds */
     assert(clock_ms() == 2500);
-    puts("PASS clock: 20 ms idle gate re-arms per boundary, timer coalescing and order");
+    puts("PASS clock: 20 ms gate (one tick per stall, one per 20 ms stepped boundary), timers");
 }
 
 /* --- .dsc parser (src/engine/dscript.c) ------------------------------------- */
@@ -285,10 +300,49 @@ static void test_dscript(void)
     puts("PASS dscript: ops, dialog pairs, schedule order, rejection cases");
 }
 
+/* --- EncInt (src/engine/encint.c) ---------------------------------------------
+ * Contract: set/clear/add each consume exactly four crt_rand() in k0,k1,k2,k3
+ * order, get consumes none, and the three doubles are re-derived from v. */
+static void test_encint(void)
+{
+    EncInt e;
+    uint64_t before, after;
+    crt_srand(1);
+    memset(&e, 0, sizeof(e));
+    before = crt_rand_calls();
+    enc_clear(&e);
+    after = crt_rand_calls();
+    assert(after - before == 4);          /* FUN_0049B734 */
+    assert(e.v == 0 && e.d0 == 0.0 && e.d1 == 0.0 && e.d2 == 0.0);
+    assert(!enc_cheat_flag());
+    assert(enc_valid(&e));
+    before = crt_rand_calls();
+    enc_set(&e, 7);
+    assert(crt_rand_calls() - before == 4);   /* FUN_0049B71B */
+    assert(e.d0 == (double)7 * ENCINT_C0);
+    assert(e.d1 == (double)7 * ENCINT_C1);
+    assert(e.d2 == (double)7 * ENCINT_C2);
+    before = crt_rand_calls();
+    assert(enc_get(&e) == 7);
+    assert(crt_rand_calls() - before == 0);   /* FUN_0049B70F reads nothing */
+    before = crt_rand_calls();
+    assert(enc_add(&e, 5) == 12);
+    assert(crt_rand_calls() - before == 4);   /* FUN_0049B73F: a get then a set */
+    /* The keys are write-only: tampering with one is NOT detected, tampering with
+     * a double is. That asymmetry is the point of the object. */
+    e.k0 = 12345;
+    assert(enc_get(&e) == 12);
+    assert(!enc_cheat_flag());
+    e.d0 = 1.0;
+    assert(!(e.d0 == (double)12 * ENCINT_C0));
+    enc_cheat_clear();
+    puts("PASS encint: 4 rands per set/clear/add, 0 on get, doubles seal v not the keys");
+}
+
 int main(int argc,char **argv)
 {
     const char *root=argc>1?argv[1]:"extracted";char path[4096];Image im={0};size_t i;unsigned histogram[256]={0};
-    test_replay();test_clock();test_dscript();test_ini();test_bmp_formats();test_framebuffer();test_ui();
+    test_replay();test_clock();test_dscript();test_encint();test_ini();test_bmp_formats();test_framebuffer();test_ui();
     assert(snprintf(path,sizeof(path),"%s/worlds/Evergreen/maps/castle1.ter",root)>0);
     assert(!image_load(&im,path));assert(im.w==82 && im.h==87 && im.bpp==8 && im.indices);
     for(i=0;i<(size_t)im.w*im.h;++i) { ++histogram[im.indices[i]]; assert(im.pixels[i]==im.palette[im.indices[i]]); }

@@ -9,9 +9,50 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* DAT_006840D0. Indices outside 0..32 are never written by FUN_0046732B and read
- * back as 0 by FUN_00467312, so the array is zero-initialised and the load only
- * touches the indices the runtime table names. */
+/* The original's option table, DAT_004F2A58, verbatim: 32 records of
+ * {id, default, label pointer}, count 32 at DAT_004F2BD8. Both are INITIALISED
+ * .data at RVA 0xF2A58 / 0xF2BD8 (file offset 0xF0E58 / 0xF0FD8) -- there is no
+ * start-up initialiser and no indirect store; the table is in the image. Read with
+ * pefile and cross-checked row for row against the Oracle's live probe of the running
+ * original, which reported the same 32 ids, the same defaults and the same labels.
+ * Ids 0..32 are the array DAT_006840D0 (33 slots); id 9 has NO record, so it is never
+ * named, never given a default, and stays 0. */
+typedef struct { int id; int dflt; const char *label; } OptionDef;
+static const OptionDef g_option_def[OPTIONS_TABLE_COUNT] = {
+    {13, 1, "Don't let me use cheat codes."},
+    { 1, 1, "Use High-Resolution world maps. (very slow)."},
+    {30, 1, "Improve jpeg image quality in scenes and maps. (slowish)."},
+    { 2, 1, "Auto-Smooth Low-Resolution world maps (slow)."},
+    { 3, 1, "Notify me when other players learn spells."},
+    { 4, 1, "Notify me about which spells are cast in fights."},
+    {20, 1, "Notify me when my character changes deciLevel."},
+    { 5, 1, "Enable Player Chat Bubbles while in scenes."},
+    {12, 1, "Make non-player character chat bubbles pop faster."},
+    {24, 1, "In wide scenes, center camera on player chat bubbles."},
+    { 8, 0, "Don't pick up low-level junk from dead monsters."},
+    {19, 1, "Hide Spells I can't learn yet"},
+    {17, 1, "Show monster radar during hunts. (Golden Soul/Demo)"},
+    { 0, 0, "Show Hot-Key popup window while in scenes."},
+    {32, 1, "Show Hot-Key button bar while in scenes."},
+    {21, 1, "Show an icon when NPCs are waiting for an answer."},
+    { 6, 0, "Show Pet's Owner Tags"},
+    {25, 1, "Show character index numbers in scenes."},
+    {22, 1, "Show HTML pages in scenes, when scripted."},
+    {14, 0, "Auto-open an IM window when people whisper to me."},
+    {11, 0, "Log all chat to disk (warning - uses lots of disk)."},
+    {27, 0, "Log all battles to disk (warning - uses lots of disk)."},
+    {28, 1, "Log all death sentences to disk."},
+    {10, 1, "My computer is slow, cut animations during dialogs."},
+    {23, 1, "Stop all web page stuff on return to game."},
+    {16, 1, "Remember changes to window size and positions."},
+    {18, 1, "Confirm link images when adding new links."},
+    { 7, 1, "Enable automatic Way Point calculations."},
+    {15, 1, "Show 3D outline around button bar buttons."},
+    {26, 0, "Don't use 100% cpu on WoS"},
+    {29, 0, "Don't allow cheat characters when I host scenes."},
+    {31, 1, "Zoom in on WoS Tactics attacks"}
+};
+
 static int g_option[OPTIONS_COUNT];
 static int g_named[OPT_NAMED_COUNT];
 static int g_loaded;
@@ -92,37 +133,31 @@ void options_save(void)
 
 void options_load(void)
 {
-    char path[4096];
+    char path[4096], key[32];
     Ini ini;
     char *text;
     int i, changed = 0, have_file;
+    /* GetProfileInt returns the record's default when the key is absent, so the
+     * defaults apply whether or not a profile exists -- this is not an
+     * "only if have_file" step. */
     for (i = 0; i < OPT_NAMED_COUNT; ++i) g_named[i] = g_named_info[i].dflt;
+    for (i = 0; i < OPTIONS_COUNT; ++i) g_option[i] = 0;
+    for (i = 0; i < OPTIONS_TABLE_COUNT; ++i) g_option[g_option_def[i].id] = g_option_def[i].dflt;
     path_of(path, sizeof(path));
     text = text_read_file(path, NULL);
     have_file = text && ini_parse(&ini, text) == 0;
     if (have_file) {
-        /* DELIBERATELY NOT LOADING "option N" FROM THE PROFILE.
-         *
-         * FUN_00466EF3 (0x00466EF3) guards its numbered-option loop with
-         * `if (0 < DAT_004f2bd8)`, and the binary never writes DAT_004f2bd8 or
-         * DAT_004f2a58: every one of the ten references to either address in
-         * .text is a READ (verified by scanning the image for the little-endian
-         * patterns d8 2b 4f 00 and 58 2a 4f 00 -- 6 and 4 hits, all `cmp`/`mov`
-         * loads, no store). Both live in the zero-filled tail of .data, so both
-         * are 0 for the whole life of the process and the loop never runs. The
-         * runtime table of {id, default, label} that would populate them does not
-         * exist in this build.
-         *
-         * Consequence, and it is the one the differential replay would catch:
-         * DAT_006840D0 starts ENTIRELY ZERO, so every numbered option is OFF in
-         * retail, and the only thing that ever changes one is FUN_0046732B
-         * (0x0046732B), i.e. the options dialog's checkbox handler. Option 7,
-         * "Enable automatic Way Point calculations", being off in retail is not a
-         * documented default; it is the whole array being zero.
-         *
-         * The nine named scalars ARE read, each by its own unguarded
-         * `GetProfileInt(..., default)` call, so those and only those come from
-         * the profile. */
+        /* FUN_00466EF3: for each of the OPTIONS_TABLE_COUNT records, the value is
+         * GetProfileInt("option <id>", <default from the record>). The count is 32,
+         * NOT 33: the array has 33 slots but id 9 has no record, so option 9 is never
+         * loaded, never named, and stays 0. */
+        for (i = 0; i < OPTIONS_TABLE_COUNT; ++i) {
+            const char *v;
+            int id = g_option_def[i].id;
+            snprintf(key, sizeof(key), "option %d", id);
+            v = ini_get(&ini, OPTIONS_PROFILE_SECTION, key, NULL);
+            if (v) g_option[id] = atoi(v);
+        }
         for (i = 0; i < OPT_NAMED_COUNT; ++i) {
             const char *v = ini_get(&ini, OPTIONS_PROFILE_SECTION, g_named_info[i].key, NULL);
             if (v) g_named[i] = atoi(v);

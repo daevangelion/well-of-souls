@@ -2,7 +2,8 @@
 /* MSVC 6 CRT rand (msvcrt holdrand starts at 1). */
 static uint32_t crt_holdrand = 1;
 static uint64_t crt_calls;
-void crt_srand(uint32_t seed) { crt_holdrand = seed; }
+static uint64_t crt_seeds;
+void crt_srand(uint32_t seed) { crt_holdrand = seed; ++crt_seeds; }
 int crt_rand(void)
 {
     crt_holdrand = crt_holdrand * UINT32_C(214013) + UINT32_C(2531011);
@@ -11,3 +12,4 @@ int crt_rand(void)
 }
 uint32_t crt_rand_state(void) { return crt_holdrand; }
 uint64_t crt_rand_calls(void) { return crt_calls; }
+uint64_t crt_srand_calls(void) { return crt_seeds; }

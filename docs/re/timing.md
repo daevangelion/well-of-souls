@@ -107,10 +107,39 @@ tick, and it is a *gate on an idle pass*, not a scheduler.
 
 | Callee | What it is | Solo? |
 |---|---|---|
-| `FUN_0042895c` (0x42895C) | SRNet ping/perf graph. Has its own 25 ms sub-gate, and an **unconditional discarded `rand()`** at the top of every call | no, but it **consumes RNG** — see rng_calls.md §2.1 |
+| `FUN_0042895c` (0x42895C) | SRNet ping/perf graph. Has its own 25 ms sub-gate, and an **unconditional discarded `rand()`** at the top of every call (the call site is **VA 0x00428996**) | no, but it **consumes RNG** — see rng_calls.md §2.1 |
 | `FUN_00416cd3` (0x416CD3) | a 100000-byte `malloc` probe on a few app states | no effect |
 | `FUN_00401f8d` (0x401F8D) | a sound poke when `DAT_004e6910 == 4` | no |
 | `FUN_0047397b` (0x47397B) | accumulates one sample into the Lag-O-Meter's 0x2EE8-byte slots | no |
+
+### 2.1 The idle rate is NOT 50 Hz -- it is however fast the queue drains
+
+Measured, not inferred. The Oracle's hook read `DAT_004DD510` -- the very global
+`FUN_0040A7C7` re-stamps -- from the **running original** under Xvfb, and it read **180**
+while the clock read 1000. The gate was 800 ms behind: over 2500 ms of scripted idle the
+game ran **13** idle passes (13 `rand()` calls, all from `0x00428996` inside
+`FUN_0042895C`), i.e. about one per 180 ms, not one per 20 ms.
+
+The cause is the pump, not the gate. `FUN_0040A7C7` is only reached from the idle half of
+`FUN_0040A8D9`, which runs **only while `PeekMessageA` returns nothing**. On the title
+screen the original repaints continuously, so the queue is rarely empty and `OnIdle` is
+skipped on most 20 ms boundaries. The idle rate is therefore a function of how fast the
+app can drain its own message queue, which is a property of the host and the screen, not a
+constant in the program.
+
+**Two consequences the differential harness has to respect:**
+
+1. `rng.calls` is **host-dependent and therefore not a comparable key** at the title
+   screen, or in any state where the original is continuously repainting. Comparing it
+   there compares two hosts, not two implementations. It becomes comparable only once both
+   sides are in a fixed game state whose loop rate is driven by the script rather than by
+   repaint. Until then it is a diagnostic, not an assertion.
+2. The port's `clock_idle_due()` is called once per loop iteration, and in `--script` mode
+   the queue is empty except on the iterations that deliver an op, so the port will fire
+   the 20 ms tick **more often than the live original does on a repainting screen**. That
+   is the correct choice for a script-driven replay -- it makes the port's tick count a
+   function of the schedule instead of the host -- but it must not be read as a claim that
+   the original ticks at 50 Hz. It does not.
 
 **Port rule.** `clock_idle_due()` returns 1 at most once per 20 ms. The port
 **re-arms the stamp from the previous boundary** (`last += 20`), never from the
@@ -246,9 +275,12 @@ the 3600000 ms hour are SRNet-only.
 | 48593 | 0x443929 | `FUN_00443929` (random-elevation world generator) | `local_10 = rand(); srand(param_1);` — the draw happens **first** | `crt_rand(); crt_srand(seed);` |
 | 48643 | 0x443929 | same, exit path | `srand(local_10)` — reseeds with the *drawn value*, so the post-call stream is **not** the pre-call stream | `crt_srand(saved);` |
 
-`--seed N` pins the `time()` value so a replay reproduces; without it the port uses
-the virtual `clock_time_s()`, which starts at 0 in a headless run. `--time E`
-sets the epoch base.
+`time()` is ONE source in the original and ONE in the port. `--time E` **pins** it (the
+whole run reads E); without it the port follows the host clock, which is what the original
+does. `clock_time_s()` and `plat_time_s()` are the same value by design: the original
+derives none of its `time()` reads from `GetTickCount`, so neither does the port. `--seed N`
+overrides the value handed to the two boot `crt_srand` calls only, for replay debugging;
+it does not touch the date check.
 
 ---
 
@@ -351,7 +383,7 @@ docs/re/oracle.md.
 | `--replay FILE` | the legacy `.rpl` format, still supported |
 | `--dump FILE` | write every registered module dump as `key=value` lines |
 | `--log FILE` | structured `EVT ...` lines |
-| `--time EPOCH_S` | epoch base for `clock_time_s()` (default 0) |
+| `--time EPOCH_S` | **pins** `time()` to EPOCH_S for the whole run (default: follow the host) |
 | `--seed N` | pin the `time()` value for the two boot `srand` calls |
 | `--max-frames N` | iteration cap; exit 3 when hit |
 | `--shot-every N DIR` | periodic BMP screenshots |
@@ -359,6 +391,64 @@ docs/re/oracle.md.
 `--replay` and `--script` are mutually exclusive.
 
 ---
+
+## 8.2 Where the boot's 1432 rand() calls go
+
+Measured by the Oracle's hook with the trace armed in `DllMain`, so the pre-boot calls are
+included. Every call in a run of `tests/replay/offline_probe.dsc`, by caller VA:
+
+| calls | caller | in | kind |
+|---|---|---|---|
+| 1408 | `0x0049B6F7` `0x0049B6FC` `0x0049B701` `0x0049B706` | `FUN_0049B6C7` — 4 `rand()` per call, **352 calls** | one boot-constant table: 352 objects x 4 draws, in the order int[+4], int[+16], int[+32], int[+48], after three scaled-double writes |
+| 13 | `0x00428996` | `FUN_0042895C` | the 20/25 ms idle path, above |
+| 4 | `0x00456BCC` | `FUN_00456B87` | **a timed schedule**: appends into a 0x80-entry table at `+0x08`, stamps `GetTickCount()` at `+0x20C`, stores `(rand() % (param_3*2)) * 1000` at `+0x60C` — a random delay in whole seconds, so it can consume RNG again *during play* |
+| 1 | `0x0048E1CF` | — | singleton |
+| 4 | `0x0042B4EA` `0x0042B4F5` `0x0042B4FC` `0x0042B50E` | one function | same 4-rands-per-object shape at n=1 |
+| 1 | `0x00426B27` | the `0x00426xxx` global-ctor neighbourhood | seed neighbourhood, next to `FUN_004269AF` |
+
+`FUN_0049B6C7` is a constructor-shaped `CWnd`-derived class: `FUN_0049B769` is its ctor
+(vtable `PTR_LAB_004D0E28`), and `FUN_0049B70F/4B71B/4B734/4B75D` are its accessors, each
+calling `FUN_0049B6C7`; `FUN_0049B665` is the free-slot search. It is instantiated from
+three sites — `FUN_00415EC4` (`0x00415F5B`), `FUN_00449EA3` (`0x00449EE5`) and
+`FUN_004766EE` (`0x00476731`). I earlier read `0x004D5B30` and `0x004D9270` as
+`CRuntimeClass` headers because both contain `0x19930520`; that was wrong -- the Oracle
+read both structures properly and `m_nSchema` is 0 at each with an empty name CString, so
+the magic sits elsewhere in them. The class name is not beside the vtable either: the
++/-0x600 bytes around `PTR_LAB_004D0E28` (file offset 0xD0028) contain no ASCII at all.
+Where the 352 objects come from is still open; see section 8.3.
+
+**Port rule.** The trace is byte-identical across runs, so this is a **boot constant, not a
+per-frame rule**: the right shape is a 352-entry table filled by four draws each in order at
+load, not 1408 burned rands. WorldData owns it.
+
+## 8.3 The EncInt object, and the 352 that are still unnamed
+
+`FUN_0049B6C7` is the seal half of the anti-cheat "encrypted int" object. Layout, from its
+integer arithmetic, is 13 ints with three checksum doubles interleaved:
+
+    +0  int32 v      the value          +24 double d1 = v * 1.4142   (_DAT_004d0d40)
+    +4  int32 k0     rand draw 1        +32 int32  k2  draw 3
+    +8  double d0 = v * 2.1459 (_DAT_004d0d38)   +40 double d2 = v * 0.0123 (_DAT_004d0d48)
+    +16 int32 k1     rand draw 2        +48 int32  k3  draw 4
+
+`FUN_0049B665` is the verify half: it re-derives all three doubles from `v` and compares
+them, and on a mismatch sets `DAT_004E709C`, calls `FUN_004A8664(0x424)` and `FUN_00449A17`.
+**`k0..k3` are write-only -- nothing ever checks them.** The value is what is protected; the
+keys exist to be part of the memory pattern a cheat tool has to recognise, and they still
+cost four `rand()` per set. The seals are `FUN_0049B70F` get (0 rands), `FUN_0049B71B` set
+(4), `FUN_0049B734` clear (4), `FUN_0049B73F` add (a get then a set, so 4), and
+`FUN_0049B75D` is the constructor wrapper around clear.
+
+`DAT_004E709C` is also the `== 0` guard on `FUN_0040A7C7`'s 20 ms gate, so a tampered object
+stops the game's tick entirely. That coupling is worth stating: the anti-cheat flag and the
+tick are the same variable.
+
+**Still open:** which of the three instantiation sites
+(`FUN_00415EC4` / `FUN_00449EA3` / `FUN_004766EE`) loops 352 times, and what the 352 objects
+are. The Oracle's hook counts the calls exactly (352 x 4, byte-identical across runs) but
+cannot see which object each call touched, because `FUN_0049B6C7` is game code with no IAT
+slot. The remaining lead is the CRT initialiser table and the `eh vector constructor
+iterator` entries that pass `FUN_00401125`.
 
 ## 9. Corrections to other documents
 

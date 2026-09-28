@@ -46,7 +46,12 @@ uint32_t clock_ms(void)
     return g.now_ms;
 }
 
-uint32_t clock_time_s(void) { return g.epoch_s + clock_ms() / 1000u; }
+/* The original's time() is the wall clock, not the virtual one: FUN_00409722's date
+ * check and the two boot srand calls both read it. So this is the SAME source as
+ * plat_time_s(), including a pin, and deliberately NOT epoch + virtual_ms/1000 --
+ * that conflates two different clocks and desynchronises the boot RNG stream from
+ * the harness, which pins time() to a constant. */
+uint32_t clock_time_s(void) { return plat_time_s(); }
 
 void clock_advance(uint32_t ms)
 {
@@ -65,7 +70,7 @@ void clock_attach_realtime(void)
     g.realtime = 1;
 }
 
-void clock_set_time_base(uint32_t epoch_s) { g.epoch_s = epoch_s; }
+void clock_set_time_base(uint32_t epoch_s) { plat_time_set_s(epoch_s); }
 
 void clock_gate_reset(void);
 void clock_reset(void)
@@ -146,7 +151,15 @@ int clock_idle_due(void)
 {
     uint32_t now = clock_ms();
     if ((uint32_t)(now - g.idle_last) <= 0x13u) return 0; /* > 19 ms, i.e. 20 ms */
-    g.idle_last += 20u;                                  /* re-arm from the boundary */
+    /* Re-stamp with the OBSERVED time, exactly as FUN_0040a7c7 does
+     * (`_DAT_004dd510 = GetTickCount()`). This matters: the original calls
+     * GetTickCount twice per idle pass and never replays the boundaries it slept
+     * through, so a 5 s stall costs ONE idle tick, not 250. Re-arming from the
+     * previous boundary would make the two disagree on any stall.
+     * Determinism is not lost: the script loop in game_main.c steps the clock onto
+     * each 20 ms boundary (clock_20hz_next()), so under a .dsc schedule the gate
+     * always sees now - last == 20 and fires exactly once per boundary. */
+    g.idle_last = now;
     return 1;
 }
 

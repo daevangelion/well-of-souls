@@ -1,14 +1,18 @@
 # seed: 1
 # requires: boot_menu hero_ready map_enter path_found hero_move
-# Option 7, "Enable automatic Way Point calculations", gates the pathfinder and is OFF in
-# retail (DAT_006840D0 is all-zero at boot -- see src/game/options.c), so this replay has to
-# TICK IT, the way a player does: open the Options dialog and set the checkbox, via the .dsc
-# `dialog` op. There is no pre-boot shortcut, because the original has none.
-# Evergreen spawn (179,202); click (226,192) targets map (190,198). The direct line hits
-# the shoreline, so the original's pathfinder walks the wall: it retries up to 10 times
-# (FUN_004620F3's gate) picking the first unblocked neighbour each try. So this asserts
-# that a path was FOUND and that the hero ARRIVED, not a node count or a node order --
-# those are implementation details the 10-try walk does not fix.
+# Option 7, "Enable automatic Way Point calculations", gates the pathfinder. Its DEFAULT is
+# 1 -- it is ON in retail, straight out of the table at DAT_004F2A58 (record 27:
+# {7, 1, "Enable automatic Way Point calculations."}), so nothing has to be seeded or ticked
+# to run this replay. If a future script needs option 7 OFF, it must go through the Options
+# dialog op, because the original has no other way to reach it.
+# Evergreen spawn (179,202). The walk view is the map pane, 19,0 325x281 at a 640x480
+# client (FUN_0041B891's OnSize, all.c:20906-20961), so the view origin is
+# (179-41, 202-35) = (138,167) and one screen pixel is a quarter of a map unit.
+# click (149,150) is therefore map (138+32, 167+8) = (170,204): the direct line from the
+# snapped start (178,202) hits the shoreline, so FUN_00461DCC detours and the hero walks
+# the wall. Observed: path_found nodes=3 x=174 y=206, then hero_move x=170 y=204.
+# The node count and order are implementation details of the 10-try wall walk, so this
+# asserts only that a path was FOUND and that the hero ARRIVED.
 expect boot_menu 900
 key RETURN
 wait 30
@@ -27,7 +31,7 @@ text PathWalker
 key RETURN
 expect hero_ready 300
 expect map_enter 600
-click 226 192
-expect path_found 120
-expect hero_move 600
+click 149 150
+expect path_found 240
+expect hero_move 900
 quit

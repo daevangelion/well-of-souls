@@ -51,6 +51,10 @@ winpath() { "$WINE_DIR/bin/winepath" -w "$1" 2>/dev/null; }
 export WOS_DSC="$(winpath "$DSC")"
 export WOS_OUT="$(winpath "$OUT")"
 export WOS_RANDTRACE="${WOS_RANDTRACE:-}"
+# The game calls SetCurrentDirectory(install root) in InitInstance, ~1400 rand()
+# calls BEFORE that lands in the launcher's CWD and the rest in the game directory.
+# One absolute path keeps the trace in one file.
+export WOS_TRACE="${WOS_TRACE:-$(winpath "$PWD/randtrace.txt")}"
 # The hook is a 32-bit Windows process: every path it is handed has to be a
 # Windows path.  WINE_LOG is the same file as LOG, in Unix form, because `rm`
 # is the only thing that has to delete it and it does not speak "Z:\".

@@ -155,14 +155,47 @@ static int first_enemy(void)
         if (!fight.actors[i].ally && fight.actors[i].hp > 0) return i;
     return -1;
 }
-/* FUN_004a6d32 counts the active spell effects. Counter 0 is the only one the fight path reads:
- * it blocks fleeing, the wander step and the fear roll, and FUN_0048f816 and FUN_00436c9d both
- * test it. The counters live in a runtime effect table (0x54-byte rows at DAT_005078a4, indexed
- * by effect id through FUN_004a6a46) that a resource loader fills and the decompilation does not
- * contain, so the per-effect rows are [UNVERIFIED]. The port keys the counter off the ailment bit
- * the spell already set; bit 10 is the effect the flee paths guard on. */
-#define BATTLE_EFFECT_COWARD (1u<<10)
-static int cowardice(const Combatant *a) { return (a->ailments & BATTLE_EFFECT_COWARD) != 0; }
+/* DAT_005078A0, the spell-effect table FUN_004a6d32 sums. It is INITIALISED IN THE IMAGE, not
+ * filled at runtime: 25 rows of 0x150 bytes, each {int pad; int id; ...; five counters at
+ * +0x14..+0x24}, i.e. the counters sit at row+0x10 counted from the id at 0x5078A4 - which is why
+ * FUN_004a6a46 walks `&DAT_005078A4` and why FUN_004a6b55 computes `row*0x150 + 0x5078A0`. No code
+ * ever writes the range: `tools/ghidra/query.sh writes 0x5078a0 0x3c64` returns four hits, all
+ * at 0x50b500, which is FUN_004a7794/FUN_004a8677's unrelated "effect applied" flag.
+ * FUN_004a6a46's `piVar2 += 0x54` with its `&DAT_0050b504` bound is a decompilation artefact of
+ * the same walk; the real stride is 0x150 and 0x50b504 is the end of the 25 rows.
+ *
+ * Counter 0 blocks fleeing, the fear roll and the wander step - FUN_0048f816, FUN_00436c9d and
+ * FUN_0048f913 all read FUN_004a6d32's first out. Counter 1 marks a magic-only actor, which
+ * FUN_0048f913 also reads. The other three are read by nothing on the fight path. */
+typedef struct { short id; unsigned char counter[5]; } EffectRow;
+static const EffectRow effect_table[] = {
+    { -2,  {0,0,0,1,0} }, { -3,  {0,0,0,0,1} }, { -4,  {1,1,1,0,0} },
+    { -5,  {0,0,1,0,0} }, { -6,  {0,1,0,0,0} }, { -7,  {1,1,1,0,0} },
+    { -8,  {0,0,0,0,0} }, { -9,  {0,0,0,0,0} }, { -10, {0,0,0,0,0} },
+    { -11, {1,0,0,0,0} }, { -20, {0,0,0,0,0} }, { -21, {0,0,0,0,0} },
+    { -22, {0,0,0,0,0} }, { -23, {0,0,0,0,0} }, { -24, {0,0,0,0,0} },
+    { -25, {0,0,0,0,0} }, { -26, {0,0,0,0,0} }, { -27, {0,0,0,0,0} },
+    { -28, {0,0,0,0,0} }, { -29, {0,0,0,0,0} }, { -30, {0,0,0,0,0} },
+    { -31, {0,0,0,0,0} }, { -32, {0,0,0,0,0} }, { -102,{0,0,0,0,0} },
+    { -103,{0,0,0,0,0} }
+};
+/* A combatant's ailments word is FUN_004a6a6a's per-slot effect list, rec[0x398 + slot*4], so bit
+ * n is effect id -n. FUN_004a6d32 adds up the matching rows' counters. */
+static int effect_count(const Combatant *a, int which)
+{
+    int n, total = 0;
+    for (n = 0; n < 34; ++n) {
+        int i;
+        if (!(a->ailments & (1u<<n))) continue;
+        for (i = 0; i < (int)(sizeof effect_table / sizeof effect_table[0]); ++i)
+            if (effect_table[i].id == -n) { total += effect_table[i].counter[which]; break; }
+    }
+    return total;
+}
+/* FUN_004a6d32's first counter: this actor will not run, and will not flee. */
+static int cowardice(const Combatant *a) { return effect_count(a,0) != 0; }
+/* FUN_004a6d32's second counter: a magic-only actor. */
+static int magic_only(const Combatant *a) { return effect_count(a,1) != 0; }
 static void spawn(int signed_id)
 {
     Combatant *a;
@@ -185,10 +218,16 @@ static void spawn(int signed_id)
     /* FUN_00491e45: rec[0x11F] = GetTickCount() - rand()%5000 - 3000. One rand. */
     a->last_action = (int)(tick_now() - (uint32_t)roll(5000) - 3000u);
     ordinal = (fight.count - 1) % 9;
-    /* Nine-slot formation; logical ground y>=128 (battle.md section 3/4). Enemies walk in from
-     * off-screen left (FUN_00491e45 rec[0x9E] = -(rand()%64)); allies from the right edge
-     * (FUN_00480499 rec[0x9E] = FUN_0048b13c() + rand()%32). One rand each way. */
-    a->x = a->ally ? 360 + roll(32) : -roll(64);
+    /* Nine-slot formation; logical ground y>=128 (battle.md section 3/4). The original's entry
+     * offsets are tiny: FUN_00491e45 sets rec[0x9E] = -(rand()%64) and FUN_00480499 sets
+     * rec[0x9E] = FUN_0048b13c() + rand()%32, both in 1/256 of the scene width, so a combatant
+     * is at most a quarter of a logical pixel off its slot and FUN_004915ed walks it the rest of
+     * the way over the next few frames. The port draws at the formation slot straight away and
+     * spends both randoms, which is what parity needs; drawing them off-screen instead would
+     * trip FUN_0048f913's `x < -10` removal and the flee checks on every monster. */
+    roll(64);
+    if (a->ally) roll(32);
+    a->x = a->ally ? 55 + (ordinal % 3) * 36 : 210 + (ordinal % 3) * 48;
     a->y = 152 + (ordinal / 3) * 40;
     a->last_turn = tick_now();
     a->sheet_index = -1;
@@ -210,12 +249,24 @@ static void spawn(int signed_id)
 /* FUN_00464daf: the .mon proximity resolver. Inside a placement's radius the monster is spawned on
  * a 25 % roll; inside half of it a second copy on a 15 % roll; inside a quarter a third on 5 %.
  * The two falloff fractions are 0.5 and 0.25 (_DAT_004cd548 / _DAT_004cd578, read from .data).
- * Nothing spawned: the NEAREST valid placement, else monster id 1. */
+ *
+ * `tools/ghidra/query.sh callers FUN_00464daf` returns exactly one site, 0x004909EC inside
+ * FUN_0049099b, which the fight state machine calls once at case 4. So the ORIGINAL resolves the
+ * roster exactly once per encounter. If the map module already stashed one in the pending fight,
+ * spend those ids rather than rolling a second, different roster - the extra roll would spend
+ * randoms the original never spends and shift everything after it. FUN_00464daf also never comes
+ * up empty, so this always yields at least one combatant. */
 static int map_group(void)
 {
     const Map *map = game_current_map();
     int i, before = fight.count, closest = -1;
     int64_t best = INT64_MAX;
+    {
+        int ids[MON_RECORDS+1], count = 0, difficulty = INT_MIN, pct = 0;
+        game_take_pending_fight(ids,MON_RECORDS+1,&difficulty,&pct);
+        for (i = 0; i < count; ++i) spawn(ids[i]);
+        if (fight.count != before) return 1;
+    }
     if (map) {
         for (i = 0; i < map->mon_count && i < MON_RECORDS; ++i) {
             int id = map->mons[i].monster_id;
@@ -664,6 +715,9 @@ static int monster_action(int actor, int mode, int slot)
             if (wisdom <= r2 % 1000 || (best = summon, summon < 0)) best = 0;
         }
     }
+    /* FUN_0048f913's magic-only actor (FUN_004a6d32's second counter): it may not resolve to a
+     * physical swing. Effects 4, 6, 7 and 11 carry that counter in the image table above. */
+    if (!best && magic_only(a)) best = summon > 0 ? summon : best;
     if (best) fight.target = fight.target >= 0 && fight.target < fight.count ? fight.target
                                                                        : first_enemy();
     return best;
@@ -746,24 +800,28 @@ static void kill_payout(Combatant *b)
     const MonsterDef *m = &g_world.monsters[b->id];
     int gold = b->gold;
     if (!b->ally && b->id > 0 && b->id < WORLD_MAX_MONSTERS) {
+        /* DAT_00d2c7d8, the fight-scoped kill table FUN_00494fcd increments; the hero's own
+         * persistent count is what quest `IF KB <id>` / `IF KM <id>` read (FUN_0043b0fd). */
         ++fight.scene_kills;
         ++fight.monster_kills[b->id];
-        /* FUN_00494fcd: the persistent per-monster kill count is the hero's INI table, which is
-         * what quest `IF KB <id>` / `IF KM <id>` read (FUN_0043b0fd). */
         hero_kill_monster(b->id);
-        /* FUN_00494fcd also drops a trophy here, NOT in the payout: the local hero's own
-         * participation share of rec[0x468] must exceed 10 % of DAT_00502830
-         * (disassembly 0x495239..0x49526D), then FUN_0046fcc4(monster id) rolls the bag. */
-        if (fight.participation_total > 0 &&
-            fight.actors[0].participation*100/fight.participation_total > 10) {
-            wos_log_event("battle_trophy","monster=%d",b->id);
-            trophy_bag_award_kill(b->id);
-        }
+        /* FUN_00494fcd's order is the kill count, then the gold rand, then the XP
+         * (FUN_00480875 draws nothing), and only then the participation gate and the trophy
+         * roll - so the trophy randoms come AFTER the gold one. */
         fight.gold = clamp((int64_t)fight.gold + roll(gold+1) + gold/2, 0, 32767);
         if (m->used) {
             int xp = m->exp > 0 ? m->exp : b->xp;
             if (m->level > 0 && b->level != m->level) xp = (int)((int64_t)b->level*xp/m->level);
             fight.xp = clamp((int64_t)fight.xp + clamp(xp,0,60000), 0, INT_MAX);
+        }
+        /* FUN_00494fcd's only trophy roll in the whole binary (FUN_0046fcc4 is called from
+         * exactly one site, 0x49526D): the local hero's participation share of rec[0x468] must
+         * exceed 10 % of DAT_00502830, then FUN_00458988 sets two globals and FUN_0046fcc4
+         * rolls the bag for this monster. Not on the hero's death, and not for allies. */
+        if (fight.participation_total > 0 &&
+            fight.actors[0].participation*100/fight.participation_total > 10) {
+            wos_log_event("battle_trophy","monster=%d",b->id);
+            trophy_bag_award_kill(b->id);
         }
     }
 }
@@ -872,10 +930,12 @@ static void start_attack(int actor, int target)
         effective = category >= 0 && category < 8 ? (int64_t)(gauge+15)*pp[category]/30 : 0;
         fight.attack_pp = clamp(effective,0,INT_MAX-5000);
         fight.attack_training = effective > 0 ? (int)(10000*effective/(effective+5000)) : 0;
-        /* rec[+0x390] is the attacker's 0..100 attack rating; FUN_004a7456 consumes it as a
-         * percentage, so it has to be in 0..100. The port derives it from the same training the
-         * payout uses, as a fraction of the 10000-point curve. */
-        fight.attack_rating = clamp(fight.attack_training/100,0,100);
+        /* rec[+0x390] is NOT a locally derived rating: the only writer in the binary is net
+         * opcode 0x53 (all.c:34246), which the server pushes together with the spell id and the
+         * target. Offline it is therefore always 0 and FUN_004a7456's practice term
+         * `100 - (100-pp)*(100-base)/100` never applies. rec[+0x6D8] (FUN_00491b6a via
+         * FUN_00491bb7, kept in a->rating) is a different field, read by the desync checker. */
+        fight.attack_rating = 0;
         if (category >= 0 && category < 8) {
             int gain = kind == HERO_TRAIN_ELEMENT ? s->req_affinity*10+20 : 20;
             hero_gain_training(&g_hero,kind,category,gain);
@@ -891,7 +951,7 @@ static void start_attack(int actor, int target)
     }
     a->mp -= cost;
     if (!actor) g_hero.mp = a->mp;
-    fight.attack_rating = a->rating;
+    /* rec[0x390]; see the comment above - 0 offline. */
     fight.spell = spell; fight.bound_spell = bound; fight.fizzle = 0;
     /* FUN_0048fe80: 1000 ms physical, 4000 ms spell, 1250 ms for the -3/-4/-5 specials. */
     fight.duration_ms = spell ? SPELL_MS : PHYSICAL_MS;
@@ -1004,20 +1064,27 @@ static int coward_flee(Combatant *m, int *out_hero)
     }
     return 0;
 }
-/* FUN_0048f913's monster block. It runs for every monster whose owner is -1, is not already done
- * and has been idle more than 2000 ms (GetTickCount() - rec[0x45C] > 1999), before any actor is
- * picked. A monster that reaches here always ends its turn at 0x2F, so it never acts from it.
- * A cowardice effect (FUN_004a6d32's first counter) suppresses both the fear and the wander. */
-static void monster_idle_pass(void)
+/* FUN_0048f913's monster block, which is also the actor picker. For a monster whose owner is -1,
+ * is not already 0x2F and has been idle more than 2000 ms (GetTickCount() - rec[0x45C] > 1999)
+ * it runs the flee/wander/act decision. Three randoms are possible and the count depends on the
+ * branch:
+ *   (a) `(rand()+4)*10` for the flee chance, always;
+ *   (b) when the flee chance fires, `rand()%100 > 33` decides act-vs-close-in, and the spell
+ *       pick behind it draws its own; when it does not act it walks a quarter of the way
+ *       toward its target instead;
+ *   (c) when the flee chance fails, a paired `x += rand()%10-5`, `y += rand()%10-5` wander.
+ * A monster that reaches the block and does not act is left at 0x2F, which state 5 re-arms to
+ * 0x5F next round. A fear effect (FUN_004a6d32's first counter) suppresses the fear and the
+ * wander. Returns `slot` if this monster is the one to act, -1 otherwise. */
+static int monster_idle_one(int slot)
 {
-    int slot;
-    for (slot = 1; slot < fight.count; ++slot) {
+    {
         Combatant *a = &fight.actors[slot];
-        int afraid, chance;
-        if (a->ally || a->hp <= 0 || a->turn == TURN_DONE) continue;
-        if (!past(a->last_turn,MONSTER_IDLE_MS-1)) continue;
+        int afraid, chance, target = -1, spell;
+        if (a->ally || a->hp <= 0 || a->turn == TURN_DONE) return -1;
+        if (!past(a->last_turn,MONSTER_IDLE_MS-1)) return -1;
         afraid = cowardice(a);
-        chance = (roll(10) + 4) * 10;            /* FUN_0048f913's `(rand()+4)*10`, one rand */
+        chance = (roll(10) + 4) * 10;            /* (a) FUN_0048f913's `(rand()+4)*10` */
         if (chance > 100) chance = 100;
         if (!a->fled) {
             if (!afraid && a->x > 20) {
@@ -1031,40 +1098,45 @@ static void monster_idle_pass(void)
                 }
             }
             if (!a->fled) {
-                int r = rand1();
-                if (r % 100 < chance) {
-                    int target = -1, spell;
+                if (roll(100) < chance) {
                     /* FUN_0048f56c: the monsters.txt arg-20 pet-verb command runs first and owns
                      * both the target (local_28) and the spell (local_24). */
                     spell = commanded_spell(slot,&target);
                     if (target < 0) target = ai_target(slot);  /* FUN_0048e62c retarget */
-                    a->turn = TURN_DONE;
-                    a->last_turn = tick_now();
-                    if (target < 0) continue;   /* no legal target left: it leaves the fight */
-                    /* local_24 == 0 and !(monsters.txt arg3 flag 0x10): only then does the
-                     * monster run its own FUN_0048e810 spell pick. */
-                    if (spell <= 0 && !(g_world.monsters[a->id].flags & 16))
-                        spell = monster_spell(slot,&target);
-                    /* Flag 4 lets a pet/escort be dragged in instead: FUN_0048ebe3, gated by
-                     * `rand()%1000 < 250` (0xFA). */
-                    if (spell > 0 && (g_world.monsters[a->id].flags & 4) && roll(1000) < 250) {
-                        int ally = 0;
-                        for (ally = 0; ally < fight.count; ++ally)
-                            if (fight.actors[ally].ally && fight.actors[ally].hp > 0) break;
-                        if (ally < fight.count) { target = ally; spell = 0; }
+                    if (target < 0) return -1;    /* no legal target: it leaves the fight */
+                    if (a->x > 0 && a->y > 0 && roll(100) > 33) {   /* (b) it acts this pass */
+                        /* FUN_0048f913 runs FUN_0048e810 only when `local_24 == 0` - the monster
+                         * has no spell from its command - and the monster is not AI-only
+                         * (monsters.txt arg3 flag 0x10). */
+                        if (spell <= 0 && !(g_world.monsters[a->id].flags & 16))
+                            spell = monster_spell(slot,&target);
+                        /* Flag 4 lets a pet/escort be dragged in instead: FUN_0048ebe3, gated
+                         * by `rand()%1000 < 250` (0xFA). */
+                        if (spell > 0 && (g_world.monsters[a->id].flags & 4) && roll(1000) < 250) {
+                            int ally = 0;
+                            for (ally = 0; ally < fight.count; ++ally)
+                                if (fight.actors[ally].ally && fight.actors[ally].hp > 0) break;
+                            if (ally < fight.count) { target = ally; spell = 0; }
+                        }
+                        wos_log_event("battle_monster_act","slot=%d monster=%d target=%d spell=%d",
+                                      slot,a->id,target,spell);
+                        a->turn = TURN_DONE;
+                        a->last_turn = tick_now();
+                        return slot;
                     }
-                    wos_log_event("battle_monster_flee","slot=%d monster=%d mode=generic target=%d spell=%d",
-                                  slot,a->id,target,spell);
                 } else if (!afraid) {
-                    /* The failed flee wanders instead: a paired rand, always both (0x48f913). */
+                    /* (c) The failed flee wanders: a paired rand, always both. */
                     a->x += roll(10) - 5;
                     a->y += roll(10) - 5;
                 }
-                continue;
+                a->turn = TURN_DONE;
+                a->last_turn = tick_now();
+                return -1;
             }
         }
         if (a->x < -10) { a->turn = TURN_DONE; a->hp = 0; }  /* FUN_0048e16e clears the record */
     }
+    return -1;
 }
 /* FUN_00436c9d: may the hero leave the fight? 1 = yes, 0 = "dragged back". Offline there is no
  * Tactics abandon dialog (FUN_00447431 returns 0), so an ordinary random encounter has no timer
@@ -1162,14 +1234,19 @@ BattleResult battle_update(const Input *in)
         }
     } else {
         int ready = 0;
-        /* FUN_0048f913's monster flee/wander block runs before any actor is picked. */
-        monster_idle_pass();
+        /* FUN_0048f913 walks the slots in cursor order and returns the first live combatant that
+         * is not 0x2F, running the monster idle block for each monster it passes. Slot 0 is the
+         * hero, so a queued hero always pre-empts the monsters. */
         for (i = 0; i < fight.count; ++i) {
             int n = (fight.cursor+i)%fight.count;
-            if (fight.actors[n].hp > 0 && fight.actors[n].ready) {
-                ready = 1;
-                if (n != 0 || fight.queued) { actor = n; break; }
+            Combatant *c = &fight.actors[n];
+            if (c->hp <= 0 || !c->ready || c->turn == TURN_DONE) continue;
+            ready = 1;
+            if (n != 0) {
+                if (monster_idle_one(n) >= 0) { actor = n; break; }
+                continue;                 /* it gave up its turn; keep scanning */
             }
+            if (fight.queued) { actor = 0; break; }
         }
         /* FUN_0048b17a: the hero may not commit during the first 500 ms of its round. */
         if (actor == 0 && !past(fight.round_start,HERO_GATE_MS-1)) actor = -1;

@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <string.h>
 
 void wos_audio_init(void);
@@ -159,6 +160,14 @@ void plat_present(const uint32_t *pixels, int w, int h)
 }
 
 uint32_t plat_ticks_ms(void) { return SDL_GetTicks(); }
+static uint32_t wos_time_pin;
+uint32_t plat_time_s(void) { return wos_time_pin ? wos_time_pin : (uint32_t)time(NULL); }
+uint32_t plat_time_set_s(uint32_t epoch_s)
+{
+    uint32_t was = wos_time_pin;
+    wos_time_pin = epoch_s;
+    return was;
+}
 void plat_sleep_ms(uint32_t ms) { SDL_Delay(ms); }
 
 /* --- External targets and cursors -----------------------------------------

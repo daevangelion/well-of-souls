@@ -42,10 +42,15 @@ def load_mask(path):
 
 
 def apply_mask(dump, ranges):
-    """zero the masked bytes of every hero.hex.* line on both sides"""
+    """zero the masked byte ranges of the hero record on both sides.
+
+    The record has two spellings: the oracle writes `oracle.hero_hex.XXXX` (64
+    bytes a line, for a human) and `hero.record` (the whole 0x16CC as one hex
+    key, which is what src/game/hero.c emits and the only one that is compared).
+    Both are masked the same way."""
     if not ranges:
         return dump
-    pat = re.compile(r"^hero\.hex\.([0-9A-Fa-f]{4})=(.*)$")
+    pat = re.compile(r"^oracle\.hero_hex\.([0-9A-Fa-f]{4})=(.*)$")
 
     def fix(m):
         off = int(m.group(1), 16)
@@ -53,9 +58,34 @@ def apply_mask(dump, ranges):
         for a, b in ranges:
             for i in range(max(a, off), min(b + 1, off + len(data))):
                 data[i - off] = 0
-        return "hero.hex.%04X=%s" % (off, data.hex().upper())
+        return "oracle.hero_hex.%04X=%s" % (off, data.hex().upper())
 
-    return {k: (pat.sub(fix, v) if k.startswith("hero.hex.") else v) for k, v in dump.items()}
+    out = {}
+    for k, v in dump.items():
+        if k.startswith("oracle.hero_hex."):
+            out[k] = pat.sub(fix, v)
+        elif k == "hero.record":
+            data = bytearray.fromhex(v)
+            for a, b in ranges:
+                for i in range(max(a, 0), min(b + 1, len(data))):
+                    data[i] = 0
+            out[k] = data.hex()
+        else:
+            out[k] = v
+    return out
+
+
+# --- key ownership -----------------------------------------------------------
+# A key that only one side has is not automatically a bug: the oracle carries
+# `oracle.*` diagnostics the port has no concept of, and the port carries keys
+# for modules the hook has no read-out for yet.  Both classes are reported and
+# both are named here, so a report says WHICH key is missing, never just that
+# something differs.
+ORACLE_ONLY_PREFIX = "oracle."
+#: keys the port emits for modules the hook cannot read out of the original yet
+NO_SOURCE_PREFIXES = ("map.", "scene.", "battle.", "panels.", "items.",
+                      "minigame.", "options.", "world.", "chat.", "editors.",
+                      "missions.", "html.")
 
 
 def main():
@@ -82,19 +112,36 @@ def main():
     order = [k for k in oracle if k.startswith("rng.")] + \
             [k for k in oracle if not k.startswith("rng.")] + \
             [k for k in port if k not in oracle]
-    bad = []
+    bad, nosrc, extra = [], [], 0
     for k in order:
-        if k not in oracle:
-            bad.append("  %-22s only in port: %s" % (k, port[k][:60]))
+        if k.startswith(ORACLE_ONLY_PREFIX):
+            extra += 1
+        elif k not in oracle:
+            if k.startswith(NO_SOURCE_PREFIXES):
+                nosrc.append(k)
+            else:
+                bad.append("  %-22s only in port: %s" % (k, port[k][:60]))
         elif k not in port:
-            bad.append("  %-22s only in oracle: %s" % (k, oracle[k][:60]))
+            if k.startswith(NO_SOURCE_PREFIXES):
+                nosrc.append(k)
+            else:
+                bad.append("  %-22s only in oracle: %s" % (k, oracle[k][:60]))
         elif oracle[k] != port[k]:
             bad.append("  %-22s oracle=%s port=%s" % (k, oracle[k][:60], port[k][:60]))
     label = oracle.get("label", sys.argv[1])
+    tail = ""
+    if extra:
+        tail += "  [%d oracle-only key(s) not compared]" % extra
+    if nosrc:
+        tail += "  [%d key(s) with no oracle source yet]" % len(nosrc)
     if not bad:
-        print("%s: OK (%d keys)" % (label, len(oracle)))
+        print("%s: OK (%d compared%s)"
+              % (label, len(order) - extra - len(nosrc), tail))
+        if nosrc:
+            print("    no oracle source for: %s" % ", ".join(sorted(set(nosrc))[:12]))
         return 0
-    print("%s: MISMATCH (%d of %d keys)" % (label, len(bad), len(order)))
+    print("%s: MISMATCH (%d of %d keys%s)"
+          % (label, len(bad), len(order) - extra, tail))
     for line in bad[:12]:
         print(line)
     if len(bad) > 12:

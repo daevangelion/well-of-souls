@@ -68,8 +68,18 @@ void plat_text_input(int enable);
 /* Video: present a w*h framebuffer of 0x00RRGGBB pixels, letterboxed with aspect preserved. */
 void plat_present(const uint32_t *pixels, int w, int h);
 
-/* Time. */
+/* Time. plat_ticks_ms is the monotonic millisecond counter (SDL_GetTicks);
+ * plat_time_s is the wall clock in seconds (time(NULL)), which the port keeps
+ * separate from the virtual clock because the original's date-validity check
+ * (FUN_00409722, 0x00409722) uses time() and not GetTickCount(). */
 uint32_t plat_ticks_ms(void);
+/* The wall clock, which is what the original's time() returns. It is separate from
+ * the virtual clock on purpose: FUN_00409722's date check and the two boot srand
+ * calls both read time(), not GetTickCount(). plat_time_set_s() pins it so a
+ * headless run is reproducible and matches the Oracle harness, which pins 1234567890;
+ * pass 0 to follow the host again. Returns the previous pin (0 = none). */
+uint32_t plat_time_s(void);
+uint32_t plat_time_set_s(uint32_t epoch_s);
 void     plat_sleep_ms(uint32_t ms);
 
 /* Files. Game data paths use '/' separators and are matched case-insensitively per

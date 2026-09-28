@@ -1,0 +1,238 @@
+# seed: 1
+# requires: hero_ready map_enter battle_start battle_lost battle_hero_death hero_resurrect
+# requires-match: battle_hero_death .*resurrect=1
+# requires-match: hero_resurrect
+# FUN_00494fcd: losing a fight. The hero takes a normal random encounter and never presses F, so
+# the fight runs to the only end the original allows offline.
+#
+# With the solo auto-resurrect flag (DAT_00502a48) the local hero is not simply left at 0 HP:
+# FUN_0042b6f3 gives the tenths of a level the hero had progressed, FUN_0042b765 writes the XP
+# interpolated at THAT fractional level - so the progress toward the next level is what dies with
+# it - and FUN_0042b6c1 recomputes the level from the reduced XP. The flag is then cleared, so the
+# next death is a real one and front.c shows the death screen instead. FUN_00480875 and
+# FUN_004946b2 have already banked the kills into the fight-scoped monster table.
+#
+# RETURN is the keyboard shortcut for the click; the Well takes three RETURNs (FUN_0041B891
+# states 1 -> 2 -> 3, all.c:21078).
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+key RETURN
+wait 30
+key n
+wait 5
+text GapDeath
+key RETURN
+expect hero_ready 300
+expect map_enter 600
+hold RIGHT 60
+keydown DOWN
+expect battle_start 1500
+keyup DOWN
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+wait 10
+expect battle_hero_death 900
+expect hero_resurrect 300
+expect battle_lost 300
+expect map_enter 600
+quit

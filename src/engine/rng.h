@@ -13,4 +13,6 @@ void crt_srand(uint32_t seed);
 int crt_rand(void); /* 0..32767 */
 uint32_t crt_rand_state(void);
 uint64_t crt_rand_calls(void);
+/* Number of crt_srand() calls; the original makes 2 at boot (all.c:27953, 27987). */
+uint64_t crt_srand_calls(void);
 #endif
