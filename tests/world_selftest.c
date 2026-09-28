@@ -237,6 +237,65 @@ static void check_parser_edges(const char *root)
     puts("parser edges: dotted costs/caps/negative values/ranges/empty music overrides PASS");
 }
 
+/* FUN_00463989 (.obl), FUN_00464461 (.mon) and FUN_00463630 (objects.obr) all memset their
+ * table and then read whatever the file has; none of their return values is checked by the
+ * caller, so a map with no .mon (castle1, petarena, pkarena, stonetree, shrimpee) and a map with
+ * no .ter (NorthUmbrage, grotto, isleLight, springwell) both load. Every id in +MAPS must
+ * therefore load; only an id absent from the table may fail. */
+static void check_all_maps(void)
+{
+    int id, i, loaded=0, no_mon=0, no_ter=0, short_ter=0;
+    char path[1024];
+    FILE *f;
+    for(id=0;id<WORLD_MAX_MAPS;++id) {
+        Map map={0};
+        int links=0, mons=0;
+        if(!g_world.maps[id].used) continue;
+        assert(map_load(&map,id)==0);
+        for(i=0;i<OBL_RECORDS;++i) links+=map.links[i].used!=0;
+        for(i=0;i<MON_RECORDS;++i) mons+=map.mons[i].monster_id>0;
+        /* jpg and the synthesized X4 are 32-bit (pixels only); the .ter is 8-bit (indices). */
+        assert(map.image.pixels && map.image_x4.pixels && map.terrain.indices);
+        assert(map.terrain.bpp==8);
+        /* The .ter's own dimensions win: nothing in FUN_00486690 compares them with the jpg, and
+         * retail castle1.ter is 82x87 where its 328x350 jpg implies 82x88. */
+        /* The .ter's own dimensions win and may be SMALLER than the jpg implies: FUN_00486690
+         * never compares them, and retail ships castle1 82x87 (jpg implies 82x88), floodedMaze
+         * 89x89 (90x89) and wormCave 88x88 (89x89). They never exceed it. Rows and columns past
+         * the grid the file provides read as terrain 9. */
+        assert(map.terrain.w<=(map.image.w+3)/4 && map.terrain.h<=(map.image.h+3)/4);
+        if(map.terrain.h<(map.image.h+3)/4 || map.terrain.w<(map.image.w+3)/4) ++short_ter;
+        /* FUN_0046186F's two answers: outside the JPG grid is 9 (impassable), but inside it and
+         * past the .ter the lookup falls through to terrain 0 (open ground). */
+        if(map.terrain.h<(map.image.h+3)/4) {
+            int y=map.terrain.h*4;
+            assert(y<map.image.h && map_terrain_at(&map,0,y)==0 && map_walkable(&map,0,y,NULL));
+        }
+        if(map.terrain.w<(map.image.w+3)/4)
+            assert(map_terrain_at(&map,map.terrain.w*4,0)==0);
+        assert(map_terrain_at(&map,0,map.image.h)>=0);
+        assert(map_terrain_at(&map,-1,0)==9 && map_terrain_at(&map,map.image.w,0)==9);
+        if(mons) assert(map.mon_count==mons);
+        snprintf(path,sizeof(path),"%s/maps/%s.mon",g_world.dir,g_world.maps[id].root);
+        if(!(f=plat_fopen(path,"rb"))) { ++no_mon; assert(mons==0 && map.mon_count==0); }
+        else fclose(f);
+        snprintf(path,sizeof(path),"%s/maps/%s.ter",g_world.dir,g_world.maps[id].root);
+        if(!(f=plat_fopen(path,"rb"))) ++no_ter; else fclose(f);
+        printf("map %2d %-20s %4dx%-4d links=%-3d placements=%-3d terrain=%dx%d\n",
+               id,g_world.maps[id].name,map.image.w,map.image.h,links,mons,
+               map.terrain.w,map.terrain.h);
+        map_free(&map);
+        ++loaded;
+    }
+    assert(loaded==18);
+    /* The regression this exists for: retail ships no castle1.mon, so map 2 must still load. */
+    assert(no_mon>=5 && no_ter>=4);
+    /* castle1, floodedMaze and wormCave ship a .ter smaller than their jpg implies. */
+    assert(short_ter==3);
+    printf("all maps: %d loaded, %d without .mon, %d without .ter, %d short .ter, all OK\n",
+           loaded,no_mon,no_ter,short_ter);
+}
+
 int main(int argc, char **argv)
 {
     Map map={0};
@@ -310,6 +369,7 @@ int main(int argc, char **argv)
     assert(map_load(&map,13)==0);
     for(i=0;i<map.terrain.w*map.terrain.h;++i) assert(map.terrain.indices[i]==0);
     printf("map 13 missing terrain=%dx%d clear=OK\n",map.terrain.w,map.terrain.h);
+    check_all_maps();
     map_free(&map); world_free();
     if(argc>2) check_parser_edges(argv[2]);
     puts("world_selftest: PASS");

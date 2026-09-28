@@ -16,11 +16,18 @@
 #include "../engine/dump.h"
 #include "../engine/ui.h"
 
-/* FUN_0048A69E. `arg` is the opcode argument / items.txt arg15 verbatim:
+/* Preference option ids, from the 33-entry table at DAT_004F2A58 that FUN_00466EF3 reads into
+ * DAT_006840D0 and FUN_00467312 (VA 0x467312) indexes. */
+#define HTML_OPTION_SHOW_IN_SCENES 22 /* "Show HTML pages in scenes, when scripted." */
+#define HTML_OPTION_STOP_ON_RETURN 23 /* "Stop all web page stuff on return to game."   */
+
+/* FUN_0048A69E, gated by preference option 22. `arg` is the opcode argument / items.txt arg15
+ * verbatim:
  *   _strnicmp(arg, "http://", 7) == 0  -> the argument is the URL, used as given;
  *   otherwise                          -> "<data>\worlds\<world>\HTML\<arg>", and a missing
  *                                         file fails (returns 0, no viewer).
- * Returns 1 when the viewer opened, 0 otherwise. Emits html_open / html_missing. */
+ * Option 22 off also returns 0 (FUN_00467312(0x16)), and the script simply advances.
+ * Emits html_open / html_missing / html_disabled. */
 int html_open(const char *arg);
 
 /* FUN_0043891C: 1 while the viewer is on screen. The scene VM polls this in state 10. */
@@ -30,10 +37,12 @@ int html_active(void);
 void html_update(const Input *input);
 void html_render(Framebuffer *fb);
 
-/* Leave the viewer (resumes the suspended script). Idempotent. */
+/* Leave the viewer (resumes the suspended script). Idempotent. With preference option 23
+ * ("Stop all web page stuff on return to game.") the page itself is dropped too, as
+ * FUN_0045BC8D -> FUN_0045BA34 does; with it off the page stays loaded, as the browser
+ * control keeps it. */
 void html_close(void);
-/* Release the parsed page, images and links. Does not close an open viewer implicitly beyond
- * html_close(); call html_close() first if the VM is parked. */
+/* Always releases the parsed page, images and links. */
 void html_free(void);
 
 /* The URL the original would have handed the browser control, "" when nothing is loaded. */

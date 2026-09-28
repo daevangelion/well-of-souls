@@ -51,6 +51,12 @@ winpath() { "$WINE_DIR/bin/winepath" -w "$1" 2>/dev/null; }
 export WOS_DSC="$(winpath "$DSC")"
 export WOS_OUT="$(winpath "$OUT")"
 export WOS_RANDTRACE="${WOS_RANDTRACE:-}"
+# Stall reporting is ON by default: it only does anything when the pump counters stop
+# moving, and when they do, the counters alone cannot say whether the app is blocked in
+# a real GetMessage, inside a long operation, or in a modal box the hook does not own --
+# three different fixes.  The report suspends the app's thread briefly, so it is a
+# measurement, not part of the run; WOS_STALL=0 turns it off for a timing-sensitive run.
+export WOS_STALL="${WOS_STALL:-1}"
 # The game calls SetCurrentDirectory(install root) in InitInstance, ~1400 rand()
 # calls BEFORE that lands in the launcher's CWD and the rest in the game directory.
 # One absolute path keeps the trace in one file.

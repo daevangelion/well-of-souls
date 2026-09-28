@@ -377,7 +377,18 @@ optional; without it the clock runs until the last event and the harness stops.
 | `at <ms> key <VK>` | `WM_KEYDOWN` + `WM_KEYUP` to the focus window |
 | `at <ms> text <string...>` | one `WM_CHAR` per character to the focus window; a newline becomes `RETURN` |
 | `at <ms> dialog <spec>... [ok\|cancel]` | see below |
-| `at <ms> dump <label>` | write `<outdir>/<label>.txt` and `<outdir>/<label>.bmp` |
+| `at <ms> dump <module>` | write `<outdir>/<module>.txt` and `<outdir>/<module>.bmp` |
+| `at <ms> dump <module>@<tag>` | the TAGGED form: same keys, written to `<outdir>/<module>@<tag>.txt` / `.bmp`, with `label=<module>@<tag>` |
+
+The tagged form exists because a script may need to checkpoint the same module several times in
+one run. Without a tag the file names collide, the later dump overwrites the earlier one, and the
+diff compares the last occurrence while appearing to succeed — the failure mode where a regression
+is invisible precisely because the check ran. The split is at the **last** `@`; the module is the
+prefix and must be one of the entries in `src/game_main.c`'s dump table; the tag is
+`[A-Za-z0-9_.-]{1,32}` and cannot contain `@`. The emitted `label` key is the whole token, so one
+string names both the file and the event, which is what `tests/diff_oracle.sh` matches on. The
+oracle also emits `oracle.tag=<tag>` for a human reading the file. `dump <module>` with no `@` is
+unchanged and is not a second convention.
 | `end <ms>` | stop the clock here, then quit |
 
 `<x> <y>` are **client coordinates of a 640x480 client area**; `run.sh` forces the main
@@ -500,8 +511,88 @@ Modules emit `<module>_dump(DumpEmit, void*)` with flat `key=value` lines under 
 namespaces — `battle.*`, `scene.*`, `map.*` — from the same registry. Their key lists are
 maintained here as the owning agents land them; the harness passes them through unchanged.
 
-*(to be completed from `work/decomp/all.c` as the module owners land their dumps — the
-front-end, map, scene, battle, shop, quest, minigame and training globals.)*
+The key lists below are the ones the hook can actually read out of the running original,
+with the address each is read from. **A key the port emits that is not in this table is
+PORT-ONLY**: the original has no counterpart for it, and the reason is given. That is a
+different statement from "not implemented yet", and it is the honest one to make, because
+giving a port-only key a plausible-looking original value is how a modelling gap survives
+a diff.
+
+#### 5.4.0 Two indirections, both of which are easy to read wrong
+
+* **`DAT_0067FBF8` is a POINTER to the hero table, not the table.** `FUN_004269AF` at
+  `0x426B9A` does `DAT_0067fbf8 = DAT_004e4870 + 0x1560a5c`, where `DAT_004e4870` is a
+  `malloc(0x15C0170)` block plus `(rand() % 0x3FFF & ~0xF)`. Every record-relative address
+  is therefore `*(u32*)0x0067FBF8 + offset` — **dereference once, then add**. Reading the
+  pointer's own address as the record is the mistake that produced a `hero.record` full of
+  zeros. `hero.base_offset` is that per-run offset and is a real parity key, because it is
+  that `rand()` draw: a mismatch there means the boot LCG stream diverged even when
+  `rng.calls` happens to agree.
+* **`DAT_004E4874` is a POINTER to the scene block**, re-pointed to a fresh random
+  16-aligned offset inside a `malloc(0x7C140)` block on every scene load (`0x426BE0`).
+
+#### 5.4.1 `map.*` — the walk state is in hero record 0
+
+| key | read from | note |
+|---|---|---|
+| `map.fx`, `map.fy` | `hero+0x94`, `+0x98` | the LIVE position, written every tick by `FUN_0046230E` (`0x46230E`) and latched on arrival by `FUN_00461948`. **24.8 fixed** — five sites shift by 8. |
+| `map.x`, `map.y` | the same words `>> 8` | derived; the original stores only the fixed value. |
+| `map.tx`, `map.ty` | `hero+0x9C`, `+0xA0` | the walk TARGET, written by `FUN_004620F3` (`0x4620F3`). |
+| `map.speed`, `map.duration` | `hero+0xAC`, `+0xB4` | |
+| `map.id` | `hero+0x90` | **the MAP, not the link.** `START_LOCATION` is `<map>, <link>, <dropIn>` (`extracted/worlds/Evergreen/levels.txt:619`), the new-soul path writes args 1/2/3 to `+0x90`/`+0x67C`/`+0xCD8` (all.c:24389-24391), and the use site `SendMessageA(frame, 0x46A, +0x67C, +0x90)` is `0x46A(link, map)`. |
+| `map.facing_raw` | `hero+0x88` | the original's own encoding, `fy*4+fx` with a 5→9 remap (`0x46230E`) — **not** the port's `fy*3+fx`. Compared as the raw word. |
+| `map.path_count`, `map.path_cursor` | `DAT_004F2168`, `DAT_004F216C` | the polyline itself is 2000 nodes × 3 ints at `0x00679E28`. |
+| `map.nearest`, `map.hit`, `map.latched` | `DAT_004F2240`, `+0x44`, `+0x2C` | |
+| `map.enc_a`, `map.enc_b`, `map.enc_grace` | `_DAT_004F2220`, `_DAT_004F2224`, `DAT_004E70A8` | `GetTickCount` stamps. |
+| `map.no_monsters` | `DAT_004F2228` | |
+| `map.wander`, `map.wander_legs` | `DAT_004F2190`, `_DAT_004F219C` | |
+| `map.music` | `DAT_004E70B8` | |
+| `map.waypoints` | `DAT_006840D0[7]` | option 7, "Enable automatic Way Point calculations". **Default 1 — ON in retail.** |
+
+#### 5.4.2 `battle.*`
+
+The fight's `this` is the CWnd sub-object at `pane+0xBC`, where the pane is
+`CSplitterWnd::GetPane(*(void**)0x004E483C + 0x13FC, 0, 0)`. `0x004E483C` is the
+**CSoulsView pointer, live for the whole game** — it is not a "fight is open" flag and it
+is not a minigame flag either, which is the trap two separate audits fell into. The
+`GetPane` chain leaves the image through the MFC thunk `FUN_004C52EE` (`jmp [0xD8B1EC]`),
+so the hook cannot follow it and the fight words are read from the scene block instead.
+
+The combatant records are `rec(i) = scene + 0x128 + i*0x6E0`, 144 slots. The sealed
+(anti-cheat) fields are **not** encrypted at rest: `FUN_0049B71B` stores the plain dword
+and `FUN_0049B70F` returns it. `rec+0x5B8` is current HP, `rec+0x2A8` is MAX HP — the same
+current/max split as the hero's `+0x70`/`+0x74`. Slot x/y are **plain logical units** in
+`0..360 × 0..256` (`FUN_0048B13C` returns 360 and `0x4806CE` adds it straight to a
+`rand()%32`), so a `>>8` on the oracle side would emit `1` where the port emits `210` on
+every monster.
+
+#### 5.4.3 `items.*` and `panels.*`
+
+The trophy bag is 128 words at `hero+0x0CE0` — `FUN_0046F726` reads, `FUN_0046F779` writes
+`(count<<8 | id<<16) ^ 0x1D43E217` — and the geometry word at `hero+0x0EE0`
+(`w<<16 | h&0xFFFF`, split by `FUN_0046F60F`). The pet pen is its own block: base
+`DAT_004E4878`, stride `0x608`, 32 slots (`FUN_0040FBFD`'s fixup loop). The pet's stat
+EncInts are at `+0xD8/+0xE0/+0xE8/+0xEC/+0xF0`.
+
+`hero+0x0EE8` is the pet's live id and is read **only as `!= 0`**. `hero+0x0EEC` is **not**
+a second pet id: it is a `GetTickCount()` stamp written by `FUN_0043B8E7` at `0x42151` and
+lazily re-stamped at `0x42177`. `+0x6BC`/`+0x71C` are the **cheat-point** counter and its
+negative mirror, not the pet and not the equipped right-hand item.
+
+#### 5.4.4 PORT-ONLY keys: the original has no counterpart
+
+These are emitted by the port and **deliberately not** emitted by the oracle, because
+inventing a value for them would compare two different things and call it parity.
+
+| key | why there is no original global |
+|---|---|
+| `panels.kind`, `panels.selected`, `panels.count`, `panels.first`, `panels.selling`, `panels.training_kind`, `panels.ability`, `panels.offers`, `panels.message` | The original has **no panel-kind word**. It has N separate `CDialog` children at fixed offsets inside the CSoulsView, and the list cursor and the message text live in stack frames (`CDialog local_184[324]` inside `FUN_004A6353`, all.c:121570). `DAT_00D64CC8`, cited as "the message line", is an RGB palette entry passed as a colour argument. |
+| `items.attr_pool` | A `CDialog+0x74` on a **stack** dialog. `DAT_004EEFA4` is only the opening snapshot, read once to detect overspend. |
+| `items.throw_armed` | There is no armed-item word. The cited `FUN_004A4D70`'s `param_2` is the arg16 **attack-path grammar** (cases 1..0xB set `0x20`/`0x40`/`2` and add sin/cos jitter), not an item class. The throw resolves from the equipped right-hand slot. |
+| `minigame.open` | There is no "a minigame window exists" flag. The original keys off the dialog's own window; `DAT_004E483C` is the CSoulsView pointer. `minigame.armed` **is** real: `DAT_004E18A4`. |
+| `minigame.result`, `minigame.label`, and every `minigame.<game>.*` | Per-game state lives in the dialog objects and in window handles, keyed by dialog resource id (`0xA7/0xB7/0xBF/0xC0/0xC4/0xC5/0xC6`) and window class `"Quadris"`. |
+| `scene.*` (all of them) | The port's scene VM state — program counter, condition codes, push depth, the cookie set — is not a set of globals in the original. The original's opcodes act on the script's own locals. `scene.timer.N.length/left` and the countdown come from the VM's timer table, not from a fixed address. |
+| `options.named.*` | Read through `GetProfileInt`, so the value is in the registry, not in the image. The 33 numbered ones **are** real: `DAT_006840D0`, initialised `.data`. |
 
 ### 5.4.1 The first module key with an oracle source
 
@@ -553,11 +644,100 @@ at the timeout. `WOS_RANDTRACE=1` writes `randtrace.txt` into the working direct
 
 ---
 
+## 6.1 The differential run, and what it says
+
+`tests/diff_oracle.sh` runs every `tests/diff/*.dsc` on both sides and diffs per label. Two
+properties of the driver are load-bearing and worth stating, because getting either wrong makes
+the suite report success:
+
+* **The port is invoked WITHOUT `--dump`.** `src/game_main.c`'s `run_dumps()` writes the whole
+  dump table once, at exit, so a `--dump` file holds the **end-of-run** value for every label in
+  it. Diffing per label against that file reports the final state N times and calls it agreement.
+  The per-op values come from the event log (`dump_one()` -> `log_emit`), reassembled by
+  `tools/oracle/split_port_log.py`. `DIFF_PORT_DUMP` is refused outright for this reason.
+* **A label only one side produced is a result, not a skip.** Oracle-only is reported as
+  `PORT-ONLY` and counted in the failure total, because an unreachable target is exactly the
+  failure the suite exists to catch.
+
+Measured 2026-09-28, six scripts, 19 labels, `labels=19 equal=1 mismatched=18`:
+
+| script | label | result | first differing keys |
+|---|---|---|---|
+| `boot_only` | `rng@boot` | MISMATCH | `rng.calls` 1414 / 1419, `rng.state` |
+| `boot_only` | `clock@boot` | MISMATCH | `rng.calls` 1414 / 1419, `rng.state` |
+| `boot_only` | `rng@mid` | MISMATCH | `rng.calls` 1415 / 1426, `rng.state` |
+| `boot_only` | `rng@late` | MISMATCH | `rng.calls` 1415 / 1432, `rng.state` |
+| `boot_click` | `rng@before` | MISMATCH | `rng.calls` 1414 / 1419, `rng.state` |
+| `boot_click` | `clock@before` | MISMATCH | `rng.calls` 1414 / 1419, `rng.state` |
+| `boot_click` | `rng@after` | MISMATCH | `rng.calls` 1416 / 1422, `clock.ms` 430 / 400 |
+| `boot_click` | `front@after` | MISSING | port has no `front` module |
+| `boot_menu` | `front@title`, `front@menu` | MISSING | port has no `front` module |
+| `boot_newsoul` | `clock` | MISMATCH | `rng.calls` 1414 / 1418, `clock.ms` 150 / 0 |
+| `boot_newsoul` | `rng` | MISMATCH | `rng.calls` 1416 / 1426, `rng.state` |
+| `boot_newsoul` | `hero` | MISMATCH | `hero.valid` 1 / 0, `hero.record`, +10 named keys oracle-only |
+| `boot_newsoul` | `map` | MISMATCH | `map.id` 0 / -1, `map.enc_a`, `map.enc_b`, `map.enc_grace`, `map.no_monsters` 1 / 0 |
+| `front_hotspots` | `front@*` (x4) | MISSING | port has no `front` module |
+| `front_hotspots` | `options` | **OK (34 keys)** | — |
+
+`hero.base_offset` agrees at every checkpoint (1168 both sides), and `clock.ms` agrees at every
+checkpoint that follows no input (150/150, 800/800, 1400/1400).
+
+**The one green label is real.** `options` compares equal on all 33 numbered options read live out
+of `DAT_006840D0` in the running original, including option 7 (waypoints, default **1** = ON) and
+option 9 (no record in the table, so it stays 0).
+
+**The shape of the `rng.calls` gap is the useful result.** `boot_only.dsc` has no input at all, so
+it separates boot from runtime:
+
+| virtual ms | oracle | port | gap |
+|---|---|---|---|
+| 0 | — | 1418 | — |
+| 150 | 1414 | 1419 | 5 |
+| 800 | 1415 | 1426 | 11 |
+| 1400 | 1415 | 1432 | 17 |
+
+The original takes **one** draw across 1250 ms of idle virtual time and then **zero** across the
+next 600. The port takes 7 and then 6. So there are two independent problems — a constant boot
+offset and a per-idle-window excess — and the original's steady state is *zero*, not a smaller
+constant, so the port's per-window draws have no counterpart to be tuned towards.
+
+---
+
 ## 7. Known gaps and honest limits
 
-* The registry below `front.*` / `hero.*` is filled in from the decomp; the module dump
-  keys (`battle.*`, `scene.*`, `map.*`) are added as the owners land them. Until then
-  `tests/diff_oracle.sh` compares what exists and says what it did not compare.
+* **Eleven of the twelve required scripts do not exist yet, and the reason is one
+  measurement, not eleven problems.** Everything up to the main menu works; getting past it
+  does not, and the cause is now known. The front end's buttons are entries in a hotspot
+  table (`DAT_005339F8`), not child windows, and `FUN_00405765`'s hit test is a `PtInRect`
+  against a rect that `FUN_004054A8` **animates** from a "from" to a "to" position over the
+  entry's `t_len`. So the same button is at a different pixel at a different moment:
+
+      t=1200  "Play now" rect = 591,120,864,162   (mid slide-in, right of the client)
+      t=2200  "Play now" rect = 194,120,467,162
+      t=2600  "Play now" rect =  79,120,352,162   (settled, fully on screen)
+
+  and the animation only advances on a **paint**, so a script that never dumps between the
+  state change and its click is clicking at coordinates chosen for a rect that has not
+  moved. The harness also had to be fixed before any of this was measurable: the client is
+  now forced to 640x480 *before* the front end lays itself out, because the layout is
+  computed from `GetClientRect` at state entry and a later resize leaves every stored rect
+  describing a client area that no longer exists.
+
+  Two further facts constrain the route and are worth not rediscovering: `key RETURN` is a
+  **port-only** shortcut (four RETURNs leave the original at state 1,1,1,1 — the front
+  view's message map has entries for `WM_LBUTTONDOWN`/`UP` and `WM_MOUSEMOVE` and nothing
+  else), and `key SPACE` activates "Depart this realm" and **exits the process**.
+
+  So the scripts that exist are the ones the original can actually be driven through:
+  `boot_only`, `boot_click`, `boot_menu`, `front_hotspots`, and the pre-existing
+  `boot_newsoul`. The other eleven need the world list and the new-soul dialog, which are
+  behind this one.
+* `scene.*` and `panels.*` have **no oracle source at all**, and section 5.4.4 says why for
+  each key: the original keeps that state in `CDialog` children at fixed offsets and in
+  stack frames, not in globals. This is a real gap in coverage, not a naming problem.
+* `rng.state` differs on every label. That is expected — it is a function of the seed, not
+  of the draw count — and it is not counted as a finding on its own. `rng.calls` is the
+  comparable one, and it is not equal.
 * `.rsrc` is still unparsed, so dialog control ids come from `FUN_00460765`/`OnInitDialog`
   and the vtables rather than from the resource tree. They are the same information, but
   a caption read off a bitmap is not a caption read off the resource.

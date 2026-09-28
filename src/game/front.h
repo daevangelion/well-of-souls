@@ -8,6 +8,8 @@
 #ifndef WOS_FRONT_H
 #define WOS_FRONT_H
 
+#include "../engine/dump.h"
+
 /* Original state values of DAT_004df8a4, all.c:21078 (FUN_0041b891's switch).
  * The port keeps the same numbering so a dump reads like the decomp. */
 enum {
@@ -72,6 +74,13 @@ int  front_dialog_op(int dialog_id, const char *const *kv, int n, int ok);
 int  front_bio_op(const char *text, int ok);
 /* 1 while the BIO panel is up. */
 int  front_bio_active(void);
+
+/* The front end's own state for the differential dump: the hotspot table, which
+ * the original keeps at DAT_005339F8 (0xBC bytes per record) and hit-tests
+ * clicks against directly, so the table IS the state. Emits
+ * front.hotspot_count, front.hotspot.<i>.{state,clickable,msg,target,rect,label}
+ * and front.client_{w,h}. Does not allocate. Core registers this as "front". */
+void front_dump(DumpEmit emit, void *user);
 
 
 /* --- Death bridge --------------------------------------------------------

@@ -26,7 +26,7 @@
 #define OBL_RECORD_SIZE     800
 #define MON_RECORDS         1000  /* .mon = 1000 x 276 bytes */
 #define MON_RECORD_SIZE     276
-#define OBR_RECORDS         1000  /* maximum 48-byte rows; Evergreen ships 256 */
+#define OBR_RECORDS         1024 /* FUN_00463630 is called with 0x400 at 0x41F119; Evergreen ships 256 */
 #define OBR_RECORD_SIZE     48
 #define WORLD_MAX_TOKENS    4096  /* +TOKENS id 0..4095, FUN_004814d2 */
 #define WORLD_MAX_CHAPTERS  100   /* FUN_004817de rejects chapter 100 */

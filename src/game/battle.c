@@ -46,7 +46,16 @@ enum { TURN_DONE = 0x2f, TURN_READY = 0x5f, TURN_COMMITTED = 0x94 };
 
 typedef struct {
     int id, ally, hp, max_hp, mp, level, offense, defense, ability[5], element;
-    uint32_t ailments;
+    /* The original keeps a per-slot COUNTER list, not a bitmask: FUN_004a6a6a (0x4A6A6A) reads
+     * rec[0x398 + 4n] for n in 0..0x22 and FUN_004a6e58's infection does `+= 1` / `-= 1` on it,
+     * never a set. Index n is the effect's magnitude, and BOTH families share it: spell effect
+     * -n writes slot n, and -100-n writes slot n too (FUN_004a6e58 folds |id| > 99 down by 100
+     * before indexing). Slots 1..19 are the diseases; slots 20..24 are the stat debuffs and are
+     * already carried, correctly, by ability_shift[] - FUN_004a6b55's partial branch fires for
+     * exactly n == 20 || n > 20 || n == 11, which is "one step off" for the stat debuffs and for
+     * disease 11. 25 slots, and FUN_004a6c46's decay walks 1..34 and only finds table rows for
+     * 2..32 and the two -100-n ids, -102 and -103. */
+    int disease[20];
     int ability_shift[HERO_ABILITIES];
     int xp, gold, x, y, ready, attacks, damage, floating;
     int last_action;      /* GetTickCount() of the last action, rec[0x47C] */
@@ -125,6 +134,11 @@ static void combatant_create(Combatant *a)
     enc_put(&a->enc_offense,&a->offense,100);
     enc_put(&a->enc_mp,&a->mp,100);
     enc_put(&a->enc_hp,&a->hp,100);
+    /* FUN_00491E45's memset(rec, 0, 0x6E0) is why there is NO hero-side disease list to sync:
+     * rec[0x398..] is part of the combatant record and starts at zero in every fight, so a
+     * disease never survives one. The port's old g_hero.ailments mirror had no counterpart in
+     * the original and has gone with it. */
+    memset(a->disease,0,sizeof a->disease);
     a->max_hp = 100;
     a->gold = 100;
     a->xp = 100;
@@ -165,7 +179,7 @@ static int past(uint32_t t0, uint32_t ms) { return (int32_t)(tick_now() - t0) > 
 static int ability(const Combatant *a, int kind)
 {
     int shift = a->ability_shift[kind], value = a->ability[kind];
-    if (!shift && (a->ailments & (1u<<(20+kind)))) shift = 1;
+    if (!shift && a->ability_shift[kind]) shift = 0;   /* the counter is the shift now */
     return clamp(shift < 0 ? (int64_t)value*(1-shift) : value/(1+shift),0,255);
 }
 static void battle_music(const char *key)
@@ -241,30 +255,100 @@ static int first_enemy(void)
  * Counter 0 blocks fleeing, the fear roll and the wander step - FUN_0048f816, FUN_00436c9d and
  * FUN_0048f913 all read FUN_004a6d32's first out. Counter 1 marks a magic-only actor, which
  * FUN_0048f913 also reads. The other three are read by nothing on the fight path. */
-typedef struct { short id; unsigned char counter[5]; } EffectRow;
+/* `decays` and `permanent` are the two flag bytes FUN_004a6c46 reads at row+0x0C and row+0x10
+ * (DAT_005078AC and DAT_005078B0 at stride 0x150), tested as "is it non-zero", not read as a
+ * magnitude. Dumping the 25 rows out of .data: +0x10 is non-zero for -7, -8 and -9 only, and
+ * +0x0C is non-zero for -4, -5, -6, -7, -8, -9, -11 and -25..-32. */
+typedef struct { short id; unsigned char counter[5]; unsigned char decays, permanent; } EffectRow;
 static const EffectRow effect_table[] = {
-    { -2,  {0,0,0,1,0} }, { -3,  {0,0,0,0,1} }, { -4,  {1,1,1,0,0} },
-    { -5,  {0,0,1,0,0} }, { -6,  {0,1,0,0,0} }, { -7,  {1,1,1,0,0} },
-    { -8,  {0,0,0,0,0} }, { -9,  {0,0,0,0,0} }, { -10, {0,0,0,0,0} },
-    { -11, {1,0,0,0,0} }, { -20, {0,0,0,0,0} }, { -21, {0,0,0,0,0} },
-    { -22, {0,0,0,0,0} }, { -23, {0,0,0,0,0} }, { -24, {0,0,0,0,0} },
-    { -25, {0,0,0,0,0} }, { -26, {0,0,0,0,0} }, { -27, {0,0,0,0,0} },
-    { -28, {0,0,0,0,0} }, { -29, {0,0,0,0,0} }, { -30, {0,0,0,0,0} },
-    { -31, {0,0,0,0,0} }, { -32, {0,0,0,0,0} }, { -102,{0,0,0,0,0} },
-    { -103,{0,0,0,0,0} }
+    { -2,  {0,0,0,1,0}, 0,0 }, { -3,  {0,0,0,0,1}, 0,0 }, { -4,  {1,1,1,0,0}, 1,0 },
+    { -5,  {0,0,1,0,0}, 1,0 }, { -6,  {0,1,0,0,0}, 1,0 }, { -7,  {1,1,1,0,0}, 1,1 },
+    { -8,  {0,0,0,0,0}, 1,1 }, { -9,  {0,0,0,0,0}, 1,1 }, { -10, {0,0,0,0,0}, 0,0 },
+    { -11, {1,0,0,0,0}, 1,0 }, { -20, {0,0,0,0,0}, 0,0 }, { -21, {0,0,0,0,0}, 0,0 },
+    { -22, {0,0,0,0,0}, 0,0 }, { -23, {0,0,0,0,0}, 0,0 }, { -24, {0,0,0,0,0}, 0,0 },
+    { -25, {0,0,0,0,0}, 1,0 }, { -26, {0,0,0,0,0}, 1,0 }, { -27, {0,0,0,0,0}, 1,0 },
+    { -28, {0,0,0,0,0}, 1,0 }, { -29, {0,0,0,0,0}, 1,0 }, { -30, {0,0,0,0,0}, 1,0 },
+    { -31, {0,0,0,0,0}, 1,0 }, { -32, {0,0,0,0,0}, 1,0 }, { -102,{0,0,0,0,0}, 0,0 },
+    { -103,{0,0,0,0,0}, 0,0 }
 };
-/* A combatant's ailments word is FUN_004a6a6a's per-slot effect list, rec[0x398 + slot*4], so bit
- * n is effect id -n. FUN_004a6d32 adds up the matching rows' counters. */
+/* FUN_004a6d32: walk the counter list and add up the matching effect rows' counters. A slot is
+ * "present" when its counter is non-zero, which is what FUN_004a6a6a's read amounts to. */
 static int effect_count(const Combatant *a, int which)
 {
     int n, total = 0;
     for (n = 0; n < 34; ++n) {
-        int i;
-        if (!(a->ailments & (1u<<n))) continue;
+        int i, live = n < 20 ? a->disease[n] : 0;
+        if (!live) continue;
         for (i = 0; i < (int)(sizeof effect_table / sizeof effect_table[0]); ++i)
-            if (effect_table[i].id == -n) { total += effect_table[i].counter[which]; break; }
+            if (effect_table[i].id == -n) { total += effect_table[i].counter[which]*live; break; }
     }
     return total;
+}
+/* FUN_004a6a6a: the raw counter at rec[0x398 + 4n], zero outside 0..0x22. */
+static void ailment_set(Combatant *a, int n, int value);
+static int ailment_get(const Combatant *a, int n)
+{
+    if (n < 0 || n > 0x22) return 0;
+    if (n < 20) return a->disease[n];
+    if (n < 20 + HERO_ABILITIES) return a->ability_shift[n-20];
+    return 0;
+}
+/* FUN_004a6b55, the cure. Its three-way branch, with the conditions exactly as the binary has
+ * them (iVar4 = -n, so `iVar4 < -0x14` is n > 20 and `iVar4 < -8` is n > 8):
+ *   PARTIAL, one step, counter clamped at 0:  n == 20 || n > 20 || n == 11
+ *   FULL, counter zeroed:                       n <= 8 and not (n == 1)
+ *   NO EFFECT, silently:                        everything else, i.e. n == 1, 9, 10, 12..19
+ * and the whole thing is bounded by n < 25, so a slot outside 1..24 is ignored. The "cured of %s"
+ * message needs FUN_004a6a46(-100 - n), and the -100-n rows that exist are -102 and -103 only,
+ * so only n = 2 and n = 3 can ever be named; the counter still moves for the rest.
+ * Returns 1 if the counter changed. */
+static int ailment_cure(Combatant *a, int n)
+{
+    if (n < 1 || n > 24 || !ailment_get(a,n)) return 0;
+    if (n >= 20 || n == 11) {           /* PARTIAL: one step, clamped at zero */
+        if (n < 20) ailment_set(a,n,ailment_get(a,n)-1);
+        else { int k = n-20, v = a->ability_shift[k];
+               ailment_set(a,n,v > 0 ? v-1 : v < 0 ? v+1 : 0); }
+        return 1;
+    }
+    if (n > 8 || n == 1) return 0;      /* NO EFFECT */
+    ailment_set(a,n,0);                 /* FULL */
+    return 1;
+}
+/* FUN_004a6c46, the decay. It walks slots 1..34 and, per slot, consults TWO DIFFERENT flag bytes
+ * of the effect row: row+0x10 non-zero means the effect is permanent and is cleared outright,
+ * row+0x0C non-zero means it decays and the counter is stepped down, cleared at zero. Both then
+ * print the -100-n "is poisoned" line, which only n = 2 and n = 3 can produce. `permanent` is
+ * FUN_004a6c46's second argument: the caller passes non-zero to clear the permanent set.
+ * Dumping DAT_005078A0 at stride 0x150 shows +0x0C and +0x10 are per-row magnitudes, not flags -
+ * only rows -7, -8, -9 carry a non-zero +0x10 - so the port applies it literally. */
+static void ailment_set(Combatant *a, int n, int value)
+{
+    if (n < 20) a->disease[n] = value < 0 ? 0 : value;
+    else a->ability_shift[n-20] = value;
+}
+static void ailment_decay(Combatant *a, int permanent)
+{
+    int n;
+    for (n = 1; n < 0x23; ++n) {
+        int i, live = ailment_get(a,n), decays = 0, is_permanent = 0, gone;
+        if (!live) continue;
+        for (i = 0; i < (int)(sizeof effect_table / sizeof effect_table[0]); ++i)
+            if (effect_table[i].id == -n) {
+                decays = effect_table[i].decays; is_permanent = effect_table[i].permanent; break;
+            }
+        /* row+0x10 set and the caller asked for the permanent clear: gone immediately, and the
+         * original then also prints the -100-n line. Otherwise row+0x0C steps the counter down and
+         * reaching zero clears it. Either way the slot ends at zero, which is what `gone` means. */
+        gone = (is_permanent && permanent) || (decays && !permanent && live <= 1);
+        if (gone) ailment_set(a,n,0);
+        else if (decays && !permanent) ailment_set(a,n,live-1);
+    }
+}
+int battle_cure(int slot, int n)
+{
+    if (slot < 0 || slot >= fight.count) return 0;
+    return ailment_cure(&fight.actors[slot],n);
 }
 /* FUN_004a6d32's first counter: this actor will not run, and will not flee. */
 static int cowardice(const Combatant *a) { return effect_count(a,0) != 0; }
@@ -355,14 +439,27 @@ static int map_group(void)
     if (map) {
         for (i = 0; i < map->mon_count && i < MON_RECORDS; ++i) {
             int id = map->mons[i].monster_id;
-            int64_t dx = ((int64_t)map->mons[i].x - g_hero.x) * 256;
-            int64_t dy = ((int64_t)map->mons[i].y - g_hero.y) * 256;
+            /* Hero.x/.y are the original's RAW 24.8 fixed point now (FrontHero-2's change), so
+             * read them in map units and scale the map's units up instead - same numbers as the
+             * old `* 256` against a map-units g_hero.x, and the radius below already does it. */
+            int64_t dx = ((int64_t)map->mons[i].x - hero_x_units(&g_hero)) * 256;
+            int64_t dy = ((int64_t)map->mons[i].y - hero_y_units(&g_hero)) * 256;
             int64_t d2 = dx*dx + dy*dy, r = (int64_t)map->mons[i].radius * 256;
             if (id <= 0 || id >= WORLD_MAX_MONSTERS || !g_world.monsters[id].used) continue;
+            /* FUN_00464DAF tests the EUCLIDEAN distance `sqrt(dx*dx+dy*dy)` against three
+             * doubles, not against squared thresholds: `d < radius`, then
+             * `d < radius * _DAT_004cd548` and `d < radius * _DAT_004cd578`, and those two
+             * constants are 0.5 and 0.25 (read straight out of .data: 0x4CD548 = 0.5,
+             * 0x4CD578 = 0.25). Squared, that is d2 < r*r, then r*r*0.25 and r*r*0.0625 - NOT
+             * r*r/2 and r*r/4. The port had the middle band at r/1.414 and the inner at r/2, so
+             * every placement inside half the radius passed both extra gates: up to four spawns
+             * where the original caps at two, and a level-9 monster where a level-1 one belonged.
+             * MapView-2 found this by bisecting the symptom; the arithmetic is theirs and the
+             * constants are the binary's. */
             if (r > 0 && d2 < r*r) {
                 if (roll(100) < 25) spawn(id);
-                if (d2 < r*r/2) { spawn(id); if (roll(100) < 15) spawn(id); }
-                if (d2 < r*r/4) { spawn(id); if (roll(100) < 5) spawn(id); }
+                if (d2 < r*r/4)  { spawn(id); if (roll(100) < 15) spawn(id); }
+                if (d2 < r*r/16) { spawn(id); if (roll(100) < 5)  spawn(id); }
             }
             if (d2 < best) { best = d2; closest = id; }
         }
@@ -475,7 +572,6 @@ void battle_begin_ex(const int *ids, int count, int difficulty, int distance_pct
     enc_put(&hero->enc_mp,&hero->mp,g_hero.mp);
     hero->max_hp = g_hero.max_hp;
     for (i = 0; i < HERO_ABILITIES; ++i) hero->ability[i] = hero_ability(&g_hero,i);
-    hero->ailments = g_hero.ailments;
     hero->x = 80; hero->y = 204;
     hero->turn = TURN_DONE;
     hero->owner = 1;                     /* solo: the local player's account id */
@@ -715,7 +811,7 @@ static int spell_target(int actor, int spell)
 }
 static int spell_cost(const Combatant *a, const SpellDef *s)
 {
-    return clamp((int64_t)s->mp_cost*((a->ailments & (1u<<3)) ? 2 : 1),0,INT_MAX);
+    return clamp((int64_t)s->mp_cost*(ailment_get(a,3) ? 2 : 1),0,INT_MAX);
 }
 /* FUN_0048e773 exactly: (spell element, req affinity, own element, wisdom, own-element-only).
  * The own-element branch divides by 8 with the x87 rounding the binary does; the normal branch
@@ -938,7 +1034,7 @@ static int spell_damage(int actor, int target, int spell, int targets)
         if (g_world.items[g_hero.right_hand].klass != c->right_hand+11) wisdom = wisdom*50/100;
     }
     if (s->element == 0) {
-        if ((b->ailments&(1u<<2)) || (scene_flags()&4096)) return -1;
+        if (ailment_get(b,2) || (scene_flags()&4096)) return -1;
         return -clamp(s->damage,0,32000);
     }
     /* FUN_004a7794 spell branch; encrypted getters read level/offense. */
@@ -1046,12 +1142,18 @@ static void apply_spell(void)
             b->ally != fight.actors[fight.victim].ally || !legal_target(actor,i,fight.spell)) continue;
         if (s->damage == -1) b->hp = 1;
         else if (s->damage <= -120 && s->damage >= -124) {
+            /* FUN_004a6e58's infection: the counter at rec[0x398 + 4n] goes UP by one, and for
+             * the -120..-124 family n is 20+stat, which is exactly ability_shift[]. */
             int stat = -s->damage-120;
-            b->ailments &= ~(1u<<(20+stat));
-            b->ability_shift[stat] = clamp((int64_t)b->ability_shift[stat]-1,-255,255);
-        } else if (s->damage <= -102 && s->damage >= -119) b->ailments &= ~(1u<<(-s->damage-100));
+            b->ability_shift[stat] = clamp((int64_t)b->ability_shift[stat]+1,-255,255);
+        } else if (s->damage <= -102 && s->damage >= -119) {
+            /* The -100-n family shares slot n with the -n family, so this is a cure of
+             * disease n = -damage-100 through FUN_004a6b55, not a blanket clear. */
+            ailment_cure(b,-s->damage-100);
+        }
         else if (s->damage <= -2 && s->damage >= -24) {
-            b->ailments |= 1u<<(-s->damage);
+            int n = -s->damage;
+            if (n < 20) b->disease[n] = b->disease[n] < 255 ? b->disease[n]+1 : 255;
             if (s->damage <= -20) {
                 int stat = -s->damage-20;
                 b->ability_shift[stat] = clamp((int64_t)b->ability_shift[stat]+1,-255,255);
@@ -1080,7 +1182,7 @@ static void apply_spell(void)
             enc_put(&b->enc_hp,&b->hp,clamp((int64_t)b->hp-damage,0,b->max_hp));
         }
         b->damage = damage; b->floating = (int)tick_now();
-        if (!i) { g_hero.hp = b->hp; g_hero.ailments = b->ailments; }
+        if (!i) g_hero.hp = b->hp;
         if (alive && !b->hp) kill_payout(b);
         wos_log_event("spell_cast","caster=%s spell=%d target=%d dmg=%d",actor?"monster":"hero",fight.spell,i,damage);
     }
@@ -1129,15 +1231,15 @@ static void start_attack(int actor, int target)
         s = &g_world.spells[spell];
         if (target < 0 || !legal_target(actor,target,spell)) target = spell_target(actor,spell);
         cost = bound ? 0 : spell_cost(a,s);
-        if (target < 0 || cost > a->mp || (a->ailments&(1u<<5)) ||
+        if (target < 0 || cost > a->mp || ailment_get(a,5) ||
             (!actor && !bound && !hero_spell_known(&g_hero,spell))) {
             if (!actor) { snprintf(fight.message,sizeof fight.message,"Cannot cast: target, MP or silence"); fight.queued = 0; }
             else a->ready = 0;
             return;
         }
     }
-    if (a->ailments & ((1u<<4)|(1u<<7))) { a->ready = 0; return; }
-    if (!spell && (a->ailments&(1u<<6))) { a->ready = 0; return; }
+    if (ailment_get(a,4) || ailment_get(a,7)) { a->ready = 0; return; }
+    if (!spell && ailment_get(a,6)) { a->ready = 0; return; }
     fight.attack_training = fight.attack_pp = 0;
     if (!actor) {
         int hand = g_world.classes[g_hero.klass].right_hand-1;
@@ -1264,30 +1366,44 @@ static void sim_combatant(Combatant *a)
  * beyond what spawn() already spent. */
 static void spawn_authored(int monster_id, int allegiance)
 {
+    /* The summon path's own view of FUN_00414059: the "template" it re-seals from is the
+     * monsters.txt row, which is exactly what FUN_004A6E58 hands over at 0x004A7068..0x004A70B1
+     * (level +0xEC, HP +0xF4, MP +0xF8, defence +0xFC, offence +0x100, XP +0x104, and the five
+     * abilities at +0x10C..+0x11C). */
+    const MonsterDef *m = &g_world.monsters[monster_id];
+    BattleSpawn s;
+    s.monster_id = monster_id; s.allegiance = allegiance;
+    s.level = m->level; s.hp = m->hp; s.max_hp = m->hp;
+    s.mp = m->mp; s.max_mp = m->mp;
+    s.offense = m->offense; s.defense = m->defense; s.xp = m->exp;
+    s.ability[0] = m->strength; s.ability[1] = m->stamina; s.ability[2] = m->agility;
+    s.ability[3] = m->dexterity; s.ability[4] = m->wisdom;
+    battle_spawn_authored(&s);
+}
+int battle_spawn_authored(const BattleSpawn *s)
+{
     Combatant *a;
-    const MonsterDef *m;
     int slot;
-    if (fight.count == ACTORS) return;
+    if (fight.count == ACTORS) return -1;
     slot = fight.count;
-    spawn(monster_id);
-    if (fight.count <= slot) return;              /* spawn() rejected the id */
+    spawn(s->monster_id);
+    if (fight.count <= slot) return -1;            /* spawn() rejected the id */
     a = &fight.actors[slot];
-    m = &g_world.monsters[a->id];
-    a->allegiance = allegiance;
+    a->allegiance = s->allegiance;
     /* 0x00414195 is the odd one out: its ECX is DAT_004e4874 + (idx+1)*0x6E0 while the record
      * every other write in the arm targets is DAT_004e4874 + 0x128 + idx*0x6E0, so it lands on
      * the slot BEFORE the new combatant - which is that slot's rec[0x5B8]. An off-by-one in the
      * original, and it still costs four draws, so it is reproduced, not tidied away. */
     if (slot > 0)
-        enc_put(&fight.actors[slot-1].enc_hp,&fight.actors[slot-1].hp,m->hp);
+        enc_put(&fight.actors[slot-1].enc_hp,&fight.actors[slot-1].hp,s->hp);
     /* The template's +0xF4 and +0xF8 are its maxHP and maxMP, and the original seals BOTH the
      * current and the max with the same word (rec[0x2A8] = param_6 next to the rec[0x5F0]
      * seal of param_7), so a summon arrives at full HP and full MP. */
-    enc_put(&a->enc_mp,&a->mp,m->mp);
-    enc_put(&a->enc_defense,&a->defense,m->defense);
-    enc_put(&a->enc_offense,&a->offense,m->offense);
-    enc_put(&a->enc_level,&a->level,m->level);
-    a->hp = a->max_hp = m->hp;
+    enc_put(&a->enc_mp,&a->mp,s->mp);
+    enc_put(&a->enc_defense,&a->defense,s->defense);
+    enc_put(&a->enc_offense,&a->offense,s->offense);
+    enc_put(&a->enc_level,&a->level,s->level);
+    a->hp = a->max_hp = s->hp;
     /* FUN_004931C9 hands back the nine-slot formation point and FUN_0048b13c the scene-width
      * base the entry offset is measured from; one rand()%32, as at 0x00414273. */
     roll(32);
@@ -1298,16 +1414,17 @@ static void spawn_authored(int monster_id, int allegiance)
                   slot,a->id,a->hp,a->level,a->offense,a->defense,
                   a->ability[ABIL_STR],a->ability[ABIL_STA],
                   (int)(tick_now()-(uint32_t)a->last_action));
+    return slot;
 }
 /* FUN_00414059's `param_1 == 1` arm, the RECALL (0x0041409F..0x00414156): walk every live
  * combatant and, for each one that is a monster (rec[+4] == -1) whose allegiance rec[0x114]
  * equals the given owner, print "%s has recalled the %s from battle" and FUN_0048E16E it -
  * which is FUN_0048d8c6 plus a 0x6E0 memset and rec[0x38C] = 0x2F, i.e. the slot goes back
  * in the pool. It draws NOTHING: all five of FUN_00414059's seals are on the spawner arm. */
-void battle_recall(int allegiance)
+int battle_recall(int allegiance)
 {
-    int i, n = 0;
-    if (fight.result != BATTLE_RUNNING) return;
+    int i, last = -1;
+    if (fight.result != BATTLE_RUNNING) return -1;
     for (i = 1; i < fight.count; ++i) {
         Combatant *a = &fight.actors[i];
         if (a->owner != -1 || a->allegiance != allegiance) continue;
@@ -1318,13 +1435,14 @@ void battle_recall(int allegiance)
         memmove(a,a+1,(size_t)(fight.count-i-1)*sizeof *a);
         --fight.count;
         --i;
-        ++n;
+        last = i + 1;
     }
-    if (!n) return;
+    if (last < 0) return -1;
     fight.target = first_enemy();
-    if (fight.target < 0) { fight.decided = 1; finish(BATTLE_WON); return; }
+    if (fight.target < 0) { fight.decided = 1; finish(BATTLE_WON); return last; }
     if (fight.target >= fight.count) fight.target = first_enemy();
     if (fight.state == ROUND_DAMAGE) { fight.attacker = fight.victim = -1; fight.state = ROUND_ACT; }
+    return last;
 }
 /* FUN_0048b1ad target-selection click: validate the target, then queue
  * rec[0xBA] = spell, rec[0xBB] = target, rec[0x38C] = 0x2F. */
@@ -1487,7 +1605,6 @@ BattleResult battle_update(const Input *in)
     if (in && in->pressed['s']) { battle_open_spells(); return fight.result; }
     fight.tick = tick_now();
     fight.actors[0].hp = g_hero.hp; fight.actors[0].mp = g_hero.mp;
-    fight.actors[0].ailments = g_hero.ailments;
     if (outcome()) return fight.result;
     if (in && (in->pressed['f'] || in->pressed[PLAT_KEY_ESCAPE])) {
         if (hero_can_flee()) {
@@ -1539,6 +1656,10 @@ BattleResult battle_update(const Input *in)
             enc_put(&fight.actors[i].enc_defense,&fight.actors[i].defense,
                     fight.actors[i].defense);
         }
+        /* FUN_004a6c46's decay runs per combatant once the round is set up; the original's
+         * second argument is the caller's "clear the permanent set" flag, which the round path
+         * passes as 0 so only the decaying rows step down. */
+        for (i = 0; i < fight.count; ++i) ailment_decay(&fight.actors[i],0);
         fight.round_start = fight.tick;
         fight.state = ROUND_ACT;
     } else if (fight.state == ROUND_DAMAGE) {

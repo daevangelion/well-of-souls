@@ -90,6 +90,7 @@ The detailed findings for each subsystem are in `docs/re/*.md`:
   - FUN_0042BB5C: the trophy/find roll at 0x42BE28 comes first. The seals follow: rec[0x628]=hero level at 0x42BF75, then in the level-up arm rec[0x5B8]=HP and rec[0x5F0]=MP at 0x42C0AB/0x42C0B9, after the full heal. Gold and XP (rec[0x2B0]/[0x2B4]) are plain moves.
   - Every monster spawn first draws FUN_00491E45's 4 seals (0x4804D7) and then FUN_00480499's 5.
 - EncInt ownership (WorldData): the 0x298-stride table is the scene COLOUR table (7 channel EncInts, printed %02X by FUN_0043BC68; palette FUN_0043BE5E). FUN_0044462C is the level-up colour ramp, not a loader. The monsters.txt loader FUN_004809A3 seals nothing.
+- script.md 7 (MissionsHtml): the mission picker is dialog 237 with controls 1/2/1300/1302/1303(SysListView32)/1304/1305. Abandoning asks a MessageBox "Abandon Mission?" (FUN_00458343), and only IDYES proceeds. The RewardLevel XP award is capped at xp_needed((level+2)*10) - hero.xp and skipped unless 0 < xp < 0xF3B9B. FUN_004597F5 auto-advances status 1 -> 2 when the trophy requirement is met. Mission requirements and rewards use the real trophy bag (FUN_00458923 -> FUN_0046F9AF, FUN_0045A5C9 -> FUN_0046FD97). HTML is gated by option id 22 and option 23 stops web pages on return. Scene 2000 has no link in the shipped maps; scene 120 is reached from map 2 link 20.
 
 ## Port Progress
 | Subsystem | Status | Files |

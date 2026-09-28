@@ -3,6 +3,7 @@
 static uint32_t crt_holdrand = 1;
 static uint64_t crt_calls;
 static uint64_t crt_seeds;
+static uint32_t boot_base_offset;
 void crt_srand(uint32_t seed) { crt_holdrand = seed; ++crt_seeds; }
 int crt_rand(void)
 {
@@ -13,3 +14,5 @@ int crt_rand(void)
 uint32_t crt_rand_state(void) { return crt_holdrand; }
 uint64_t crt_rand_calls(void) { return crt_calls; }
 uint64_t crt_srand_calls(void) { return crt_seeds; }
+uint32_t crt_boot_base_offset(void) { return boot_base_offset; }
+void crt_boot_base_offset_set(uint32_t value) { boot_base_offset = value; }

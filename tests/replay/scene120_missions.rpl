@@ -1,0 +1,72 @@
+# Evergreen scene 120 "The Blue Cavern Tavern" - the MISSION(S) opcode in the shipped world.
+#
+#   SCENE 120 bgStage2, SCENE, "The Blue Cavern Tavern"   (QuestScenes120.txt:9)
+#       MISSIONS  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20   (:18)
+#
+# Scene 120 is entered from map 2 "Macgyver Castle" link 20 (the only .obl record anywhere in the
+# world whose +0x64 is 120, type 1, at map pixels 234,61). Map 2 is reachable because the
+# Piano-User class (levels.txt:619) carries `START_LOCATION 2, 13, 1`; scene 221 at link 13 is
+# `MUSIC "" / END`, so the hero is put straight back on the map 13 cells' worth of walking from
+# the tavern.
+#
+# STATUS: the route is verified up to the walk, and the walk is the remaining blocker - on
+# mapview.c, not on this file.
+#
+#   VERIFIED: boot -> Piano-User (class 8800, START_LOCATION 2,13,1) -> map 2 loads ->
+#   `EVT map_enter map=2 x=293 y=108` -> scene 221 (`MUSIC ""` / `END`) -> back on map 2.
+#   castle1.mon and castle1.ter both load now.
+#
+#   BLOCKED: the walk from map 2 link 13 (image 293,118) to link 20 (image 234,61). The port has
+#   no pathfinding - click_walk()/walk_to() only accept a straight leg, and every leg that crosses
+#   terrain is refused with `EVT path_none x=.. y=..` and the hero does not move. The tavern is not
+#   in straight-line walk from link 13: decoding maps/castle1.ter (a plain 8bpp 82x87 BMP, bits at
+#   offset 1078, one cell per 4x4 image pixels) and running BFS gives a 41-cell route that turns
+#   five times, so no single hold or click can follow it. A terrain-aware path (or A*) in
+#   mapview.c is needed before this replay can pass.
+#   It is deliberately NOT named gap_*.rpl so replay_gaps.sh does not pick it up and fail the
+#   suite; rename it once the walk can path. The opcode, the VM and the mission table are covered
+#   today by tests/replay/probe_missions.rpl (run by tests/missions_html.sh), which passes.
+#
+# requires: map_enter missions_loaded missions_offer scene_enter
+# requires-match: scene_enter scene=120 scene_op .*op=MISSIONS
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+key RETURN
+wait 30
+key n
+wait 5
+# class 8800 "Piano-User" is the last of the twelve classes Evergreen defines, so pressing DOWN
+# past the end of the list clamps onto it.
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+key DOWN
+text Piano
+key RETURN
+expect hero_ready 600
+expect map_enter 600
+# scene 221 is the Piano Room: MUSIC "" / END, and the hero returns to map 2 immediately.
+expect scene_enter 1500
+wait 30
+# link 13 is at (293,118) and the tavern at (234,61): 59 west and 57 north, one cell per leg.
+hold LEFT 70
+hold UP 70
+expect scene_enter 1500
+expect missions_offer 400
+# FUN_004787B2 slot 6 -> {589 - 51*6, 8, 48, 48} = {283, 8, 48, 48}
+click 300 30
+expect missions_panel 300
+wait 10
+shot /tmp/wos-scene120-missions.bmp
+quit

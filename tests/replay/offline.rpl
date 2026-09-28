@@ -23,6 +23,13 @@ expect map_enter 600
 # Walk east, then south until a random encounter pulls the hero into fight scene 2.
 hold RIGHT 60
 expect hero_move 300
+# Walking east into link 0 opens the embark scene, and quest.txt:1774 is an
+# `ASK 30` -- "Do you agree to obey the golden rule? (type YES or NO)". An ASK
+# suspends the scene until the player answers, so the replay must answer it or
+# the scene waits forever and `expect battle_start` can never fire. SceneVM-2
+# implemented the suspend; this is the script catching up, not a behaviour revert.
+text YES
+wait 20
 keydown DOWN
 expect battle_start 1200
 keyup DOWN

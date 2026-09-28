@@ -45,8 +45,10 @@ The disassembly at 0x426B21 (`FUN_004269AF`, the `CMainFrame` constructor):
 0x426b27  cdq / xor eax,edx / push 0x15c0170 / sub eax,edx / and eax,0x3fff
 0x426b36  xor eax,edx / sub eax,edx     ; EDI = (rand() % 0x4000) & ~15
 0x426b47  mov [0x4e486c],eax            ; the 0x15C0170-byte hero block
-0x426b94  mov [0x4e4870],edi
-0x426b9a  mov [0x0067fbf8],eax          ; DAT_0067FBF8 = hero block + EDI + 0x1560A5C
+0x426b81  add 0x4e486c,%edi             ; EDI = hero block + draw
+0x426b8e  lea 0x1560a5c(%edi),%eax
+0x426b94  mov [0x4e4870],edi            ; DAT_004E4870 = hero block + draw
+0x426b9a  mov [0x0067fbf8],eax          ; DAT_0067FBF8 = hero block + draw + 0x1560A5C
 ```
 
 So `DAT_0067FBF8`, which every module treats as "the hero table", is a pointer built at
@@ -54,6 +56,34 @@ runtime from a `rand()` draw. A hardcoded 0x0067FBF8 address in any reasoning ab
 "where the hero record lives" is a category error; the base moves by up to 0x4000 bytes
 per session and the draw is rand #1409, i.e. after the 1408 EncInt draws and before the
 serial randomiser. **Owner: FrontHero-2.**
+
+**Correction (Core, 2026-09-28), and it matters.** An earlier version of this section said
+`DAT_004E4870` held the *masked draw alone* and that a raw read of it was directly
+comparable. **That was wrong, and the wrongness was mine, not the binary's.** The
+`add 0x4e486c,%edi` at **0x426B81 executes before** the store at 0x426B94, so EDI already
+carries the `malloc(0x15C0170)` block base by the time it is written. Verified by
+re-disassembling `0x426B78..0x426B9B`:
+
+```
+0x426b81  03 3d 6c 48 4e 00   add    0x4e486c,%edi
+0x426b8e  8d 87 5c 0a 56 01   lea    0x1560a5c(%edi),%eax
+0x426b94  89 3d 70 48 4e 00   mov    %edi,0x4e4870
+```
+
+Consequences, all of which point the same way:
+
+* An oracle read of `DAT_004E4870` **must be masked** — `& 0x3FF0` — before it is compared
+  with a port-side `hero.base_offset`. Unmasked it is a live heap address and mismatches
+  every run, and it mismatches as a large number against a small one, so it reads as an
+  RNG divergence rather than as a units error.
+* The same is true of everything derived from it. `DAT_004E4878` (the pet pen) is built
+  at 0x426BEF as `DAT_004E4870 + 0xFEFCF0`, so **its base is not comparable between runs
+  at all** — there is nothing to mask, because the base *is* the heap pointer. Only slot
+  data indexed from it is comparable. Five sibling globals are derived the same way:
+  `0x4E487C = +0xFFC294`, `0x4E4880 = +0xFA64F0`, `0x4E4884 = +0x98F4F0`,
+  `0x4E4888 = +0xD5E4F0`, `0x4E4894 = +0xFFCA5C`.
+* The same trap applies to `DAT_004E4874` in the section below: it is a heap base plus a
+  draw too, not a draw.
 
 ### 0x0048E1CF — the world block
 

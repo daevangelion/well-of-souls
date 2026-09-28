@@ -3,6 +3,7 @@
 #include "game.h"
 #include "scene.h"
 #include "html.h"
+#include "battle.h"
 #include "../engine/log.h"
 #include "../engine/rng.h"
 #include <stdio.h>
@@ -51,14 +52,6 @@ static void say(const char *text) { snprintf(last_message, sizeof last_message, 
 
 /* ------------------------------------------------------------ item apply */
 
-/* FUN_004A6A6A reads a per-disease charge counter at hero+0x398+d*4. The port's
- * Hero carries one `ailments` bitmask, so "diseased" is exactly that counter
- * being non-zero. */
-static int diseased(int d)
-{
-    return d >= 0 && d < 32 && (g_hero.ailments & (UINT32_C(1) << d)) != 0;
-}
-
 /* formats_online.md 6.2: map flag 4096 (NO_HEAL) makes every heal worth 1 HP.
  * FUN_004A6353 reads it through FUN_00482BB8(0x1000). */
 static int no_heal(void)
@@ -67,16 +60,28 @@ static int no_heal(void)
            (g_world.maps[g_hero.map].flags & 0x1000u) != 0;
 }
 
-/* FUN_004A6B55: cure one disease. 2..8 clear the ailment outright; 11 and 20+
- * burn one charge off the counter; 9, 10 and 12..19 return before touching
- * anything. Returns 1 when the hero's disease state changed. */
+/* FUN_004A6B55, the cure. The actor it operates on is the COMBATANT record, not
+ * the hero: FUN_00491E45 memsets each combatant to zero every fight, so the
+ * per-disease counters at rec+0x398+4n start at zero and a disease never
+ * survives a fight. There is no hero-side disease list, so an antidote used
+ * OUTSIDE a fight cures nothing and the item is not consumed - which is the
+ * original's behaviour, not a gap.
+ *
+ * FUN_004A6B55's own three-way branch, and the reason this is a call rather than
+ * a bitmask clear:
+ *   n >= 20 or n == 11  -> one step off, the counter floored at 0
+ *   n in 2..8           -> zeroed outright
+ *   n == 1, 9, 10, 12..19 -> no effect at all, silently
+ *   anything outside 1..24 -> ignored
+ * The name rows for "cured of %s" exist only for n = 2 and n = 3 (the -100-n
+ * family is 25 rows at stride 0x150 with -102/-103 at the end), so a message
+ * can only ever name those two. */
 static int cure_disease(int disease)
 {
     int d = disease < 0 ? -disease : disease;
-    if (d < 2 || d > 24 || !diseased(d)) return 0;
-    if (d == 9 || d == 10 || (d > 11 && d < 20)) return 0;
-    g_hero.ailments &= ~(UINT32_C(1) << d);
-    return 1;
+    if (d < 1 || d > 24) return 0;
+    if (!battle_active()) return 0;   /* no combatant, no counter, no cure */
+    return battle_cure(0, d);
 }
 
 int items_usable(int item_id)
@@ -277,14 +282,33 @@ static uint32_t bag_word(int trophy_id, int count)
     return (((uint32_t)trophy_id & 0xffffu) << 16 | ((uint32_t)count & 0xffu) << 8) ^ TROPHY_BAG_KEY;
 }
 
-/* FUN_0046F60F: the geometry word at hero+0xEE0. Returns the cell count. */
+/* FUN_0046F60F: the geometry word at hero+0xEE0. Returns the cell count.
+ *
+ * The original guards the RAW word first: a stored 0 decodes to 0x0, not to
+ * 0x1D43E217. Without that guard a zeroed record decodes to w=7491, h=57879,
+ * 433,571,589 cells, and every consumer that iterates cells walks 128 entries
+ * off the end. The clamp below is belt-and-braces on top of the original's own
+ * guard: FUN_0046FED9 only ever writes 1..16 by 1..16 with a product <= 128, so
+ * anything outside that could not have been written by the original either. */
 int trophy_bag_size(int *width, int *height)
 {
-    uint32_t v = g_hero.trophy_bag_geo ^ TROPHY_BAG_KEY;
+    /* The original tests the RAW word before the XOR (FUN_0046F60F: `uVar1 = 0;
+     * if (hero[0xEE0] != 0) uVar1 = hero[0xEE0] ^ 0x1D43E217;`), and a stored 0
+     * is how a new soul records "no bag" - FUN_004200CA memsets the 0x16CC record.
+     * Decoding the zero word would give 7491 x 57879. FrontHero-2 exposes the
+     * same predicate as trophy_bag_absent(); the explicit test below is the
+     * original's and does not depend on it. */
+    uint32_t raw = g_hero.trophy_bag_geo;
+    uint32_t v = (raw && !trophy_bag_absent(&g_hero)) ? (raw ^ TROPHY_BAG_KEY) : 0u;
     int w = (int)(v >> 16), h = (int)(v & 0xffffu);
+    /* Both out parameters are written UNCONDITIONALLY from the decoded word, as
+     * in the original, so a legal intermediate such as the 4x0 that
+     * `SET num.TrophyBagWidth, 4` leaves behind reads its 4 back and the next
+     * SET can complete it. Only the CELL COUNT is guarded, and that is what
+     * trophy_bag_pack's loop bound depends on. */
     if (width) *width = w;
     if (height) *height = h;
-    return w * h;
+    return (w >= 1 && w <= 16 && h >= 1 && h <= 16) ? w * h : 0;
 }
 
 /* FUN_0046FED9: width and height clamp to 1..16 and the product to 128.
@@ -357,11 +381,13 @@ void trophy_bag_move(int from, int to)
     g_hero.trophy_bag[from] = 0;
 }
 
-/* FUN_0046FE7B: close the gaps a shrink leaves behind. */
+/* FUN_0046FE7B: close the gaps a shrink leaves behind. The bound is taken from
+ * the decoder, which cannot return more than TROPHY_BAG_SLOTS, so this loop
+ * cannot walk off the array on any record - decoded, zeroed or corrupt. */
 void trophy_bag_pack(void)
 {
     int total = trophy_bag_size(NULL, NULL), i, j;
-    if (total < 1) return;
+    if (total < 1 || total > TROPHY_BAG_SLOTS) return;
     for (i = 0; i < total; ++i) {
         if (g_hero.trophy_bag[i]) continue;
         for (j = i + 1; j < total; ++j)
@@ -454,6 +480,8 @@ int trophy_bag_room(int trophy_id)
         if (!trophy_bag_get(i,&id,&count) || id == 0 || count == 0) room += limit;
         else if (id == trophy_id) room -= count;
     }
+    /* room is bounded by the loop above; clamp anyway so a caller cannot read
+     * an int that wrapped. */
     return room < 0 ? 0 : room;
 }
 
@@ -555,15 +583,29 @@ int pet_spawn(int monster_id)
     }
     memset(&pen[slot], 0, sizeof pen[slot]);
     /* Five sealed stores (FUN_0049B71B, 4 draws each = 20), in the original's
-     * order: the five ctors at 0x413191-0x4131BD build the stack slots at
-     * EBP-0x128, EBP-0xF0, EBP-0xB8, EBP-0x80 and EBP-0x48, and the five sets
-     * at 0x4132A7-0x41331D fill exactly those, from the monster's
-     * +0xEC/+0xF4/+0xF8/+0xFC/+0x100 - its five stat fields. */
+     * order. Oracle4.ItemsPanelsVAs corrected my offset citation: the five
+     * stat EncInts in the PEN RECORD (base DAT_004E4878, stride 0x608) are at
+     * +0xD8/+0xE0/+0xE8/+0xEC/+0xF0, not the +0xEC..+0x100 I had written - the
+     * latter is FUN_00413181's MONSTER-record reads. The draw count and the
+     * order are unchanged; only the cited source of the values differs. */
     enc_set(&pen[slot].str, g_world.monsters[monster_id].strength);
     enc_set(&pen[slot].sta, g_world.monsters[monster_id].stamina);
     enc_set(&pen[slot].agi, g_world.monsters[monster_id].agility);
     enc_set(&pen[slot].dex, g_world.monsters[monster_id].dexterity);
     enc_set(&pen[slot].wis, g_world.monsters[monster_id].wisdom);
+    /* The five rec[0x10B..0x10F] ability seals FUN_00414059 writes at
+     * 0x004141ED..0x00414207, in the order below. FUN_00414059's own five seals
+     * are spent by battle_spawn_authored(); these are the pen's. */
+    enc_set(&pen[slot].abil[0], g_world.monsters[monster_id].strength);
+    enc_set(&pen[slot].abil[1], g_world.monsters[monster_id].stamina);
+    enc_set(&pen[slot].abil[2], g_world.monsters[monster_id].agility);
+    enc_set(&pen[slot].abil[3], g_world.monsters[monster_id].dexterity);
+    enc_set(&pen[slot].abil[4], g_world.monsters[monster_id].wisdom);
+    pen[slot].spawn_offense = g_world.monsters[monster_id].offense;
+    pen[slot].spawn_defense = g_world.monsters[monster_id].defense;
+    pen[slot].spawn_xp = g_world.monsters[monster_id].exp;
+    pen[slot].spawn_mp = g_world.monsters[monster_id].mp;
+    pen[slot].spawn_max_mp = g_world.monsters[monster_id].mp;
     pen[slot].level = g_hero.level;
     pen[slot].hp = pen[slot].max_hp = g_world.monsters[monster_id].hp;
     pen[slot].used = 1;
@@ -583,24 +625,262 @@ int pet_release(int index)
 }
 
 /* FUN_004133E7 with the pet pen button bar (FUN_00412716, petButtons.bmp,
- * petPen.jpg). hero+0x0EE8 and hero+0x0EEC hold the two out pets. */
+ * petPen.jpg).
+ *
+ * THERE IS ONE PET, not two. hero+0x0EEC is a GetTickCount() stamp, written by
+ * FUN_0043B8E7 at all.c:42151 and lazily re-stamped at 42177 while it is still
+ * zero, and read only as a "!= 0" predicate (42168, 42177). The pet's live id
+ * is hero+0x0EE8 - the word pet_ids[0] already holds - and the original reads
+ * that only as "!= 0" (42091, 71066). The 0x6BC/0x71C pair that FUN_0043B8E7
+ * sets beside it is the cheat-points counter and its negative mirror, NOT the
+ * pet and NOT the equipped right-hand item: the function takes 0x25 (37) at
+ * 42170 and then checks its own output for tampering. */
 int pet_summon(int index)
 {
     Pet *p = pet_at(index);
     if (!p) return 0;
-    if (g_hero.pet_ids[0] == 0) g_hero.pet_ids[0] = p->monster_id;
-    else if (g_hero.pet_ids[1] == 0) g_hero.pet_ids[1] = p->monster_id;
-    else return 0;
+    if (g_hero.pet_ids[0] != 0) return 0;     /* one pet out at a time */
+    g_hero.pet_ids[0] = p->monster_id;
     wos_log_event("pet_summon","monster=%d slot=%d",p->monster_id,index);
     return 1;
 }
 
+/* ---- the call/recall gate helpers (FUN_004142F2's inputs) ---------------- */
+
+/* FUN_0043B947: a fight is running. */
+static int pet_busy(void) { return battle_active(); }
+
+/* DAT_004E6910 = _SRNGetNetworkType_0() (all.c:31725). The original's own
+ * dispatch names every value: 0 = "Solo Channel" (s_Solo_Channel_004e8214),
+ * 1 = MPlayer, 2 = Modem, 3 = LAN, 4 = online. Offline play is therefore
+ * DAT_004E6910 == 0, and every `DAT_004E6910 != 0` test in the original is
+ * FALSE in solo. The port has no SRNet, so this is a named 0 rather than a
+ * dropped term: gate 1 below is unreachable offline, exactly as in the
+ * original, and that is why a pet CAN be called while fighting. */
+static int net_online(void) { return 0; }
+
+/* hero+0xA58 bit 2, the script `IF M2` condition. The original STORES it in the
+ * record rather than recomputing it on read - FUN_0044B196 sets it on the
+ * "Modified Quest File Detected" path when the world's crc1 differs from the one
+ * the soul was created against - so it is read from Hero.flags, not derived. */
+static int hero_m2_bit2(void) { return hero_flag(&g_hero, 2); }
+
+/* DAT_004E5DA8 is the SERVER's `noPets` rule (all.c:31345 initialises it to 0;
+ * 31604-31612 sets it from the rule string and clamps a negative to 0). Solo
+ * play never receives a rule set, so it is 0. The other half of the original's
+ * test is the map/link flag 128, NO_PETS (formats_online.md 6.1, read through
+ * FUN_00482BB8(0x80)). */
+static int pets_forbidden(void)
+{
+    /* DAT_004E5DA8 == 0 offline. */
+    return g_hero.map >= 0 && g_hero.map < WORLD_MAX_MAPS &&
+           (g_world.maps[g_hero.map].flags & 0x80u) != 0;
+}
+
+/* FUN_004142F2's away-counter clamps, verbatim:
+ *   pen[0x8A] == 0 -> pen[0x8A] = -pen[0x24];  then if pen[0x8A]+pen[0x24] != 0
+ *   -> pen[0x24] = 1 and pen[0x8A] = -pen[0x24]
+ *   pen[0x8B] == 0 -> pen[0x8B] = -pen[0x25];  then if pen[0x8B]+pen[0x25] != 0
+ *   -> pen[0x25] = 0 and pen[0x8B] = -pen[0x25] */
+static void pet_clamp_counters(Pet *p)
+{
+    if (p->away_a == 0) p->away_a = -p->level;
+    if (p->away_a + p->level != 0) { p->level = 1; p->away_a = -p->level; }
+    if (p->away_b == 0) p->away_b = -p->max_hp;
+    if (p->away_b + p->max_hp != 0) { p->max_hp = 0; p->away_b = -p->max_hp; }
+}
+
+/* FUN_00413DE7 == 1 means "Bring the current pet into battle", i.e. the pet is
+ * in the pen and free to answer the Call button. */
+static int pet_in_fight(void)
+{
+    char msg[96];
+    int state = 0, combat = 0;
+    return pet_state_message(msg, sizeof msg, &state, &combat) != 0;
+}
+
+/* FUN_00414059's param_1 == 1 arm. The argument is `allegiance`, rec[0x114],
+ * which for the player's own pet is the hero's own serial. */
+static int pet_recall(int *slot)
+{
+    *slot = battle_recall(g_hero.serial);
+    return *slot > -1;
+}
+
+/* A fight is running AND the pet has somewhere to go. */
+static int pet_active(void) { return battle_active(); }
+
+/* FUN_00414059's param_1 == 0 arm, via Battle3's authored spawner. */
+static int pet_spawn_into_fight(int mode, Pet *p)
+{
+    BattleSpawn b;
+    (void)mode;   /* FUN_00414059 takes it, but the authored spawner does not */
+    memset(&b, 0, sizeof b);
+    b.monster_id = p->monster_id;
+    b.allegiance = g_hero.serial;      /* rec[0x114]: the caster's own side */
+    b.level = p->level;
+    b.hp = p->hp;
+    b.max_hp = p->max_hp;
+    /* Battle3's mapping, which is NOT positional: param_9 is OFFENCE and
+     * param_10 is DEFENCE, the opposite of the pen's +0xB0/+0xB4 order. */
+    b.mp = p->spawn_mp;
+    b.max_mp = p->spawn_max_mp;
+    b.offense = p->spawn_offense;
+    b.defense = p->spawn_defense;
+    b.xp = p->spawn_xp;
+    b.ability[0] = enc_get(&p->abil[0]);
+    b.ability[1] = enc_get(&p->abil[1]);
+    b.ability[2] = enc_get(&p->abil[2]);
+    b.ability[3] = enc_get(&p->abil[3]);
+    b.ability[4] = enc_get(&p->abil[4]);
+    return battle_spawn_authored(&b);
+}
+
+/* FUN_004142D8: the per-monster "first seen" key. It is a hash of the monster
+ * id, NOT a clock read - `return (id + 0x3FF ^ 0xF23) * 0x2F169 & 0x7FFFFFFF`. */
+static int pet_seen_key(int monster_id)
+{
+    return (int)(((uint32_t)monster_id + 0x3FFU) ^ 0xF23U) * 0x2F169U & 0x7FFFFFFF;
+}
+
+/* FUN_00410B1A: pen+0xD8 -= amount, then clamp to 0..2000000. */
+void pet_tick_out(int amount)
+{
+    int i, v;
+    for (i = 0; i < PET_PEN_SLOTS; ++i) {
+        if (!pen[i].used) continue;
+        v = pen[i].out_timer - amount;
+        if (v > PET_TIMER_OUT_MAX) v = PET_TIMER_OUT_MAX;
+        if (v < 0) v = 0;
+        pen[i].out_timer = v;
+    }
+}
+
+/* FUN_00410B42: pen+0xE8 -= amount, then clamp to 0..1000000. */
+void pet_tick_call(int amount)
+{
+    int i, v;
+    for (i = 0; i < PET_PEN_SLOTS; ++i) {
+        if (!pen[i].used) continue;
+        v = pen[i].call_timer - amount;
+        if (v > PET_TIMER_CALL_MAX) v = PET_TIMER_CALL_MAX;
+        if (v < 0) v = 0;
+        pen[i].call_timer = v;
+    }
+}
+
+/* FUN_00413DE7. Returns 1 when the pet is already in a fight, so the pen's
+ * Recall button is live. `out_state` is pen[0] and `in_combat` is the hero
+ * combatant's 0x38C == 0x5F test; the string is the reason it is not. */
+int pet_state_message(char *out, size_t cap, int *out_state, int *in_combat)
+{
+    Pet *p = pen[0].used ? &pen[0] : NULL;
+    int combat = 0;
+    if (out_state) *out_state = p ? p->state : 0;
+    if (in_combat) *in_combat = combat;
+    if (out && cap) out[0] = '\0';
+    if (g_hero.hp < 1) { if (out && cap) snprintf(out, cap, "You are dead, so your pets won't come out."); return 0; }
+    if (!p) { if (out && cap) snprintf(out, cap, "You must first select a pet in the pen."); return 0; }
+    if (p->state == 2) { if (out && cap) snprintf(out, cap, "The current pet has already fought."); return 0; }
+    if (p->state == 3) { if (out && cap) snprintf(out, cap, "The current pet has already battled."); return 0; }
+    if (p->state != 1 && p->state != 4) {
+        if (out && cap) snprintf(out, cap, "You must first select a pet in the pen.");
+        return 0;
+    }
+    if (out && cap) snprintf(out, cap, "Bring the current pet into battle.");
+    if (out_state) *out_state = 1;
+    return 0;
+}
+
+/* FUN_004142F2, the pet call/recall trigger.
+ *
+ * Gate order is the original's and matters, because each gate writes a different
+ * message and the caller shows the first one that fires:
+ *   1. already fighting (or the M2 bit) AND the "no pets in combat" flag AND a
+ *      CALL -> "cannot call it here", return -1
+ *   2. the pet's level must be below the hero's, unless this is a RECALL
+ *   3. escalation: pet above the hero, hero under the monster's minimum level,
+ *      the monster's bit 0, a pending-away counter, or never seen -> downgrade
+ *      a CALL to a RELEASE and announce it
+ *   4. map/link flag 128 (NO_PETS) or the global pet-off switch skips the spawn
+ * The one rand() is the tired-pet check on the CALL arm and nothing else draws. */
+int pet_trigger(int mode)
+{
+    Pet *p;
+    int monster, announce = 0, seen, busy, tired, slot = -1;
+    /* Gate 1: (in a fight || the hero's M2 bit) && DAT_004E6910 && a CALL. The
+     * M2 term is hero+0xA58 bit 2, which the port's Hero does not carry, so it
+     * reads 0; the net term is 0 offline, so the whole gate is 0 offline and the
+     * original never blocks a pet call in solo play either. */
+    if (mode == PET_CALL && pet_busy() && (hero_m2_bit2() & 2) != 0 && net_online()) {
+        say("Your pet cannot come out while you are fighting.");
+        return -1;
+    }
+    p = pen[0].used ? &pen[0] : NULL;
+    if (!p) { say("You must first select a pet in the pen."); return -1; }
+    monster = p->monster_id;
+    if (!p->seen_key) p->seen_key = pet_seen_key(monster);
+    seen = pet_seen_key(monster);
+    if (!(p->level < g_hero.level || mode != PET_CALL)) {
+        say("Your pet is too advanced for you.");
+        return -1;
+    }
+    if (g_hero.level > p->level
+        || (monster > 0 && monster < WORLD_MAX_MONSTERS && g_hero.level < g_world.monsters[monster].level)
+        || (monster > 0 && monster < WORLD_MAX_MONSTERS && (g_world.monsters[monster].flags & 1))
+        || p->away_a + p->level != 0
+        || (monster <= 0 || monster >= WORLD_MAX_MONSTERS) || seen != p->seen_key) {
+        if (mode == PET_CALL) mode = PET_RELEASE;
+        announce = 1;
+    }
+    busy = 0;
+    if (mode == PET_RECALL) {
+        if (pet_recall(&slot)) wos_log_event("pet_recall","monster=%d",monster);
+    } else if (mode == PET_RELEASE) {
+        busy = (p->state == 1);
+    } else {
+        /* CALL: the 200-second lead timer only arms when the pet is out there. */
+        int here = pet_in_fight();
+        if (here) {
+            /* FUN_004142F2: the pet is too tired to answer, 30 % of the time. */
+            tired = (PET_FATIGUE_MAX - p->fatigue) < 100000;
+            if (tired && (int)(crt_rand() % 100) < 30) {
+                say("Your pet is too tired to come.");
+                mode = PET_RELEASE;
+            }
+            p->call_timer = PET_CALL_LEAD;
+            wos_log_event("pet_call","monster=%d",monster);
+        }
+    }
+    if (pets_forbidden()) { wos_log_event("pet_call_blocked","reason=no_pets"); return -1; }
+    /* GATE 5. The original tests the fight block's +0x88 ("in combat", set by
+     * FUN_00491767) and takes a non-combat spawn path when it is 0. The port's
+     * fight.engaged is set unconditionally and carries no information, so that
+     * arm has no path and the authored spawner is always used. */
+    if (!busy && pet_active()) {
+        if (announce || (mode == PET_RELEASE && pet_busy() && net_online())) {
+            say("Your pet cannot come out here.");
+        } else {
+            pet_clamp_counters(p);
+            slot = pet_spawn_into_fight(mode, p);
+        }
+    }
+    if (mode == PET_CALL) {
+        p->state = 2;
+        p->out_timer = PET_TIMER_OUT_MAX;
+        wos_log_event("pet_called","monster=%d",monster);
+    } else if (mode == PET_RELEASE) {
+        pet_release(0);
+    } else if (mode == PET_RECALL && slot > -1) {
+        wos_log_event("pet_recalled","monster=%d",monster);
+    }
+    return slot;
+}
+
 int pet_dismiss(int index)
 {
-    int i;
     if (!pet_at(index)) return 0;
-    for (i = 0; i < 2; ++i)
-        if (g_hero.pet_ids[i] == (uint32_t)pen[index].monster_id) g_hero.pet_ids[i] = 0;
+    if (g_hero.pet_ids[0] == (uint32_t)pen[index].monster_id) g_hero.pet_ids[0] = 0;
     wos_log_event("pet_dismiss","monster=%d",pen[index].monster_id);
     return 1;
 }
@@ -648,8 +928,9 @@ void items_dump(DumpEmit emit, void *user)
     dump_emit_int(emit,"items.attr_pool",attr_pool,user);
     dump_emit_int(emit,"items.throw_armed",throw_item_id,user);
     dump_emit_int(emit,"items.pet_count",pet_count(),user);
-    dump_emit_int(emit,"items.pet_ids0",(long long)g_hero.pet_ids[0],user);
-    dump_emit_int(emit,"items.pet_ids1",(long long)g_hero.pet_ids[1],user);
+    /* pet_ids[1] is the GetTickCount stamp at hero+0x0EEC, not a second id. */
+    dump_emit_int(emit,"items.pet_id",(long long)g_hero.pet_ids[0],user);
+    dump_emit_int(emit,"items.pet_stamp",(long long)g_hero.pet_ids[1],user);
     pet_dump(emit, user);
 }
 

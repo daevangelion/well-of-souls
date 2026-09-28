@@ -72,13 +72,14 @@ static const char *const button_names[BUTTON_COUNT] = {
 };
 
 /* --- the actor record fields FUN_004620F3/FUN_0046230E own ---------------- */
-static int32_t w_x, w_y;              /* rec+0x94/+0x98, 24.8 map units      */
-static int32_t w_target_x, w_target_y;/* rec+0x9C/+0xA0                    */
+/* The walk leg lives in the Hero record itself, so a save made mid-walk carries it and
+ * writes the same bytes the original would (FUN_0046230E at all.c:70734-70735 and
+ * FUN_00461948 at all.c:70152-70153 write hero+0x94/+0x98/+0x9C/+0xA0/+0xAC/+0xB0/+0xB4,
+ * and all.c:70725-70728 writes the facing at +0x88). Only two of those words have no
+ * field in Hero yet -- rec+0xA4/+0xA8 (the per-leg step) and rec+0xBC/+0xC0 (the leg
+ * start) -- so those two stay here until FrontHero-2 adds them. */
 static int32_t w_step_x, w_step_y;    /* rec+0xA4/+0xA8, per-leg step       */
 static int32_t w_leg_x, w_leg_y;       /* rec+0xBC/+0xC0, leg start         */
-static int w_speed;                    /* rec+0xAC, 24.8 map units per ms   */
-static uint32_t w_tick;                /* rec+0xB0, GetTickCount at leg start */
-static int w_duration;                 /* rec+0xB4, (dist*1000)/speed       */
 static int face_x = 1, face_y = 1;     /* per-axis facing code, 0/1/2       */
 
 /* --- path state (DAT_004f2168 count, DAT_004f216c cursor) ---------------- */
@@ -103,7 +104,12 @@ static uint32_t wander_legs;           /* _DAT_004f219C */
 static uint32_t cool_a;                 /* _DAT_004f2220 */
 static uint32_t cool_b;                 /* _DAT_004f2224 */
 static uint32_t battle_end_tick;       /* DAT_004e70a8, set when a fight ends */
-static int no_monsters_here;           /* DAT_004f2228 */
+/* DAT_004f2228, DAT_004f222c, DAT_004f2230, _DAT_004f2220, _DAT_004f2224, DAT_004e70a8,
+ * DAT_004e70ac, DAT_004f2190 and _DAT_004f219c all live in .data, and I read their initial
+ * values out of the PE image rather than assuming zero: every one of them is 0 EXCEPT
+ * DAT_004f2228, which is 1. So the original asserts "There are no monsters here" from before
+ * the title screen until the first roll clears it, and the port must start there too. */
+static int no_monsters_here = 1;      /* DAT_004f2228, .data initial value 1 */
 static int hunt_recent;                /* DAT_004e70ac */
 
 /* --- link state --------------------------------------------------------- */
@@ -174,9 +180,17 @@ void map_set_waypoints(int on)
     waypoints_enabled = on ? 1 : 0;
 }
 
+/* The fight-end handler at 0x436BEE-0x436BF9, whose tail is exactly these two stores:
+ *   436bee: call GetTickCount ; 436bf4: mov ds:0x4e70a8, eax
+ *   436bf9: inc ds:0x4e70ac
+ * So DAT_004e70ac counts COMPLETED FIGHTS, not quiet ticks -- the whole binary references it
+ * only there, at the 0x4628D2 compare and the 0x462920 clear inside FUN_0046260E. The test
+ * `10 < DAT_004e70ac` in the second roll therefore means "more than ten fights have ended",
+ * a persistent state, not a per-tick ramp that forces an encounter. */
 void map_note_battle_end(void)
 {
     battle_end_tick = clock_ms();
+    ++hunt_recent;
 }
 
 static const ObjRect *object_rect(const Link *link)
@@ -221,7 +235,7 @@ static void link_extent(const Link *link, int *w, int *h)
 static int map_scan_links(int *distance)
 {
     int i, nearest = -1, hit = -1, sticky = hit_link_idx, inside = 0;
-    int best = 0x3fffffff, hx = w_x >> 8, hy = w_y >> 8;
+    int best = 0x3fffffff, hx = hero_x_units(&g_hero), hy = hero_y_units(&g_hero);
     for (i = 0; i < OBL_RECORDS; ++i) {
         const Link *l = &map.links[i];
         int w, h, d;
@@ -418,7 +432,7 @@ static void walk_to(int32_t tx, int32_t ty, int speed, int player)
     uint32_t now = clock_ms();
     if (!map_walkable(&map, tx >> 8, ty >> 8, g_hero.tokens)) return;
     if (player && waypoints_enabled && !map_flag(0x80000u)) {
-        path_validate(w_x >> 8, w_y >> 8, tx >> 8, ty >> 8);
+        path_validate(hero_x_units(&g_hero), hero_y_units(&g_hero), tx >> 8, ty >> 8);
         if (path_cursor > 0) {
             tx = path[path_cursor].x << 8;
             ty = path[path_cursor].y << 8;
@@ -429,16 +443,16 @@ static void walk_to(int32_t tx, int32_t ty, int speed, int player)
         }
     }
     if (speed < 1) speed = 1;
-    w_target_x = tx; w_target_y = ty;
-    dx = (int)(tx - w_x); dy = (int)(ty - w_y);
+    g_hero.target_x = tx; g_hero.target_y = ty;
+    dx = (int)(tx - g_hero.x); dy = (int)(ty - g_hero.y);
     dist = (int)sqrt((double)dx * dx + (double)dy * dy);
     if (dist < 1) dist = 1;
-    w_leg_x = w_x; w_leg_y = w_y;
+    w_leg_x = g_hero.x; w_leg_y = g_hero.y;
     w_step_x = speed * dx / dist;
     w_step_y = speed * dy / dist;
-    w_speed = speed;
-    w_tick = now;
-    w_duration = dist * 1000 / speed;
+    g_hero.walk_speed = speed;
+    g_hero.walk_start_tick = now;
+    g_hero.walk_duration = dist * 1000 / speed;
     /* FUN_004620F3 tail: a short leg that follows another within two seconds becomes the
      * idle wander target; anything else clears the wander and re-stamps the timer. */
     if ((uint32_t)(now - wander_tick) < WANDER_MS && dist < WANDER_LEG) {
@@ -447,20 +461,19 @@ static void walk_to(int32_t tx, int32_t ty, int speed, int player)
     } else {
         wander_tick = now;
         wander_x = wander_y = 0; wander_speed = 0;
-        wos_log_event("walk_reset", "x=%d y=%d", w_x >> 8, w_y >> 8);
+        wos_log_event("walk_reset", "x=%d y=%d", hero_x_units(&g_hero), hero_y_units(&g_hero));
     }
 }
 
 /* FUN_00461948 (0x461948) with param_4 == 1. */
 static void walk_arrive(int32_t tx, int32_t ty, int advance)
 {
-    int speed = w_speed;
-    w_x = tx; w_y = ty;
+    int speed = g_hero.walk_speed;
+    g_hero.x = tx; g_hero.y = ty;
     w_leg_x = tx; w_leg_y = ty;
-    w_speed = 0; w_tick = 0;
-    g_hero.x = w_x >> 8; g_hero.y = w_y >> 8;
+    g_hero.walk_speed = 0; g_hero.walk_start_tick = 0;
     if (!advance || path_cursor < 1 || path_count - 1 <= path_cursor) {
-        wos_log_event("hero_move", "x=%d y=%d", w_x >> 8, w_y >> 8);
+        wos_log_event("hero_move", "x=%d y=%d", hero_x_units(&g_hero), hero_y_units(&g_hero));
         return;
     }
     ++path_cursor;
@@ -482,35 +495,34 @@ static int face_axis(int oldv, int newv, int other)
  * FUN_00462958 hands to the encounter roll. */
 static int walk_step(uint32_t now)
 {
-    if (w_speed > 0) {
-        int32_t elapsed = (int32_t)(uint32_t)(now - w_tick);
-        if (w_duration < elapsed) {
-            walk_arrive(w_target_x, w_target_y, 1);
+    if (g_hero.walk_speed > 0) {
+        int32_t elapsed = (int32_t)(uint32_t)(now - g_hero.walk_start_tick);
+        if (g_hero.walk_duration < elapsed) {
+            walk_arrive(g_hero.target_x, g_hero.target_y, 1);
         } else {
             int32_t nx = w_leg_x + (int32_t)((int64_t)w_step_x * elapsed / 1000);
             int32_t ny = w_leg_y + (int32_t)((int64_t)w_step_y * elapsed / 1000);
             int fx, fy;
             if (nx < 0) nx = 0;
             if (ny < 0) ny = 0;
-            fx = face_axis((int)w_x, (int)nx, face_x);
-            fy = face_axis((int)w_y, (int)ny, fx);
+            fx = face_axis((int)g_hero.x, (int)nx, face_x);
+            fy = face_axis((int)g_hero.y, (int)ny, fx);
             face_x = fx; face_y = fy;
+            g_hero.facing = hero_facing_encode(fx, fy);   /* hero+0x88, fy*4+fx, 5->9 */
             if (!map_walkable(&map, nx >> 8, ny >> 8, g_hero.tokens))
-                walk_arrive(w_x, w_y, 1);
-            else { w_x = nx; w_y = ny; }
+                walk_arrive(g_hero.x, g_hero.y, 1);
+            else { g_hero.x = nx; g_hero.y = ny; }
         }
     }
-    g_hero.x = w_x >> 8; g_hero.y = w_y >> 8;
-    return w_speed > 0;
+    return g_hero.walk_speed > 0;
 }
 
 /* FUN_00461A07 (0x461A07) = FUN_00461948(..., param_4 = 0): place and stop, no advance. */
 static void walk_stop(int32_t x, int32_t y)
 {
-    w_x = x; w_y = y;
+    g_hero.x = x; g_hero.y = y;
     w_leg_x = x; w_leg_y = y;
-    w_speed = 0; w_tick = 0;
-    g_hero.x = x >> 8; g_hero.y = y >> 8;
+    g_hero.walk_speed = 0; g_hero.walk_start_tick = 0;
 }
 
 static void load_art(void)
@@ -585,7 +597,7 @@ static void map_music_update(void)
 static void activate_link(int index)
 {
     Link link = map.links[index];
-    w_speed = 0; w_tick = 0;
+    g_hero.walk_speed = 0; g_hero.walk_start_tick = 0;
     wander_x = wander_y = 0; wander_speed = 0;
     path_reset();
     g_hero.link = index;
@@ -598,8 +610,8 @@ static void place_at_link(int link)
 {
     int w, h, fx, fy, radius, found = 0;
     if (link < 0 || link >= OBL_RECORDS || !map.links[link].used) {
-        fx = clamp(g_hero.x, 0, map.image.w - 1);
-        fy = clamp(g_hero.y, 0, map.image.h - 1);
+        fx = clamp(hero_x_units(&g_hero), 0, map.image.w - 1);
+        fy = clamp(hero_y_units(&g_hero), 0, map.image.h - 1);
     } else {
         g_hero.link = link;
         link_extent(&map.links[link], &w, &h);
@@ -625,7 +637,7 @@ static void place_at_link(int link)
 
 static void map_reset_runtime(int link)
 {
-    w_speed = 0; w_tick = 0;
+    g_hero.walk_speed = 0; g_hero.walk_start_tick = 0;
     path_reset();
     wander_x = wander_y = 0; wander_speed = 0;
     wander_tick = clock_ms();
@@ -634,7 +646,9 @@ static void map_reset_runtime(int link)
     nearest_link_idx = hit_link_idx = -1;
     no_monsters_here = 0;
     cool_a = cool_b = 0;
-    face_x = face_y = 1;
+    hero_facing_decode(g_hero.facing, &face_x, &face_y);
+    if (!g_hero.facing) face_x = face_y = 1;
+    g_hero.facing = hero_facing_encode(face_x, face_y);
     minimap = 0;
     battle_end_tick = clock_ms();
     last_map_tick = clock_ms();
@@ -666,7 +680,7 @@ void game_enter_map(int map_id, int link, int drop_in)
     map_reset_runtime(drop_in ? -1 : link);
     load_art();
     screen_set(&map_screen);
-    wos_log_event("map_enter", "map=%d x=%d y=%d", map_id, g_hero.x, g_hero.y);
+    wos_log_event("map_enter", "map=%d x=%d y=%d", map_id, hero_x_units(&g_hero), hero_y_units(&g_hero));
     map_music_start();
     if (drop_in && link >= 0 && link < OBL_RECORDS && map.links[link].used)
         activate_link(link);
@@ -677,7 +691,7 @@ void game_return_to_map(void)
     if (!loaded || map.id != g_hero.map) { game_enter_map(g_hero.map, g_hero.link, 0); return; }
     map_reset_runtime(g_hero.link);
     screen_set(&map_screen);
-    wos_log_event("map_enter", "map=%d x=%d y=%d", map.id, g_hero.x, g_hero.y);
+    wos_log_event("map_enter", "map=%d x=%d y=%d", map.id, hero_x_units(&g_hero), hero_y_units(&g_hero));
     map_music_start();
 }
 
@@ -685,8 +699,8 @@ void game_return_to_map(void)
 static void camera(int *x, int *y)
 {
     int vw = (WALK_W + 3) / 4, vh = (WALK_H + 3) / 4;
-    *x = (w_x >> 8) - vw / 2;
-    *y = (w_y >> 8) - vh / 2;
+    *x = hero_x_units(&g_hero) - vw / 2;
+    *y = hero_y_units(&g_hero) - vh / 2;
 }
 
 static Rect button_rect(int i)
@@ -776,7 +790,7 @@ static void encounter_start(int nearest, int distance, const Link *link)
 {
     int group = link->difficulty, pct = clamp(distance, 20, 80);
     if (group < 0) { group = -group; pct = 100 - pct; }
-    w_speed = 0; w_tick = 0;
+    g_hero.walk_speed = 0; g_hero.walk_start_tick = 0;
     g_hero.link = nearest;
     game_set_pending_fight(NULL, 0, link->difficulty, pct);
     wos_log_event("encounter", "group=%d distance=%d", link->difficulty, pct);
@@ -797,7 +811,7 @@ static void map_tick(uint32_t now)
     state = encounter_roll(nearest, moving, now);
     /* FUN_00462958: `if (nearest < 0 || hero[+0xAC] != 0) latch = 0;` -- +0xAC is the
      * leg speed, so a hero still walking has its latch cleared and re-fires on arrival. */
-    if (hit < 0 || w_speed != 0) link_latched = 0;
+    if (hit < 0 || g_hero.walk_speed != 0) link_latched = 0;
     else if (!link_latched && (map.links[hit].kind != 4 || state == 0)) {
         link_latched = 1; link_active = 1;
         wos_log_event("link_used", "map=%d link=%d", g_hero.map, hit);
@@ -808,7 +822,7 @@ static void map_tick(uint32_t now)
     /* `if (state == 0 || latched) active = 0; else if (!active) { stop; latch; fight; }` */
     if (state == 0 || link_latched) link_active = 0;
     else if (!link_active) {
-        walk_stop(w_x, w_y);                 /* FUN_00461A07 */
+        walk_stop(g_hero.x, g_hero.y);                 /* FUN_00461A07 */
         link_active = 1; link_latched = 1;
         encounter_start(nearest, distance, &map.links[nearest]);
     }
@@ -856,7 +870,7 @@ static void map_update(const Input *in)
     for (i = 0; i < BUTTON_COUNT; ++i)
         if (contains(button_rect(i), in->mouse_x, in->mouse_y)) hover = i;
     if ((in->mouse_pressed & (1u << 1)) && hover >= 0) {
-        w_speed = 0; w_tick = 0;
+        g_hero.walk_speed = 0; g_hero.walk_start_tick = 0;
         if (hover == 5) { game_enter_scene(1, NULL); return; }
         if (hover == 6) { hero_save(&g_hero); game_go_well(); return; }
         if (hover < 4) {
@@ -867,7 +881,7 @@ static void map_update(const Input *in)
         }
         minimap = !minimap;
     }
-    if (in->pressed[PLAT_KEY_ESCAPE]) { w_speed = 0; w_tick = 0; minimap = 0; }
+    if (in->pressed[PLAT_KEY_ESCAPE]) { g_hero.walk_speed = 0; g_hero.walk_start_tick = 0; minimap = 0; }
     if (minimap) return;
     /* The click is converted with a truncating divide by four against the view origin. */
     if ((in->mouse_pressed & (1u << 1)) &&
@@ -894,13 +908,13 @@ static void map_update(const Input *in)
     dx = !!in->down[PLAT_KEY_RIGHT] - !!in->down[PLAT_KEY_LEFT];
     dy = !!in->down[PLAT_KEY_DOWN] - !!in->down[PLAT_KEY_UP];
     if (dx || dy) {
-        int32_t tx = (int32_t)((w_x >> 8) + dx) << 8;
-        int32_t ty = (int32_t)((w_y >> 8) + dy) << 8;
+        int32_t tx = (int32_t)(hero_x_units(&g_hero) + dx) << 8;
+        int32_t ty = (int32_t)(hero_y_units(&g_hero) + dy) << 8;
         /* Re-issue the click only when the leg is finished or is aimed elsewhere, so a
          * held key walks cell by cell at the original's leg speed instead of restarting
          * the interpolation every frame. */
-        if (w_speed == 0 || w_target_x != tx || w_target_y != ty)
-            click_walk((w_x >> 8) + dx, (w_y >> 8) + dy);
+        if (g_hero.walk_speed == 0 || g_hero.target_x != tx || g_hero.target_y != ty)
+            click_walk(hero_x_units(&g_hero) + dx, hero_y_units(&g_hero) + dy);
     }
 }
 
@@ -927,7 +941,7 @@ static void draw_minimap(Framebuffer *fb)
     for (py = 0; py < h; ++py)
         for (x = 0; x < w; ++x)
             fb_pixel(fb, 24 + x, 60 + py, map.image.pixels[(py * ih / h) * iw + x * iw / w]);
-    fb_fill(fb, (Rect){23 + g_hero.x * w / iw, 59 + g_hero.y * h / ih, 3, 3}, 0xff2020);
+    fb_fill(fb, (Rect){23 + hero_x_units(&g_hero) * w / iw, 59 + hero_y_units(&g_hero) * h / ih, 3, 3}, 0xff2020);
     font_draw(fb, 24, 380, "Escape to return", 0xb8a67d);
 }
 
@@ -1002,8 +1016,8 @@ static void map_render(Framebuffer *fb)
     draw_links(fb, cx, cy);
     if (chat_overlay_terrain()) draw_terrain_grid(fb);
     if (chat_overlay_monsters()) draw_monster_blobs(fb);
-    sx = (w_x >> 8) * 4 - cx * 4;
-    sy = (w_y >> 8) * 4 - cy * 4;
+    sx = hero_x_units(&g_hero) * 4 - cx * 4;
+    sy = hero_y_units(&g_hero) * 4 - cy * 4;
     size = skin.cell / 3;
     for (i = -3; i <= 3; ++i) {
         int half = 8 - i * i / 2;
@@ -1037,7 +1051,7 @@ static void map_render(Framebuffer *fb)
     fb_fill(fb, (Rect){0, BOT_Y, 640, 64}, 0x101820);
     meter(fb, 8, BOT_Y + 7, "HP", g_hero.hp, g_hero.max_hp, 0x2100a5);
     meter(fb, 148, BOT_Y + 7, "MP", g_hero.mp, g_hero.max_mp, 0xff8080);
-    snprintf(text, sizeof(text), "%s (%d,%d)", map.def->name, g_hero.x, g_hero.y);
+    snprintf(text, sizeof(text), "%s (%d,%d)", map.def->name, hero_x_units(&g_hero), hero_y_units(&g_hero));
     font_wrap(fb, (Rect){292, BOT_Y + 9, 336, 16}, text, 0xc8cfdb);
     font_wrap(fb, (Rect){8, BOT_Y + 35, 624, 24}, message, 0xffffff);
     if (minimap) draw_minimap(fb);
@@ -1051,14 +1065,14 @@ void map_dump(DumpEmit emit, void *user)
 {
     uint32_t now = clock_ms();
     dump_emit_int(emit, "map.id", loaded ? map.id : -1, user);
-    dump_emit_int(emit, "map.x", w_x >> 8, user);
-    dump_emit_int(emit, "map.y", w_y >> 8, user);
-    dump_emit_int(emit, "map.fx", w_x, user);
-    dump_emit_int(emit, "map.fy", w_y, user);
-    dump_emit_int(emit, "map.tx", w_target_x >> 8, user);
-    dump_emit_int(emit, "map.ty", w_target_y >> 8, user);
-    dump_emit_int(emit, "map.speed", w_speed, user);
-    dump_emit_int(emit, "map.duration", w_duration, user);
+    dump_emit_int(emit, "map.x", hero_x_units(&g_hero), user);
+    dump_emit_int(emit, "map.y", hero_y_units(&g_hero), user);
+    dump_emit_int(emit, "map.fx", g_hero.x, user);
+    dump_emit_int(emit, "map.fy", g_hero.y, user);
+    dump_emit_int(emit, "map.tx", g_hero.target_x >> 8, user);
+    dump_emit_int(emit, "map.ty", g_hero.target_y >> 8, user);
+    dump_emit_int(emit, "map.speed", g_hero.walk_speed, user);
+    dump_emit_int(emit, "map.duration", g_hero.walk_duration, user);
     dump_emit_int(emit, "map.path_cursor", path_cursor, user);
     dump_emit_int(emit, "map.path_count", path_count, user);
     dump_emit_int(emit, "map.waypoints", waypoints_enabled, user);
@@ -1071,6 +1085,10 @@ void map_dump(DumpEmit emit, void *user)
     dump_emit_int(emit, "map.no_monsters", no_monsters_here, user);
     dump_emit_int(emit, "map.wander", wander_speed != 0, user);
     dump_emit_int(emit, "map.wander_legs", (long long)wander_legs, user);
-    dump_emit_int(emit, "map.facing", face_y * 3 + face_x, user);
+    /* hero+0x88, the original's OWN fy*4+fx encoding with the 5->9 remap, so it compares against
+     * the oracle's raw read. The port's 3x3 sprite cell is a different numbering and is emitted
+     * separately rather than under the same key. */
+    dump_emit_int(emit, "map.facing", g_hero.facing, user);
+    dump_emit_int(emit, "map.facing_cell", face_y * 3 + face_x, user);
     dump_emit_int(emit, "map.music", music_index, user);
 }

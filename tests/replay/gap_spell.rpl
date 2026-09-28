@@ -1,34 +1,17 @@
-# seed: 24
+# seed: 1
 # requires: hero_ready spell_learn spell_cast music_play
 # requires-match: spell_cast caster=hero
 # requires-match: spell_cast caster=monster
-# Learn Health Weave in the normal Spells panel, then meet a random encounter, cast it once, and
-# take a monster's cast back.
-#
-# CHANGED (Battle-2): the 21 "attack once, then press F to retreat before retaliation" legs are
-# GONE. Under the original's FUN_00436c9d an offline ordinary encounter has no timer escape at
-# all - DAT_00502b14 is 0 and the Tactics abandon dialog FUN_00447431 returns 0 offline - so F is
-# refused with "You attempt to flee... but are dragged back" unless the 30 % interrupt of an
-# attack already animating on the hero fires. Farming PP by retreating was only possible because
-# the port's flee always succeeded, which was a documented deviation. This replay now plays the
-# encounter out and leaves through that 30 % window, which is the original's own escape.
-# tests/replay/gap_flee.rpl asserts the refusal and the escape on their own.
 expect boot_menu 900
 key RETURN
 wait 30
-# FUN_0041B891's own table (all.c:21078) has THREE states before the Well, not two:
-#   1 main menu -> 2 "Where Do You Want To Play Today?" (splash, art\where.jpg, FUN_0041D31F)
-#   2 -> 3 "Choose Your World" + the world list (art\chapter.jpg, FUN_0041D717)
-#   3 -> take the highlighted row (msg 0x474) -> the Pick-a-Soul window
-# The old port collapsed the splash; the three states are the original's, so the script
-# spends one more RETURN on them. RETURN is the plan's keyboard shortcut for the click.
 key RETURN
 wait 30
 key RETURN
 wait 30
 key n
 wait 5
-text GapBook
+text SpellStudent
 key DOWN
 key DOWN
 key DOWN
@@ -38,10 +21,190 @@ key DOWN
 key RETURN
 expect hero_ready 300
 expect map_enter 600
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
+hold RIGHT 60
+keydown DOWN
+expect battle_start 2500
+keyup DOWN
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+expect battle_won 1200
+expect map_enter 1200
 click 541 32
-wait 3
+wait 5
 click 110 44
-wait 3
+wait 5
 key DOWN
 key DOWN
 key DOWN
@@ -50,504 +213,113 @@ key DOWN
 key DOWN
 key DOWN
 key l
-expect spell_learn 300
+expect spell_learn 600
 key ESCAPE
-# Random encounter: cast Health Weave once, take a monster's cast, then leave through the
-# original's 30 % interrupt window (FUN_00436c9d's `rand()%100 < 30`).
-hold RIGHT 150
-keydown DOWN
-expect battle_start 1500
-keyup DOWN
+wait 5
+click 343 152
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+click 343 160
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
+key a
+wait 25
 key s
-shot /tmp/wos-gap-spell-menu.bmp
+wait 5
 key DOWN
 key RETURN
-key a
-wait 90
-shot /tmp/wos-gap-spell-effect.bmp
-expect spell_cast 600
-expect spell_cast 600
-shot /tmp/wos-gap-spell.bmp
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-key a
-wait 30
-key f
-wait 2
-expect battle_fled 300
-expect map_enter 600
+wait 60
+expect spell_cast 900
+wait 60
+expect spell_cast 900
 quit

@@ -25,10 +25,15 @@
                                 * record stores a count per id 0..0x13FF, the
                                 * first 1024 as bytes at +0x272 and the rest as
                                 * presence bits at +0x0AC8 (FUN_0045FC2B) */
-/* Ailments have NO home in the .her: the disease counters live in the
- * 0x6E0-stride combatant record at +0x398 (FUN_004A6E58 infection, FUN_004A6B55
- * cure, FUN_004A6C46 decay), rebuilt every fight. The Hero field below is live
- * state and does not survive a reload; that matches the original. */
+/* THERE IS NO HERO-SIDE DISEASE LIST, and there is deliberately no field for one
+ * here. The disease counters live only in the 0x6E0-stride combatant record at
+ * +0x398 -- FUN_004A6E58 infects, FUN_004A6B55 cures, FUN_004A6C46 decays -- and
+ * FUN_00491E45's memset(rec, 0, 0x6E0) zeroes them at the start of every fight,
+ * so a disease never survives one. Battle3 found this after rebuilding the
+ * counters, and the `ailments` bitmask this struct used to carry was an
+ * invention of ours with no counterpart in the record. It is gone rather than
+ * left dead: a field that looks live but never is is how the last round's pet and
+ * bag bugs happened. Call battle_cure() and read the combatant record instead. */
 #define HERO_ABILITIES  5      /* str, wis, sta, agi, dex (levels.txt START_ABILITY order) */
 
 /* The .her record: 0x16CC bytes, no magic, no version, one fwrite(hero,1,0x16CC)
@@ -58,6 +63,18 @@ typedef struct {
 
 typedef struct {
     int valid;
+    /* Slot allocation, which the original does at STARTUP and which is NOT the
+     * same thing as a loaded soul. FUN_00427D89 (0x427D89, run during
+     * InitInstance) does:
+     *     strcpy(&DAT_004e0bd0, ""); FUN_0048e19a();
+     *     DAT_00507838 = -1;
+     *     *DAT_0067fbf8 = 1;                 <- slot 0 in use
+     *     DAT_0067fbf8[1] = DAT_004dd20c;    <- with the local serial
+     * and, crucially, NO memset and NO name. So a fresh boot has an allocated
+     * slot carrying in_use=1 and a serial and an all-zero name, which is what the
+     * original's slot-0 record reads at the title screen. `valid` below means
+     * "a soul is LOADED" and is a different question. */
+    int slot_in_use;
     char name[HERO_NAME_MAX];
     char skin[64];
     int gender;                 /* 0..3 (gender.ini) */
@@ -72,14 +89,38 @@ typedef struct {
     int hand_pp[8];             /* hands 1..8; preferred hand begins at 5000 PP */
     int element_pp[8];          /* element indices 0..7 */
     int64_t pp;                 /* unspent proficiency wallet */
-    uint32_t ailments;          /* bit n = spell disease -n, n=2..24 */
     HeroItem inventory[HERO_INVENTORY]; /* item id n owns slot n-1; empty = {0,0} */
     unsigned char tokens[HERO_TOKENS];
     unsigned char learned_spells[768]; /* explicit GIVE S / START_SPELLS grants */
     /* map position */
-    int map;                    /* current map id */
-    int link;                   /* last link visited (resurrection/incarnate point) */
-    int x, y;                   /* map units */
+    int map;                    /* current map id, hero+0x0090, compared
+                                 * record-to-record at all.c:23511/26342/70892 */
+    int link;                   /* the current link index, hero+0x067C. FUN_00463853
+                                 * writes it and then indexes the link table at
+                                 * (&DAT_00604818)[link * 200], 200 bytes a record */
+    /* The walk leg, which the original SAVES: a save made mid-walk carries it, so
+     * leaving these zero is a divergence, not a simplification. Oracle4.MapVAs's
+     * map.* audit found them in record 0 of the 44-entry actor array whose base
+     * pointer is the global at 0x0067FBF8 - the hero table. MapView-2 writes them
+     * as the hero walks; hero_walk_leg() is the read side. */
+    /* The walk position and destination, stored in the ORIGINAL'S OWN 24.8 fixed
+     * point, as Main requires: a save made mid-walk carries the fractional bits,
+     * and rounding to map units at save time would make the .her differ from
+     * what the original writes. 24.8 and not 16.16 is settled by all.c:70730,
+     * `FUN_004631C6(iVar7 >> 8, iVar2 >> 8, ...)` consuming exactly these words,
+     * and by the distance test at all.c:1918. Hero.x/Hero.y therefore are NOT
+     * map units; read them through hero_x_units()/hero_y_units(). */
+    int32_t x, y;               /* LIVE position, 24.8 fixed; hero+0x94/+0x98, written
+                                 * every tick by FUN_0046230E (all.c:70734-70735) and
+                                 * latched on arrival by FUN_00461948 (70152-70153) */
+    int32_t target_x, target_y; /* the walk destination, 24.8 fixed; hero+0x9C/+0xA0,
+                                 * all.c:70613-70614 */
+    int walk_speed;             /* hero+0xAC */
+    uint32_t walk_start_tick;   /* GetTickCount stamp for the current leg */
+    int walk_duration;          /* hero+0xB4 */
+    int facing;                 /* hero+0x88, STORED IN THE ORIGINAL'S ENCODING:
+                                 * fy*4 + fx with a 5 -> 9 remap, 0x46230E
+                                 * (all.c:70725-70728). NOT the port's fy*3+fx. */
     /* --- fields added for .her parity -------------------------------------
      * kills/deaths are two SEPARATE 32-bit counters in the record, not a
      * 64-bit pair: hero+0x728 is Kills and hero+0x724 is Deaths, per
@@ -90,6 +131,13 @@ typedef struct {
     int incarnations;           /* hero+0x0730, ++ by FUN_00420240 on every incarnate */
     int saves;                 /* hero+0x0A4C, ++ by every save (FUN_00417F1B) */
     int seconds_played;         /* hero+0x0734 / +0x01CD, the autosave clock */
+    uint32_t flags;              /* hero+0x0A58, the script's IF Mn flag word.
+                                 * Bit 2 = "Modified Quest File Detected"
+                                 * (FUN_0044B196, read by FUN_004142F2's pet
+                                 * gate); bit 4 = set by FUN_004978D5 when
+                                 * avoidModifiedQuestFiles is off. Negated
+                                 * mirror at +0x0A5C, and the mirror is
+                                 * checked on load, like the XP/PP pairs. */
     int world_crc;              /* hero+0x06C4, the world CRC the hero last camped in */
     int hunting;                /* hero+0x0A04, the raw signed hunt-training field the
                                  * map encounter roll uses both as a level and
@@ -101,10 +149,48 @@ typedef struct {
      * owns the ^K; hero.c never interprets these. */
     uint32_t trophy_bag[128];   /* hero+0x0CE0 .. 0x0EDF */
     uint32_t trophy_bag_geo;     /* hero+0x0EE0, (w<<16|h) ^ 0x1D43E217 */
-    uint32_t pet_ids[2];         /* hero+0x0EE8, hero+0x0EEC */
+    /* NOT two pet ids. hero+0x0E88 is read only as a "!= 0" predicate (there is
+     * no second pet slot); hero+0x0EEC is a GetTickCount() stamp written by the
+     * combatant-slot setter, all.c:42151 - I had it as a second pet id and
+     * Oracle4.ItemsPanelsVAs' VA audit caught it. The record keeps both, so the
+     * .her bytes stay right, but the names are what they are. */
+    /* The name is plural and the meaning is not: there is ONE pet. The plural is
+     * kept deliberately -- a rename to pet_id/pet_stamp still reads as two
+     * symmetric slots, which is the exact inference that produced the bug, so
+     * the comment carries the correction instead of a tidier spelling.
+     *   pet_ids[0] = the pet's live id, hero+0x0EE8. Read ONLY as "!= 0"
+     *                (all.c:42091, 71066) -- never compared against a monster id.
+     *   pet_ids[1] = NOT a pet id. It is a GetTickCount() stamp at hero+0x0EEC,
+     *                written by FUN_0043B8E7 at 0x42151 alongside the 0x6BC/0x71C
+     *                pair, and lazily re-stamped at all.c:42177-42180 when the
+     *                field is still zero. Read as a "!= 0" predicate at
+     *                all.c:42173 and 17257.
+     * It shares a life with the pet-out state only because FUN_0043B8E7 sets
+     * all three words in one go. 0x6BC/0x71C, for the avoidance of doubt, are
+     * NOT the pet and NOT the equipped right-hand item: they are the cheat-point
+     * counter and its negative mirror (FUN_0043B8E7 is called with 0x25 at
+     * 42170, and all.c:4867 pairs 0x6BC with the +0xA58 bit-2 flag I added).
+     * Index 1 exists only so the field count matches the record's two words. */
+    uint32_t pet_ids[2];
 } Hero;
 
 extern Hero g_hero;
+
+    /* The bag GEOMETRY is hero+0x0EE0 and is a raw obfuscated word,
+     * (w<<16 | h) ^ 0x1D43E217, NOT a decoded pair. A stored 0 is how the
+     * original records "no bag": FUN_004200CA memsets the whole 0x16CC record, so
+     * a fresh hero's +0x0EE0 is zero, and hero_record_encode writes it back as
+     * zero to keep the .her byte-identical. Seeding the field to the KEY instead
+     * would make a fresh hero's file differ from the original's, which is the one
+     * thing this format must not do -- so the decode side, not this side, is
+     * where "absent" is decided. Callers MUST test this before XOR-decoding:
+     * decoding a stored 0 yields w=0x1D43 (7491) and h=0xE217 (57879), and a
+     * 7491x57879 grid is a 433-million-iteration pack over a 128-slot array.
+     * items.c's trophy_bag_size() needs this guard; hero_dump's trophy_bag_size
+     * key already has it via the same test. */
+/* 1 while the hero has no trophy bag, i.e. the stored geometry word is 0. */
+int trophy_bag_absent(const Hero *hero);
+
 
 
 /* Initialise a new level-1 hero of class `klass` from g_world.classes (START_ABILITY, AUTO_MAX,
@@ -152,6 +238,10 @@ uint32_t hero_record_checksum(const uint8_t in[HERO_RECORD_SIZE], int mode);
  * stamp matches, 1 on a different-world-version stamp and 2 on the
  * never-camped case (a stored 0) - the two wordings the original distinguishes. */
 int  hero_world_crc_check(int avoid, int *mismatch);
+/* Set or clear one bit of Hero.flags (hero+0x0A58). Callers mask with
+ * hero_flag(); the word is exposed whole rather than pre-selected. */
+void hero_set_flag(Hero *hero, unsigned bit, int on);
+int  hero_flag(const Hero *hero, unsigned bit);
 
 /* --- the personal BIO (FUN_00452107 / FUN_00438C05) -----------------------
  * Two files per soul, both under the port's save root in a "bio" directory, the
@@ -202,6 +292,45 @@ int hero_add_death(Hero *hero);
  * hex, the comparison unit) plus the decoded fields, all lowercase decimal
  * with no units, and hero.abil.<str|wis|sta|agi|dex>. Does not allocate. */
 void hero_dump(DumpEmit emit, void *user);
+/* Allocate slot 0 at startup the way FUN_00427D89 does. */
+void hero_allocate_slot(int serial);
+
+/* A read-only view of the hero's walk leg, for mapview.c. No arguments: it
+ * reads the hero's own state, exactly as the original reads the record. */
+typedef struct {
+    int x, y;                /* live position, map units */
+    int target_x, target_y;  /* the walk destination */
+    int speed;
+    uint32_t start_tick;
+    int duration;
+    int facing;              /* the port's NATIVE encoding, fy*4+fx with the 5->9 remap */
+} WalkLeg;
+const WalkLeg *hero_walk_leg(const Hero *hero);
+/* Map units for a reader that wants them. Hero.x/Hero.y are 24.8 fixed and these
+ * reproduce the ORIGINAL's conversion, which is NOT a plain shift: the decomp
+ * uses `(x + (x >> 31 & 0xFF)) >> 8` at seven sites (all.c:23512, 23513,
+ * 70882, 70885, 70971, 70972, 72525, 72527), i.e. MSVC's round toward zero for
+ * a signed divide by 256. A plain `>> 8` floors, which is one map unit out for
+ * every negative coordinate - and the walk produces negative y routinely. */
+int  hero_x_units(const Hero *hero);
+int  hero_y_units(const Hero *hero);
+void hero_set_x_units(Hero *hero, int units);
+void hero_set_y_units(Hero *hero, int units);
+/* The facing codec, so there is one implementation of the 0x46230E remap. */
+int  hero_facing_encode(int fx, int fy);
+void hero_facing_decode(int facing, int *fx, int *fy);
+
+/* The hero table's random offset, NOT a seed. FUN_004269AF at 0x426B21 draws
+ * rand() (draw 1409, after the 352 EncInt constructions) and reduces it at
+ * 0x426B27..0x426B36 to
+ *      (rand() % 0x4000) & ~15        -- 0..0x3FF0, always a multiple of 16
+ * which is stored to DAT_004E4870 at 0x426B94 and added into the hero table
+ * base at 0x426B9A. Core owns the RNG and the boot ordering, so Core records
+ * the consumed value here and hero_dump reports it; returning the seed would
+ * mismatch on every run and look like an RNG divergence rather than a modelling
+ * error. 0 until Core sets it. */
+uint32_t hero_base_offset(void);
+void    hero_set_base_offset(uint32_t value);
 
 /* Max HP and MP for this hero's class at its current level, from the levels.txt
  * table (FUN_00483984's curve plus FUN_004207BD's AUTO_MAX handling). items.c

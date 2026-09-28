@@ -61,12 +61,50 @@ void battle_set_scene_event(BattleSceneEvent fn);
  * those sites. It is a no-op when no fight is running, which is what the original does offline:
  * FUN_0048AE32 returns NULL unless FUN_0041bd7b() is set. */
 void battle_hero_reseal_level(void);
-/* FUN_00414059's `param_1 == 1` arm, the RECALL (0x0041409F..0x00414156): every live
- * combatant that is a monster (rec[+4] == -1) and whose allegiance rec[0x114] is `allegiance`
- * prints "battle_recalled" and is dropped by FUN_0048E16E. It draws nothing. Emits
- * `battle_recalled slot=<n> monster=<id> owner=<id>` per combatant, then re-picks the target
- * and resolves the fight if nothing hostile is left. */
-void battle_recall(int allegiance);
+/* FUN_004A6B55, the cure, applied to combatant `slot`'s disease `n` (1..24 - the original's
+ * bound, `iVar4 > -0x19`). The three-way branch is the original's, not a blanket clear:
+ *   n >= 20, or n == 11  -> one step off, the counter clamped at 0
+ *   n in 2..8            -> the counter is zeroed outright
+ *   n == 1, 9, 10, 12..19 -> no effect at all, silently
+ * Returns 1 if the counter moved. Slots 20..24 are the stat debuffs, carried in ability_shift[],
+ * which is where the original's rec[0x398 + 4n] lands for them too. */
+int battle_cure(int slot, int n);
+
+/* FUN_00414059's `param_1 == 0` arm, the AUTHORED-STAT SPAWNER, exported for the pet pen
+ * (FUN_004142F2 -> 0x00414837) and used by the summon effects (FUN_004A6E58 -> 0x004A70B4).
+ * Every field below is one of FUN_00414059's parameters - the comment on each gives its
+ * number, and the numbers run 2,4,5,6,7,8,9,10,11,12..16 in the order the original writes
+ * them, not in the order declared here. The monster_id is param_3, the id FUN_00480499
+ * builds the slot from, so it must be a live monsters.txt row.
+ *
+ * Spends exactly what the original spends: the ordinary spawn (FUN_00491E45's four seals at
+ * 0x00491F35..59 plus FUN_00480499's five at 0x00480593..604), then this arm's five seals at
+ * 0x00414195/1AC/1C3/1D1/1E8, then one rand()%32 at 0x00414273, then FUN_00491BB7's two
+ * seals at 0x00491D2E/0x00491D4E. Returns the new combatant's slot, or -1 if it was
+ * refused - which is FUN_00414059's own return value, the number FUN_004142F2 propagates. */
+typedef struct {
+    int monster_id;   /* param_3 */
+    int allegiance;   /* param_2: rec[0x114]; 0 = the caster's own side */
+    int level;        /* param_4 */
+    int hp;           /* param_5 */
+    int max_hp;       /* param_6, rec[0x2A8], plain */
+    int mp;           /* param_7 */
+    int max_mp;       /* param_8, rec[0x2AC], plain */
+    int offense;      /* param_9 */
+    int defense;      /* param_10 */
+    int xp;           /* param_11, rec[0x2B4], plain */
+    int ability[5];   /* param_12..16 -> rec[0x10B], [0x10C], [0x10D], [0x10E], [0x10F] */
+} BattleSpawn;
+int battle_spawn_authored(const BattleSpawn *s);
+
+/* FUN_00414059's `param_1 == 1` arm, the RECALL (0x0041409F..0x00414156). The argument is NOT
+ * param_1 and NOT a slot: it is `allegiance`, the value the original compares against the
+ * combatant's rec[0x114]. Every live combatant that is a monster (rec[+4] == -1) with that
+ * allegiance prints `battle_recalled slot=<n> monster=<id> owner=<id>` and is dropped by
+ * FUN_0048E16E. It draws nothing - all five of FUN_00414059's seals are on the spawner arm.
+ * Returns the index of the LAST combatant it dropped, or -1 if it dropped none, which is the
+ * original's `local_8` and exactly what FUN_004142F2 hands to FUN_004306F6(0x41, 4, ...). */
+int battle_recall(int allegiance);
 
 /* Draw the fight (combatants, effects, damage numbers) into the scene view rect, which maps the
  * 360x256 logical scene space. */

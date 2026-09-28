@@ -1,26 +1,35 @@
 # tools/oracle/hero_mask.txt -- byte ranges of the 0x16CC-byte hero record that are
-# masked out of the `hero.hex.*` comparison in tests/diff_oracle.sh.
+# masked out of the `hero.record` comparison in tests/diff_oracle.sh.
 #
 # Format: <first> <last> <reason>      (hex, inclusive, offsets into the record)
 # Empty lines and lines starting with '#' are ignored.
 #
+# THE RULE FOR ADDING AN ENTRY. A range goes in here only if the ORIGINAL tells us the
+# bytes are not part of the saved hero, and the reason cites the code that says so. Two
+# kinds of evidence qualify, and nothing else does:
+#
+#   (a) FUN_004181A2 (0x4181A2), the record loader, zeroes the field on every load --
+#       verified by disassembly, not by the decomp: the six `mov %eax,off(%esi)` with
+#       %eax already zeroed are at 0x4182D2, 0x4182D5, 0x4182DB, 0x4182DE, 0x4182E1
+#       and 0x4182E7, writing +0x0C, +0xCC, +0x5C, +0x58, +0x6C0 and +0x978. A field
+#       the loader discards cannot be a difference between the two sides.
+#   (b) FrontHero-2's decode of the field, where the field is a live pointer or a
+#       wall-clock derived value rather than saved state.
+#
+# Anything NOT listed here is compared byte for byte, and a difference is a real
+# difference. The previous version of this file carried an entry reading
+# `06AC 0C6B RAM-only flag blobs 4x0x1000 scratch flag blocks` whose range contradicted
+# its own reason twice over: 0x6AC..0xC6B is not 0x6AC + 4 x 4 KiB, and 4 KiB past 0x6AC
+# runs past the end of a 0x16CC record. Masking on a guess is worse than not masking,
+# because it hides real divergence behind a range nobody can justify. It is gone.
+#
 # The named hero.* keys (hero.hp, hero.level, ...) are ALWAYS compared unmasked; this
-# file only relaxes the raw hex, where a single RAM pointer or wall-clock field would
-# otherwise swamp the diff.  Every entry below is a field the original itself treats as
-# RAM-only or as derived from the wall clock.
+# file only relaxes the raw record.
 
-000C 000F account_id           RAM-only mirror, re-derived on load (0x4181A2)
-0058 0067 pet CWnd* + aux      live pet window pointer (0x416A3F, 0x4181A2)
-0068 006B must be 0 in a file  rejected on load if non-zero (0x4181A2)
-006C 006F must be 0 in a file  rejected on load if non-zero (0x4181A2)
-00CC 00CF owning-hero pointer  "recalled from" back reference (0x416A3F)
-0698 069B must be 0 in a file  rejected on load if non-zero (0x4181A2)
-06C0 06C3 must be 0 in a file  rejected on load if non-zero (0x4181A2)
-06C8 06CB must be 0 in a file  rejected on load if non-zero (0x4181A2)
-075C 075F must be 0 in a file  rejected on load if non-zero (0x4181A2)
-0974 0977 RAM-only             cleared on load (0x4181A2)
-06AC 0C6B RAM-only flag blobs  4x0x1000 scratch flag blocks (0x6AC..0x6C3 + 4KiB each)
-0978 097B RAM-only             cleared on load (0x4181A2)
-0EEC 0EFC pet ids / fatigue    live pet ids and the FAT/energy field (0x0EFC, 0x0F00)
-0F00 0F03 FAT from seconds     derived from a wall-clock delta
-0FBC 0FBF level FAT mirror     derived from a wall-clock delta
+# --- (a) zeroed by the loader, FUN_004181A2 at 0x4181A2, the six stores above -----
+000C 000F account id         zeroed on every load, 0x4182D2
+0058 005B pet window         zeroed on every load, 0x4182DE
+005C 005F pet aux            zeroed on every load, 0x4182DB
+00CC 00CF owning-hero backref zeroed on every load, 0x4182D5
+06C0 06C3 live scratch       zeroed on every load, 0x4182E1
+0978 097B live scratch       zeroed on every load, 0x4182E7

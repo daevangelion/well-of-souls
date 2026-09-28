@@ -10,6 +10,7 @@
  * the game's image loader; see docs/architecture_port.md "Deliberate deviations".
  * Owner: html.c. */
 #include "html.h"
+#include "options.h"
 #include "world.h"
 #include "../engine/font.h"
 #include "../engine/log.h"
@@ -326,12 +327,16 @@ void html_free(void)
     memset(&html, 0, sizeof html);
 }
 
+/* FUN_0045BC8D (VA 0x45bc8d) is the "we are back in the game" hook: option 23, "Stop all web page
+ * stuff on return to game.", decides whether the loaded page is torn down (FUN_0045BA34 ->
+ * FUN_00455184 -> FUN_00453D89 once the browser's current-page string at +0x2C0 is non-empty).
+ * With the option off the page stays loaded, exactly as the browser control keeps it. */
 void html_close(void)
 {
     if (!html.open) return;
-    wos_log_event("html_close", "url=%s", html.url);
+    wos_log_event("html_close", "url=%s stop=%d", html.url, options_get(HTML_OPTION_STOP_ON_RETURN));
     html.open = 0;
-    html_free();
+    if (options_get(HTML_OPTION_STOP_ON_RETURN)) html_free();
 }
 
 static int dir_of(const char *path, char *out, size_t cap)
@@ -367,6 +372,12 @@ int html_open(const char *arg)
     char path[HTML_PATH_MAX], display[HTML_URL_MAX];
     size_t n;
     if (!arg || !*arg) return 0;
+    /* FUN_00467312(0x16), VA 0x48a6e4: preference option 22, "Show HTML pages in scenes, when
+     * scripted." Zero means the opcode does nothing at all and the script just advances. */
+    if (!options_get(HTML_OPTION_SHOW_IN_SCENES)) {
+        wos_log_event("html_disabled", "arg=%s option=%d", arg, HTML_OPTION_SHOW_IN_SCENES);
+        return 0;
+    }
     html_close();
     if (!strncmp(arg, "http://", 7)) {
         /* The original hands an http:// target straight to the browser without checking that
@@ -390,6 +401,14 @@ int html_open(const char *arg)
     n = strlen(path);
     if (n + strlen(arg) + 2 >= sizeof path) return 0;
     snprintf(path + n, sizeof path - n, "/%s", arg);
+    /* With option 23 off the page stays loaded after a close, so re-entering it is instant. */
+    if (html.text && !strcmp(html.url, display)) {
+        html.scroll = 0;
+        html.open = 1;
+        wos_log_event("html_open", "url=%s retained=1", html.url);
+        return 1;
+    }
+    html_free();
     if (!load_page(path, display)) {
         wos_log_event("html_missing", "url=%s", display);
         return 0;
@@ -419,10 +438,9 @@ static void follow(const char *href)
     if (!file) { wos_log_event("html_link", "href=%s ok=0", href); return; }
     fclose(file);
     wos_log_event("html_link", "href=%s ok=1", href);
-    html_close();
     /* The browser control shows the resolved absolute URL, which is "file:///" + the path. */
     snprintf(display, sizeof display, "file:///%s", path[0] == '/' ? path + 1 : path);
-    html_close();
+    html_free();
     (void)load_page(path, display);
 }
 

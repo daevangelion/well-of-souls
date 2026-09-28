@@ -157,9 +157,21 @@ enum {
     R_MAXMP      = 0x007C, /*                                             0x42B7F8  */
     R_ATTACK     = 0x0084, /* sum of worn +0xa0, mirror -0xA60            0x40C694  */
     R_DEFENCE    = 0x0080, /* sum of worn +0xa4, mirror -0xA64            0x40C694  */
+    R_FLAGS      = 0x0A58, /* the hero flag word the script tests as IF Mn:
+                             * FUN_004851F1 case 0x4D reads (hero[0xA58] & n) != 0
+                             * for n > 0. Bit 2 is the "Modified Quest File
+                             * Detected" flag set on the world-CRC mismatch path
+                             * (FUN_0044B196); bit 4 is set by FUN_004978D5 when
+                             * avoidModifiedQuestFiles is OFF. Mirrored negated
+                             * at +0xA5C, and the mirror is checked.            */
+    R_FLAGS_MIR  = 0x0A5C, /* -R_FLAGS, a tamper pair like the XP and PP ones  */
     R_FACING     = 0x0088, /* fy*4 + fx with a 5 -> 9 remap, 0x46230E       */
-    R_FIXED_X    = 0x0094, /* the walk target's x, 16.16 fixed               */
-    R_FIXED_Y    = 0x0098, /* the walk target's y, 16.16 fixed               */
+    R_FIXED_X    = 0x0094, /* LIVE position x, 24.8 fixed; all.c:70730 does
+                             * FUN_004631C6(<<value>> >> 8, ...) on it, so the
+                             * shift is 8, not 16                                 */
+    R_FIXED_Y    = 0x0098, /* LIVE position y, 24.8 fixed, ditto              */
+    R_TARGET_X   = 0x009C, /* the walk destination x, 24.8 fixed, all.c:70613  */
+    R_TARGET_Y   = 0x00A0, /* the walk destination y, 24.8 fixed, all.c:70614  */
     R_SPEED      = 0x00AC, /* walk speed                                      */
     R_WALK_DUR   = 0x00B4, /* walk duration                                   */
     R_MAP        = 0x0090, /* sent in msg 0x46A as the map number        0x420240  */
@@ -203,7 +215,8 @@ enum {
     R_TROPHY     = 0x0CE0, /* 128 raw words (FUN_0046F726)               */
     R_TROPHY_GEO = 0x0EE0,
     R_PET0       = 0x0EE8,
-    R_PET1       = 0x0EEC,
+    R_PET1       = 0x0EEC, /* NOT a second pet id: a GetTickCount stamp,
+                             * written at all.c:42151. There is one pet.  */
     R_CKSUM      = 0x16C8  /* the last four bytes of the file            */
 };
 /* Fields FUN_004181A2 clears after fread because they only ever hold a live
@@ -292,7 +305,7 @@ void hero_record_encode(uint8_t out[HERO_RECORD_SIZE])
     const Hero *h = &g_hero;
     int i;
     memset(out,0,HERO_RECORD_SIZE);
-    put32(out+R_INUSE,(uint32_t)(h->valid?1:0));
+    put32(out+R_INUSE,(uint32_t)(h->slot_in_use?1:0));
     put32(out+R_SERIAL,(uint32_t)h->serial);
     memcpy(out+R_NAME,h->name,HERO_NAME_MAX);
     out[R_NAME+HERO_NAME_MAX]=0;
@@ -315,16 +328,21 @@ void hero_record_encode(uint8_t out[HERO_RECORD_SIZE])
     put32(out+R_DEFENCE,(uint32_t)hero_defense(h));
     put32(out+0x0A64,(uint32_t)(0u-(uint32_t)hero_defense(h)));
     put32(out+R_MAP,(uint32_t)h->map);
-    /* The hero's walk state IS in the record after all, which closes the gap
-     * I had reported as "x and y are not in the hero record": Oracle4's
-     * map.* audit found the 44-entry actor array's record 0 -- base pointer
-     * DAT_0067FBF8, the hero table -- carries the walk target at +0x94/+0x98
-     * in 16.16 fixed point, with the facing at +0x88, the speed at +0xAC and
-     * the walk duration at +0xB4. The port models only a position, so it
-     * persists that and leaves the rest zero, which is what a hero that has
-     * never walked records. */
-    put32(out+R_FIXED_X,(uint32_t)(h->x << 16));
-    put32(out+R_FIXED_Y,(uint32_t)(h->y << 16));
+    /* The hero's walk state IS in the record, which closes the gap I had
+     * reported as "x and y are not in the hero record": Oracle4's map.* audit
+     * found it in record 0 of the 44-entry actor array whose base pointer is
+     * the global at 0x0067FBF8, the hero table. All six words are written raw,
+     * in the original's own 24.8 fixed point, because a save made mid-walk
+     * carries the fractional bits. */
+    put32(out+R_FIXED_X,(uint32_t)h->x);
+    put32(out+R_FIXED_Y,(uint32_t)h->y);
+    put32(out+R_TARGET_X,(uint32_t)h->target_x);
+    put32(out+R_TARGET_Y,(uint32_t)h->target_y);
+    put32(out+R_SPEED,(uint32_t)h->walk_speed);
+    put32(out+R_WALK_DUR,(uint32_t)h->walk_duration);
+    put32(out+R_FACING,(uint32_t)h->facing);
+    put32(out+R_FLAGS,(uint32_t)h->flags);
+    put32(out+R_FLAGS_MIR,(uint32_t)(0u-(uint32_t)h->flags));
     for (i=0;i<8;++i) put32(out+R_EQUIP+4*i,(uint32_t)h->equip[i]);
     put32(out+R_HANDITEM,(uint32_t)h->right_hand);
     for (i=0;i<768;++i) bit_set(out+R_SPELLS,i,h->learned_spells[i]?1:0);
@@ -377,6 +395,9 @@ int hero_record_decode(const uint8_t in[HERO_RECORD_SIZE], Hero *out)
     mode = get32s(in+R_CKSUM_MODE);
     if (hero_record_checksum(in,mode)!=get32(in+R_CKSUM)) return -1;
     if (get32s(in+R_XP)+get32s(in+R_XP_MIRROR)!=0) return -1;
+    /* The same mirror discipline applies to the flag word, and the original
+     * checks it (all.c:16485). */
+    if (get32s(in+R_FLAGS)+get32s(in+R_FLAGS_MIR)!=0) return -1;
     if (get32s(in+R_PP)+get32s(in+R_PP_MIRROR)!=0) return -1;
     memset(&v,0,sizeof(v));
     v.serial = get32s(in+R_SERIAL);
@@ -389,8 +410,14 @@ int hero_record_decode(const uint8_t in[HERO_RECORD_SIZE], Hero *out)
     v.hp = get32s(in+R_HP); v.max_hp = get32s(in+R_MAXHP);
     v.mp = get32s(in+R_MP); v.max_mp = get32s(in+R_MAXMP);
     v.map  = get32s(in+R_MAP);
-    v.x = get32s(in+R_FIXED_X) >> 16;
-    v.y = get32s(in+R_FIXED_Y) >> 16;
+    v.x = get32s(in+R_FIXED_X);
+    v.y = get32s(in+R_FIXED_Y);
+    v.target_x = get32s(in+R_TARGET_X);
+    v.target_y = get32s(in+R_TARGET_Y);
+    v.walk_speed = get32s(in+R_SPEED);
+    v.walk_duration = get32s(in+R_WALK_DUR);
+    v.facing = get32s(in+R_FACING);
+    v.flags = get32s(in+R_FLAGS);
     v.link = get32s(in+R_LINK);
     v.pp   = get32s(in+R_PP);
     v.kills  = get32s(in+R_KILLS);
@@ -1038,10 +1065,14 @@ void hero_dump(DumpEmit emit, void *user)
     }
     hex[HERO_RECORD_SIZE*2]=0;
     emit("hero.record",hex,user);
-    if (!h->valid) { emit("hero.valid","0",user); return; }
-    emit("hero.valid","1",user);
+    /* The original has a slot allocated from startup, so the named keys are
+     * emitted whenever the slot exists, not only when a soul is loaded: at the
+     * title screen FUN_00427D89 has already set in_use=1 and the serial, with
+     * every other field still zero. Emitting hero.valid=0 and nothing else
+     * there was a port-only shape the original never has. */
+    emit("hero.valid",h->valid?"1":"0",user);
+    dump_emit_int(emit,"hero.in_use",h->slot_in_use?1:0,user);
     emit("hero.name",h->name,user);
-    dump_emit_int(emit,"hero.in_use",h->valid,user);
     dump_emit_int(emit,"hero.serial",h->serial,user);
     dump_emit_int(emit,"hero.class",h->klass,user);
     dump_emit_int(emit,"hero.level",h->level,user);
@@ -1061,6 +1092,7 @@ void hero_dump(DumpEmit emit, void *user)
     dump_emit_int(emit,"hero.deaths",h->deaths,user);
     dump_emit_int(emit,"hero.incarnations",h->incarnations,user);
     dump_emit_int(emit,"hero.hunting",h->hunting,user);
+    dump_emit_int(emit,"hero.base_offset",(long long)hero_base_offset(),user);
     for (i=0;i<HERO_ABILITIES;++i) {
         static char key[32];
         snprintf(key,sizeof(key),"hero.abil.%s",abil_name[i]);
@@ -1078,11 +1110,12 @@ void hero_dump(DumpEmit emit, void *user)
     }
     if (!n) snprintf(bag,sizeof(bag),"0");
     emit("hero.trophy_bag",bag,user);
-    { uint32_t g = h->trophy_bag_geo ^ UINT32_C(0x1D43E217);
-      snprintf(hex,sizeof(hex),"%ux%u",(unsigned)(g>>16),(unsigned)(g&0xFFFF));
-      emit("hero.trophy_bag_size",hex,user); }
-    snprintf(hex,sizeof(hex),"%u,%u",(unsigned)h->pet_ids[0],(unsigned)h->pet_ids[1]);
-    emit("hero.pet_ids",hex,user);
+    if (trophy_bag_absent(h)) snprintf(hex,sizeof(hex),"0x0");
+    else { uint32_t g = h->trophy_bag_geo ^ UINT32_C(0x1D43E217);
+           snprintf(hex,sizeof(hex),"%ux%u",(unsigned)(g>>16),(unsigned)(g&0xFFFF)); }
+    emit("hero.trophy_bag_size",hex,user);
+    snprintf(hex,sizeof(hex),"%u",(unsigned)h->pet_ids[0]);
+    emit("hero.pet_id",hex,user);
 }
 
 /* --------------------------------------------------- the personal BIO ----
@@ -1200,4 +1233,89 @@ int hero_world_crc_check(int avoid, int *mismatch)
     if (stored == g_world.crc1) return 1;
     if (mismatch) *mismatch = stored ? 1 : 2;
     return !avoid;
+}
+
+/* FUN_0046230E, 0x46230E (all.c:70725-70728): the facing is fy*4 + fx, and the
+ * value 5 is remapped to 9 before packing, so the nine legal packings are not
+ * contiguous. The port stores this encoding NATIVELY -- a raw-word diff against
+ * the original's record then compares like with like, instead of reporting a
+ * false mismatch on every facing change, which is the failure mode that hides
+ * a real one. */
+int hero_facing_encode(int fx, int fy)
+{
+    int v = fy*4 + fx;
+    if (v == 5) return 9;
+    if (v == 9) return 5;   /* the remap is its own inverse, so decode round-trips */
+    return v;
+}
+void hero_facing_decode(int facing, int *fx, int *fy)
+{
+    int v = facing;
+    if (v == 5) v = 9; else if (v == 9) v = 5;
+    if (fx) *fx = v & 3;
+    if (fy) *fy = v >> 2;
+}
+
+/* Set by Core at the point in the boot sequence where FUN_004269AF consumes
+ * draw 1409. See hero.h for why this is not the seed. */
+static uint32_t base_offset_value;
+uint32_t hero_base_offset(void) { return base_offset_value; }
+void hero_set_base_offset(uint32_t value) { base_offset_value = value; }
+
+/* The hero flag word, hero+0xA58. Bit 2 is the script's IF M2 condition - the
+ * "Modified Quest File Detected" flag, which FUN_004142F2's pet-call gate reads
+ * as `(*(byte *)(hero + 0xA58) & 2) != 0`. The whole word is exposed so a
+ * caller can mask any bit rather than being handed a pre-selected one. */
+int hero_flag(const Hero *hero, unsigned bit)
+{ return hero ? ((hero->flags >> (bit & 31u)) & 1u) : 0; }
+
+/* Set or clear a flag bit. front.c owns the policy: it calls this when
+ * hero_world_crc_check() reports a genuine mismatch (bit 2), which is the only
+ * place the original sets it, and when avoidModifiedQuestFiles is off
+ * (bit 4, FUN_004978D5). It is STORED in the record and round-trips, rather than
+ * recomputed on read, because the original stores it -- but it is derived from
+ * the world-CRC comparison, so a caller holding the two crc fields may equally
+ * compute it rather than call this. */
+void hero_set_flag(Hero *hero, unsigned bit, int on)
+{
+    if (!hero) return;
+    if (on) hero->flags |= (uint32_t)1u << (bit & 31u);
+    else   hero->flags &= ~((uint32_t)1u << (bit & 31u));
+}
+
+/* 24.8 -> map units, as the ORIGINAL does it. Seven sites use the same idiom,
+ * and it is not a plain shift:
+ *   all.c:23512  (int)(piVar4[0x25] + (piVar4[0x25] >> 0x1f & 0xffU)) >> 8
+ *   all.c:23513, 70882, 70885, 70971, 70972, 72525, 72527 -- the same
+ * `(x + (x >> 31 & 0xFF)) >> 8` is MSVC's round-toward-zero for a signed divide
+ * by 256: the +255 bias applies only when x is negative, then the arithmetic
+ * shift runs. A plain `x >> 8` FLOORS instead, so for any negative coordinate
+ * the two disagree by exactly one map unit. The walk produces negative y
+ * routinely, so this is not a corner case -- Oracle4.ItemsPanelsVAs caught it
+ * and it is a real defect in this helper, not in the record layout. */
+static int fixed24_8_to_units(int32_t v) { return (int)((v + (v >> 31 & 0xFF)) >> 8); }
+int hero_x_units(const Hero *hero) { return hero ? fixed24_8_to_units(hero->x) : 0; }
+int hero_y_units(const Hero *hero) { return hero ? fixed24_8_to_units(hero->y) : 0; }
+void hero_set_x_units(Hero *hero, int units) { if (hero) hero->x = (int32_t)units << 8; }
+void hero_set_y_units(Hero *hero, int units) { if (hero) hero->y = (int32_t)units << 8; }
+
+void hero_allocate_slot(int serial)
+{
+    g_hero.slot_in_use = 1;
+    g_hero.serial = serial;
+}
+
+int trophy_bag_absent(const Hero *hero) { return !hero || hero->trophy_bag_geo == 0; }
+
+const WalkLeg *hero_walk_leg(const Hero *hero)
+{
+    static WalkLeg leg;              /* one view; mapview.c reads it immediately */
+    if (!hero) return NULL;
+    leg.x = hero->x; leg.y = hero->y;
+    leg.target_x = hero->target_x; leg.target_y = hero->target_y;
+    leg.speed = hero->walk_speed;
+    leg.start_tick = hero->walk_start_tick;
+    leg.duration = hero->walk_duration;
+    leg.facing = hero->facing;
+    return &leg;
 }

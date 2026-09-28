@@ -324,11 +324,16 @@ static void pen_update(const Input *in)
     }
     if(n==0) return;
     if(in->pressed['u'] || in->pressed[PLAT_KEY_RETURN] || clicked(in,(Rect){8,384,120,24})) {
-        if(!pet_summon(panel.pen_selected)) message("No pet selected, or both pets are already out.");
-        else message("Pet called.");
+        /* FUN_004142F2: Call. 0 = call, the arm that sounds petCall.wav and starts
+         * the 200-second lead timer. */
+        if(panel.pen_selected!=0) { message("Call the first pet in the pen."); return; }
+        if(pet_trigger(PET_CALL)<0) message(items_last_message());
+        else message(items_last_message()[0]?items_last_message():"Pet called.");
     } else if(in->pressed['d'] || clicked(in,(Rect){136,384,120,24})) {
-        if(!pet_dismiss(panel.pen_selected)) message("No pet selected.");
-        else message("Pet put away.");
+        /* FUN_004142F2: Recall, the arm that drops the pet out of the fight. */
+        if(panel.pen_selected!=0) { message("Recall the first pet in the pen."); return; }
+        if(pet_trigger(PET_RECALL)<0) message("Your pet is not in battle.");
+        else message("Pet recalled.");
     } else if(in->pressed['x'] || clicked(in,(Rect){264,384,92,24})) {
         if(!pet_release(panel.pen_selected)) message("No pet selected.");
         else message("Pet released back to the wild.");
@@ -357,8 +362,8 @@ static void pen_render(Framebuffer *fb)
     }
     snprintf(text,sizeof text,"Pets out: %d, %d",(int)g_hero.pet_ids[0],(int)g_hero.pet_ids[1]);
     font_draw(fb,20,352,text,0xd7caac);
-    button(fb,(Rect){8,384,120,24},"U: Call",0);
-    button(fb,(Rect){136,384,120,24},"D: Put away",0);
+    button(fb,(Rect){8,384,120,24},"U: Call pet",0);
+    button(fb,(Rect){136,384,120,24},"D: Recall",0);
     button(fb,(Rect){264,384,92,24},"X: Release",0);
 }
 void panel_update(const Input *in)

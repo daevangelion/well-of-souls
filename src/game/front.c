@@ -35,6 +35,7 @@
 #include "../engine/text.h"
 #include "../engine/ini.h"
 #include "../engine/log.h"
+#include "../engine/dump.h"
 #include "../engine/rng.h"
 #include "../platform/platform.h"
 #include <stdlib.h>
@@ -278,12 +279,24 @@ static void art_title(void)
  * modulo of rand() by the table size, index 0 skipped unless the serial check
  * says otherwise. DAT_004E6910 == 0 is the solo channel, so index 0 is never
  * taken. */
+/* The label strings are the ORIGINAL'S BYTES, read out of .data rather than
+ * transcribed from Ghidra's symbol names, which mangle punctuation into `_` and
+ * cannot distinguish a space from a hyphen:
+ *   0x4E1FE8  "Check On-Line for New Worlds"   (0x2d is a hyphen, not a space)
+ *   0x4E1FD0  "Play now (it's free!)."        (parenthesised, trailing period)
+ *   0x4E1FB8  "Play now, Golden Soul!"         (comma, no parentheses)
+ *   0x4E1F98  "Read the attractive help file."
+ *   0x4E1F7B  "Visit synthetic-reality.com."
+ *   0x4E1F63  "Depart this realm."
+ *   0x4E2008  "Where Do You Want To Play Today?"
+ *   0x4E21CC  "Choose Your World..."
+ *   0x4E20D0  "... or Create Your Own World..."
+ * Oracle4 read these as live heap strings at record+0x14 and its dump was right;
+ * the decomp symbol names were not evidence against it. */
 static const char *golden_soul_string(void)
 {
     static const char *const table[] = {
-        "Thank you, Golden Soul!",
-        "You are a valued subscriber.",
-        "Thank you for your support."
+        "Thank you, Golden Soul!"
     };
     int n = (int)(sizeof(table)/sizeof(table[0]));
     int i = crt_rand() % n;
@@ -296,12 +309,12 @@ static void art_menu(void)
     art_background("beg.jpg");
     /* FUN_0041D155, all.c:22028. Flags 0xE00: clickable, no centring, so the
      * per-mille anchor is the text's top-left corner. */
-    spot_add(0,0xe00, 750,"Check On Line for New Worlds",0x00ff00,500,1062,125,500, 62,125,MSG_ONLINE,0);
-    spot_add(0,0xe00,1000,"Play now, it's free!",           0x00ff00,500,1124,250,500,124,250,MSG_PLAY_NOW,0);
+    spot_add(0,0xe00, 750,"Check On-Line for New Worlds",0x00ff00,500,1062,125,500, 62,125,MSG_ONLINE,0);
+    spot_add(0,0xe00,1000,"Play now (it's free!).",         0x00ff00,500,1124,250,500,124,250,MSG_PLAY_NOW,0);
     spot_add(0,0xe00,1250,golden_soul_string(),             0x00ff00,500,1186,375,500,186,375,MSG_GOLDEN,0);
-    spot_add(0,0xe00,1500,"Read the attractive help file",  0x00ff00,500,1248,500,500,248,500,MSG_HELP,0);
-    spot_add(0,0xe00,1750,"Visit synthetic-reality.com",    0x00ff00,500,1310,625,500,310,625,MSG_WEBSITE,0);
-    spot_add(0,0xe00,2000,"Depart this realm",              0x00ff00,500,1372,750,500,372,750,MSG_DEPART,0);
+    spot_add(0,0xe00,1500,"Read the attractive help file.", 0x00ff00,500,1248,500,500,248,500,MSG_HELP,0);
+    spot_add(0,0xe00,1750,"Visit synthetic-reality.com.",  0x00ff00,500,1310,625,500,310,625,MSG_WEBSITE,0);
+    spot_add(0,0xe00,2000,"Depart this realm.",            0x00ff00,500,1372,750,500,372,750,MSG_DEPART,0);
     /* State 1 also plays tos.rtf (FUN_00402A73, all.c:21092) and, when the
      * reader refuses it, posts 0x46E and WM_CLOSE. */
     plat_open_external("tos.rtf");
@@ -325,7 +338,7 @@ static void art_where(void)
 static void art_choose(void)
 {
     art_background("chapter.jpg");
-    spot_add(0,0x200, 750,"Choose Your World",0x00ffff,500, 62,125,500, 62,125,0,0);
+    spot_add(0,0x200, 750,"Choose Your World...",0x00ffff,500, 62,125,500, 62,125,0,0);
     /* FUN_0041D3CC, all.c:22112. Layer 1, flags 0x600 (clickable, no
      * centring). fontSize = h*2/w, x = 2*((w+7)>>3) for every row, and the
      * row's y comes from the per-row lerp that starts at h/20 + (h+3)/4. */
@@ -361,7 +374,7 @@ static void art_choose(void)
     spot_add(1,0x620, 250,"Edits",0x00ff00,500,20,10,500,20,10, MSG_BIO,0);
     /* DAT_004E6910 == 0 is the solo channel, so the link reads
      * "--- or Create Your Own World ---" and hands over to the world editor. */
-    spot_add(1,0x620, 750,"--- or Create Your Own World ---",0x00ff00,500,1000,875,500,875,875,
+    spot_add(1,0x620, 750,"... or Create Your Own World...",0x00ff00,500,1000,875,500,875,875,
              MSG_CREATE_WORLD,0);
 }
 
@@ -469,7 +482,10 @@ void game_go_well(void)  { front_goto(FRONT_WELL); }
 /* FUN_004978D5(hero,1), the recharge the Incarnate handler performs. */
 static void hero_recharge(void)
 {
-    g_hero.hp=g_hero.max_hp; g_hero.mp=g_hero.max_mp; g_hero.ailments=0;
+    /* FUN_004978D5(hero,1) recharges the hero. It cannot clear disease, because
+     * there is no hero-side disease state to clear: the counters live in the
+     * combatant record and are zeroed per fight (FUN_00491E45). */
+    g_hero.hp=g_hero.max_hp; g_hero.mp=g_hero.max_mp;
 }
 
 /* FUN_00420240, all.c:24052: time() into 0x1BE*4/0x2AA*4, the save, the
@@ -1016,11 +1032,56 @@ static void front_screen_update(const Input *in)
     front_update(in);
 }
 
+/* The front end's own state, for the differential dump. The original keeps it in
+ * the 100-slot hotspot table at DAT_005339F8, 0xBC bytes per record, and
+ * FUN_00405765 hit-tests clicks directly against it -- so the table IS the front
+ * end's state, and front.c's `spots[]` is the same array. front.client is not
+ * decoration: the rects are laid out against the client size on entry and then
+ * ANIMATED, so a rect can describe a client area that no longer exists, and that
+ * is the key that tells a mid-slide rect from a settled one. */
+void front_dump(DumpEmit emit, void *user)
+{
+    int i, live = 0;
+    char key[64];
+    spot_advance();
+    spot_layout();
+    for (i = 0; i < HOTSPOT_SLOTS; ++i)
+        if (spots[i].state >= 1 && spots[i].state <= 2 && (spots[i].rect.w || spots[i].rect.h))
+            ++live;
+    dump_emit_int(emit,"front.hotspot_count",live,user);
+    dump_emit_int(emit,"front.client_w",PLAT_SCREEN_W,user);
+    dump_emit_int(emit,"front.client_h",PLAT_SCREEN_H,user);
+    for (i = 0; i < HOTSPOT_SLOTS; ++i) {
+        const Hotspot *sp = &spots[i];
+        if (sp->state < 1 || sp->state > 2) continue;
+        if (!sp->rect.w && !sp->rect.h) continue;
+        snprintf(key,sizeof(key),"front.hotspot.%d.state",i);
+        dump_emit_int(emit,key,sp->state,user);
+        snprintf(key,sizeof(key),"front.hotspot.%d.clickable",i);
+        dump_emit_int(emit,key,(sp->flags & 0x400)?1:0,user);
+        snprintf(key,sizeof(key),"front.hotspot.%d.msg",i);
+        dump_emit_int(emit,key,sp->msg,user);
+        snprintf(key,sizeof(key),"front.hotspot.%d.target",i);
+        dump_emit_int(emit,key,sp->lparam,user);
+        snprintf(key,sizeof(key),"front.hotspot.%d.rect",i);
+        snprintf(message,sizeof(message),"%d,%d,%d,%d",
+                 sp->rect.x, sp->rect.y,
+                 sp->rect.x + sp->rect.w, sp->rect.y + sp->rect.h);
+        emit(key,message,user);
+        snprintf(key,sizeof(key),"front.hotspot.%d.label",i);
+        emit(key,sp->text,user);
+    }
+}
+
 static void front_leave(void) { plat_text_input(0); }
 static const Screen front_screen={"front",NULL,front_screen_update,front_render,front_leave};
 
 int game_boot(void)
 {
+    /* FUN_00427D89 runs during InitInstance and allocates slot 0 with the local
+     * serial before any soul exists, so the port's very first .her-shaped record
+     * must already read in_use=1 with everything else zero. */
+    hero_allocate_slot(1);
     front_new_soul_pk=0;
     world_first=0; world_anim=1;
     front_enter_title();

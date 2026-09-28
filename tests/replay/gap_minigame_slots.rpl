@@ -1,38 +1,31 @@
 # seed: 1
 # requires: hero_ready scene_enter minigame_arm minigame_open minigame_slots_spin minigame_slots_result
-# GAME 1 (Slobber Slots), the Evergreen casino.
+# GAME 1 (Slobber Slots) at the Evergreen casino.
 #
-# NOTE on the scene number. docs/gap_analysis.md section 12 says "Retail Evergreen scene 4 (the
-# casino) uses `GAME 1`". That is WRONG. I grepped the retail quest data: the only real
-# `GAME` opcodes in Evergreen are `GAME 1`, and they all live in
-# extracted/worlds/Evergreen/QuestScenes1000.txt. The casino is:
-#
-#     SCENE 1005  aztec          (QuestScenes1000.txt:93)
-#         THEME 0
-#         ACTOR 1, "Barker", joshRoyalty, 2, 5, 90
-#         SEL 1 / MOVE 1, 15, 80
-#         GAME 1                 <- QuestScenes1000.txt:99
-#         ' Try your luck!
-#         ' Our slots pay the most!
+# WHERE THE CASINO IS, from the retail data and not from docs/gap_analysis.md (which says
+# "scene 4" - scene 4 is an unreachable template; docs/re/script.md section 8 is right
+# that the only real GAME opcodes live in the per-map scene files):
+#     SCENE 1005  aztec                       extracted/worlds/Evergreen/QuestScenes1000.txt:93
+#         THEME 0 / ACTOR 1 "Barker" / SEL 1 / MOVE 1,15,80
+#         GAME 1                              QuestScenes1000.txt:99
+#         ' Try your luck! / ' Our slots pay the most!
 #         END
+# Ten more identical casinos live in the same file, plus the SCENE 4 template at
+# quest.txt:1720. The one that is actually on a map is reached from map 2:
+#     map=2(castle1) link=3 x=264 y=267 kind=1 dest=0 target=1005 diff=1 theme=0 req=0 Casino
+# and map 2 is Macgyver Castle, entered from map 0 link 9 "Macgyver Castle" at (151,275),
+# which is 101 map units south-west of the Evergreen spawn at (179,202).
 #
-# There are ten such casino scenes in that file (lines 99, 213, 301, 393, 484, 578, 676, 780,
-# 882, 979) plus a "Generic Casino" template. Reaching one on foot needs the map walk that
-# gets a hero into the casino, which this headless script does not drive deterministically, so
-# what is proven here is the GAME opcode path itself: the button arms, the click opens the
-# dialog, the spin charges and settles.
-#
-# `GAME n` does not open anything: FUN_00478E04 (0x478E04) -> FUN_00478673 (0x478673) only
-# arms a scene button-bar button. Clicking that button is what opens the dialog via
-# FUN_00421563 (0x421563) -- RT_DIALOG 0xA7, 176x111, for game 1.
-#
-# The port draws the armed button at button_rect(7) = {640-51-51*7, 8, 48, 48} = {283,8,48,48},
-# so the click is its centre (306,31). The ORIGINAL registers the GAME button in slot 6
-# (FUN_00478E04 passes 6, and FUN_00478673's guard is `slot<0||slot>9`), i.e. {334,8,48,48},
-# centre (357,31). One-slot difference, flagged to SceneVM-2 and Main.
-#
-# SPIN is control id 0x447 at client rect (123,7,46,12) inside the 176x111 dialog, handled by
-# 0x466BBB: it charges 10 GP, consumes 6 rand() and starts the reels.
+# `GAME n` opens nothing by itself. scene.c's OP_GAME is a comment worth repeating: it
+# "does NOT block: FUN_00421529 arms the button, then pc++", so the opcode only arms a
+# scene button-bar slot; the click is what opens the dialog. The armed slot is 6, the
+# shared Shop/Equip/Game/Missions slot, at button_rect(6) = {640-51-51*6, 8, 48, 48} =
+# {283,8,48,48}, centre (307,32) - scene.c:1287-1293 dispatches it, preferring
+# missions, then the minigame, then the Equip panel.
+# The slots window is RT_DIALOG 0xA7, 176x111, and scene.c:1536 renders it at (0,0), so
+# the client rect of SPIN (control 0x447, DLU x=123 y=7 cx=46 cy=12) is the screen rect
+# (123,7,46,12) and its centre is (146,13). The spin charges 10 GP (0x466BC6 refuses
+# under 10) and settles by itself, which is what logs minigame_slots_result.
 expect boot_menu 900
 key RETURN
 wait 30
@@ -44,10 +37,32 @@ key n
 wait 5
 text Gambler
 key RETURN
-expect hero_ready 400
-expect map_enter 800
-keydown DOWN
-wait 40
-keyup DOWN
-expect scene_enter 400
+expect hero_ready 300
+expect map_enter 600
+# The 101-unit walk, in three click legs inside the 82x71 map-unit view pane
+# (19,0 325x281, four map units per screen pixel, hero hard-centred):
+#   (179,202) -> (138,235) -> (151,270) -> (151,275) = map 0 link 9.
+click 19 272
+expect hero_move 900
+click 235 280
+expect hero_move 900
+click 183 160
+expect hero_move 900
+expect map_enter 2000
+# Map 2: the hero lands above map 2 link 0 "Main Gate" (158,333). The Casino link 3 is
+# at (264,267); two legs east along y=267.
+click 343 280
+expect hero_move 1200
+click 183 100
+expect scene_enter 1200
+shot /tmp/wos-gap-casino.bmp
+# The armed GAME button, then the window's own SPIN control.
+click 307 32
+expect minigame_open 600
+shot /tmp/wos-gap-slots-open.bmp
+click 146 13
+expect minigame_slots_spin 600
+shot /tmp/wos-gap-slots-spin.bmp
+expect minigame_slots_result 1500
+shot /tmp/wos-gap-slots-result.bmp
 quit

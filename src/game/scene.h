@@ -28,4 +28,17 @@ int game_current_scene(void);
 int scene_condition(const char *condition);
 /* `scene.*` dump lines for the differential replay. */
 void scene_dump(DumpEmit emit, void *user);
+
+/* The scene colour table: 4 slots x 9 objects x 7 sealed EncInt channels, the
+ * original's DAT_005BB760 block. Constructed at CRT index 38 (252 seals, 1008 draws). */
+void scene_boot_register(void);
+/* Core calls this next to boot_register_core(), before boot_run(). */
+/* FUN_0048A7DA: seal `channel` into every object of every slot. */
+void scene_colour_apply(int channel);
+/* FUN_004436A5, reached via FUN_004436E3: clamp to 0..2 and reseal channel 0. */
+int  scene_colour_jitter(int slot,int delta);
+/* FUN_0044462C, the level-up colour flash: 3 seals at object +0x58/+0x90/+0x138,
+ * 12 draws. `monster_9c` is the plain dword the original reads at
+ * monster-table+0x9C (0x004446D3); pass < 0 when there is no monster record. */
+void scene_colour_level_flash(int slot,int obj,int monster_9c);
 #endif

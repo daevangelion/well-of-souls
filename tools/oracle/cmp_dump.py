@@ -83,9 +83,18 @@ def apply_mask(dump, ranges):
 # something differs.
 ORACLE_ONLY_PREFIX = "oracle."
 #: keys the port emits for modules the hook cannot read out of the original yet
+#: A key in one of these namespaces that only ONE side has is not a defect: the hook
+#: has no source for it, or the original has no counterpart at all.  Both are named in
+#: docs/re/oracle.md section 5.4.4 with the reason, so this list is the short version of
+#: a table, not a place to hide a missing read-out.
+#:
+#: `front.` is here because the original's front-end state is a 100-slot hotspot table
+#: (DAT_005339F8) that src/game_main.c's dump table has no module for.  The hook reads
+#: and emits it (see dump_hotspots) so the values are on the record, but there is no
+#: `front_dump` on the port side to compare them against yet.
 NO_SOURCE_PREFIXES = ("map.", "scene.", "battle.", "panels.", "items.",
                       "minigame.", "options.", "world.", "chat.", "editors.",
-                      "missions.", "html.")
+                      "missions.", "html.", "front.")
 
 
 def main():

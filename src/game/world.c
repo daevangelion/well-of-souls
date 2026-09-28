@@ -1028,19 +1028,27 @@ static void disk_string(char *dst, size_t cap, const unsigned char *p, size_t by
     dst[n]=0;
 }
 
+/* FUN_00463989 (.obl, 0x100 x 800), FUN_00464461 (.mon, 0x43620 bytes) and FUN_00463630
+ * (objects.obr, count x 0x30) are the same loader written three times: memset the whole table
+ * to zero FIRST, then fopen, then fread as many whole records as the file actually has, and
+ * return the record count. A missing or short file is NOT an error - the table is simply left
+ * empty. That is how retail Evergreen ships castle1, petarena, pkarena, stonetree and shrimpee
+ * (no .mon) and NorthUmbrage, grotto, isleLight, springwell (no .ter), and the map still loads.
+ * FUN_00464461 also returns whether the read was exactly 0x43620 bytes, but its caller at
+ * 0x41F126 only stores that in DAT_004F224C for the debug placement overlay; it never fails.
+ * Returns the number of whole records read, 0 for a missing file. */
 static int load_records(Map *map, const char *path, int type)
 {
     unsigned char record[OBL_RECORD_SIZE];
     int count=type==0?OBL_RECORDS:type==1?MON_RECORDS:OBR_RECORDS;
     size_t size=type==0?OBL_RECORD_SIZE:type==1?MON_RECORD_SIZE:OBR_RECORD_SIZE;
     FILE *f=plat_fopen(path,"rb");
-    int i;
-    if(!f) return -1;
+    int i, read=0;
+    if(!f) return 0;
     for(i=0;i<count;++i) {
         size_t got=fread(record,1,size,f);
-        /* FUN_00463630 reads up to 1000 OBRs; Evergreen ships only 256. */
-        if(type==2 && got==0 && feof(f) && i>0) break;
-        if(got!=size) { fclose(f); return -1; }
+        if(got!=size) break;      /* short or missing tail: the rest of the table stays zeroed */
+        ++read;
         if(type==0) {
             Link *v=&map->links[i];
             v->used=le32(record); v->object_id=le32(record+4);
@@ -1061,7 +1069,8 @@ static int load_records(Map *map, const char *path, int type)
             v->l=le32(record+32); v->t=le32(record+36); v->r=le32(record+40); v->b=le32(record+44);
         }
     }
-    fclose(f); return 0;
+    fclose(f);
+    return read;
 }
 
 void map_free(Map *map)
@@ -1099,36 +1108,61 @@ int map_load(Map *map, int id)
         Image *ter=&loaded.terrain;
         size_t cells;
         if(existing) { fclose(existing); goto fail; }
-        /* FUN_0041e421 creates a cleared terrain DIB before its optional load.
-         * Retail Springwell has no .ter; the cleared cells mean terrain 0. */
+        /* FUN_0041e421 creates a cleared terrain DIB before its optional load, so a world with no
+         * .ter (retail NorthUmbrage, grotto, isleLight, springwell) walks on terrain 0. */
         ter->w=(loaded.image.w+3)/4; ter->h=(loaded.image.h+3)/4;
         ter->bpp=8; ter->palette_size=256;
         cells=(size_t)ter->w*ter->h;
         ter->indices=calloc(cells,1); ter->pixels=calloc(cells,sizeof(*ter->pixels));
         if(!ter->indices || !ter->pixels) goto fail;
     }
+    /* Only the 8-bit form is required. The dimensions are whatever the .ter says: FUN_00486690
+     * decodes the BMP and nothing compares it with the jpg, and retail castle1.ter is 82x87 where
+     * its 328x350 jpg implies 82x88. map_terrain_at answers terrain 9 outside the grid the file
+     * actually provides, which is the defined answer to what the original would read past the end
+     * of the buffer. */
     if(!loaded.terrain.indices || loaded.terrain.bpp!=8 ||
-       loaded.terrain.w!=(loaded.image.w+3)/4 || loaded.terrain.h!=(loaded.image.h+3)/4) goto fail;
+       loaded.terrain.w<1 || loaded.terrain.h<1) goto fail;
+    /* .obl, .mon and objects.obr are optional: the three loaders zero their table and read what
+     * exists, and the original checks none of their return values (0x41F0BF, 0x41F11A, 0x41F126).
+     * objects.bmp/.jpg is optional for the same reason - FUN_00486690's result is stored in
+     * DAT_00549898 and only matters when a link sprite is actually drawn. */
     snprintf(rel,sizeof(rel),"maps/%s.obl",loaded.def->root);
-    if(!world_path(path,sizeof(path),rel) || load_records(&loaded,path,0)) goto fail;
+    if(!world_path(path,sizeof(path),rel)) goto fail;
+    load_records(&loaded,path,0);
     snprintf(rel,sizeof(rel),"maps/%s.mon",loaded.def->root);
-    if(!world_path(path,sizeof(path),rel) || load_records(&loaded,path,1)) goto fail;
-    if(!world_path(path,sizeof(path),"maps/objects.bmp")) goto fail;
-    if(image_load(&loaded.objects,path)) {
-        if(!world_path(path,sizeof(path),"maps/objects.jpg") || image_load(&loaded.objects,path)) goto fail;
-    }
-    if(!world_path(path,sizeof(path),"maps/objects.obr") || load_records(&loaded,path,2)) goto fail;
+    if(!world_path(path,sizeof(path),rel)) goto fail;
+    load_records(&loaded,path,1);
+    if(world_path(path,sizeof(path),"maps/objects.bmp")) image_load(&loaded.objects,path);
+    if(!loaded.objects.pixels && world_path(path,sizeof(path),"maps/objects.jpg"))
+        image_load(&loaded.objects,path);
+    if(world_path(path,sizeof(path),"maps/objects.obr")) load_records(&loaded,path,2);
     map_free(map); *map=loaded; return 0;
 fail:
     fprintf(stderr,"world: cannot load map %d resource %s\n",id,path);
     map_free(&loaded); return -1;
 }
 
+/* FUN_0046186F (0x46186F), the terrain lookup, has TWO different out-of-range answers:
+ *   1. x>>2 / y>>2 outside the JPG-derived grid DAT_004DF8AC/DAT_004DF8B0 - which FUN_0041E421
+ *      sets to ((jpg width)+3)/4 and ((jpg height)+3)/4 at 0x41E4B4/0x41E4B5 - returns 9.
+ *   2. inside that grid but past the .ter's OWN extent, `if (*(int*)(DAT_00549B7C+4) <= cx)
+ *      return 0;` and the `if (cy < FUN_004864C0())` inner read both leave the block, and the
+ *      function's remaining `return 0` answers TERRAIN 0 - open ground, NOT impassable.
+ * That distinction is load-bearing because retail .ter files are smaller than their jpg implies:
+ * castle1 is 82x87 against 82x88, floodedMaze 89x89 against 90x89, wormCave 88x88 against 89x89.
+ * Answering 9 past the file would wall off the last row of those three maps; the original leaves
+ * them walkable.
+ * The raw pixel bound is FUN_004631C6's own guard (0x4631C6, `param_1 < DAT_005494B8 &&
+ * param_2 < DAT_00549990`, both from the JPG), whose answer is "not walkable". */
 int map_terrain_at(const Map *map, int x, int y)
 {
-    if(!map || !map->terrain.indices || x<0 || y<0 || x>=map->image.w || y>=map->image.h ||
-       x/4>=map->terrain.w || y/4>=map->terrain.h) return 9;
-    return map->terrain.indices[(size_t)(y/4)*map->terrain.w+x/4];
+    int cx, cy;
+    if(!map || !map->terrain.indices || x<0 || y<0 || x>=map->image.w || y>=map->image.h) return 9;
+    cx=x>>2; cy=y>>2;
+    if(cx>=(map->image.w+3)/4 || cy>=(map->image.h+3)/4) return 9;
+    if(cx>=map->terrain.w || cy>=map->terrain.h) return 0;
+    return map->terrain.indices[(size_t)cy*map->terrain.w+cx];
 }
 int map_walkable(const Map *map, int x, int y, const unsigned char *tokens)
 {

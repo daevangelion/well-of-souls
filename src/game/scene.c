@@ -27,6 +27,8 @@
 #include "../engine/text.h"
 #include "../engine/log.h"
 #include "../engine/rng.h"
+#include "../engine/boot.h"
+#include "../engine/encint.h"
 #include "../platform/platform.h"
 #include <ctype.h>
 #include <limits.h>
@@ -200,10 +202,6 @@ static int bounded_add(int value, int amount, int max)
     int64_t n=(int64_t)value+amount;
     return n<0 ? 0 : n>max ? max : (int)n;
 }
-static void unknown_op(const char *op)
-{
-    wos_log_event("scene_unknown","op=%s",op);
-}
 static void opcode_of(const char *tok0,int *op)
 {
     unsigned char b=(unsigned char)tok0[0];
@@ -337,8 +335,14 @@ static const char *stock_cookie(const char *key,char *buf,size_t cap,int *handle
     if(eq(key,"num.hostTotalXP")){ snprintf(buf,cap,"%lld",(long long)g_hero.xp); return buf; }
     if(eq(key,"num.hostAttack")) { snprintf(buf,cap,"%d",hero_offense(&g_hero)); return buf; }
     if(eq(key,"num.hostDefense")){ snprintf(buf,cap,"%d",hero_defense(&g_hero)); return buf; }
-    if(eq(key,"num.hostX"))      { snprintf(buf,cap,"%d",g_hero.x); return buf; }
-    if(eq(key,"num.hostY"))      { snprintf(buf,cap,"%d",g_hero.y); return buf; }
+    /* FUN_0047B61A: these are NOT the hero's map position. hostX reads scene+0x3A8 (the host's
+     * scene x, 0..FUN_0048B13C() == 0x168) and hostY reads scene+0x3AC (the scene y, 8.8 of 256),
+     * and BOTH are reported as a PERCENTAGE:
+     *   hostX = (scene+0x3A8) * 100 / FUN_0048B13C()
+     *   hostY = ((scene+0x3AC) * 100) >> 8
+     * vm.host holds the same scene position in percent*256, which is the port's convention. */
+    if(eq(key,"num.hostX"))      { snprintf(buf,cap,"%d",vm.host.x*100/256); return buf; }
+    if(eq(key,"num.hostY"))      { snprintf(buf,cap,"%d",vm.host.y*100/256); return buf; }
     if(eq(key,"num.hostAge"))    { snprintf(buf,cap,"%d",0); return buf; }
     if(eq(key,"num.hostPets"))   { snprintf(buf,cap,"%d",pet_count()); return buf; }
     if(eq(key,"num.item"))       { snprintf(buf,cap,"%d",vm.item_id); return buf; }
@@ -1215,8 +1219,10 @@ static void step(void)
     case OP_IF_NE: if(vm.condition_code!=0) jump_to(t[n-1]); return;
     case OP_IF_EVEN: if((vm.condition_code&1)==0) jump_to(t[n-1]); return;
     case OP_IF_ODD: if((vm.condition_code&1)!=0) jump_to(t[n-1]); return;
-    case OP_COLOR: /* n000[table]: the low three digits are the table, /1000 the mode */
-        if(n>1) { int v=number(t[1]); vm.color_table=v%1000&0xff; }
+    case OP_COLOR: /* FUN_0048A7DA: `n = channel + 1000*mode`; channel = n%1000 & 0xFF and the
+        * mode bits are (n/1000)&1 = recolour the players, (n/1000)&2 = the monsters. All three
+        * are applied to EVERY slot and EVERY object, which is why the seals exist at all. */
+        if(n>1) { int v=number(t[1]); vm.color_table=v%1000&0xff; scene_colour_apply(vm.color_table); }
         return;
     case OP_FACE: if(n>2) face(number(t[1]),number(t[2])); return;
     case OP_HTML: /* FUN_0048A69E; state 10 suspends until the viewer closes */
@@ -1504,9 +1510,12 @@ static void scene_render(Framebuffer *fb)
     draw_button(fb,button_rect(3),vm.state==ST_FIGHT?"Flee":"Exit",1);
     draw_button(fb,button_rect(4),"Items",1);
     draw_button(fb,button_rect(5),"Spell",1);
-    draw_button(fb,button_rect(6),"Equip",1);
-    if(minigame_armed()) draw_button(fb,button_rect(7),"Game",1);
-    if(missions_offered()) draw_button(fb,button_rect(7),"Missions",1);
+    /* Slot 6 is shared: GAME (FUN_00478E04), MISSIONS (FUN_00478D53) and SHOP all register
+     * it and the last one registered is the one shown and clicked, so the label follows the
+     * armed state rather than living on a slot of its own. */
+    if(missions_offered()) draw_button(fb,button_rect(6),"Missions",1);
+    else if(minigame_armed()) draw_button(fb,button_rect(6),"Game",1);
+    else draw_button(fb,button_rect(6),"Equip",1);
     /* The status strip (FUN_004589E9 at (8, H-40, W, H)). */
     fb_fill(fb,(Rect){0,440,640,40},0x202c38);
     fb_fill(fb,(Rect){8,444,176,12},0x501010);
@@ -1594,6 +1603,125 @@ void scene_dump(DumpEmit emit,void *user)
         snprintf(key,sizeof key,"scene.push.%d",i);
         emit(key,vm.pushes[i],user);
     }
+}
+
+/* --- the scene colour table (CRT index 38) ---------------------------------
+ * The original's CRT thunk at 0x43BB8A (`jmp 0x43BB8F`, entry 38) walks
+ * 4 slots of 0x1798 at base 0x5BB760, and 9 objects of 0x298 per slot starting at
+ * slot+0x8, and FUN_0043BBD1 (0x43BBD1) seals SEVEN EncInts in each object at
+ * +0x20/+0x58/+0x90/+0xC8/+0x100/+0x138/+0x170, ascending. That is 4x9x7 = 252
+ * seals = 1008 draws. The loop seeds are 3 and 8 with dec/jns, so each runs one
+ * MORE time than the seed: 4 slots and 9 objects, not 3 and 8.
+ * Only those seven words are sealed - the rest of the 0x298 object is plain. */
+#define SCOLOUR_SLOTS        4
+#define SCOLOUR_SLOT_STRIDE  0x1798
+#define SCOLOUR_OBJ_STRIDE   0x298
+#define SCOLOUR_OBJS         9
+#define SCOLOUR_CHANNELS     7
+static unsigned char colour_table[SCOLOUR_SLOTS*SCOLOUR_SLOT_STRIDE];
+static const int colour_channel_off[SCOLOUR_CHANNELS] = {
+    0x20,0x58,0x90,0xC8,0x100,0x138,0x170
+};
+static EncInt *colour_slot_obj(int slot,int obj)
+{
+    if(slot<0||slot>=SCOLOUR_SLOTS||obj<0||obj>=SCOLOUR_OBJS) return NULL;
+    return (EncInt *)(void *)(colour_table + (size_t)slot*SCOLOUR_SLOT_STRIDE
+                              + 8 + (size_t)obj*SCOLOUR_OBJ_STRIDE);
+}
+/* The object's plain header words, from FUN_0043BD0A's record fill. The palette
+ * prints five of them: the words at dword 0, 2, 4 and 5, and the last channel. */
+typedef struct {
+    int w0, w1, w2, index, w4, w5, bitflag;
+    unsigned char pad[8];              /* to +0x20, where the first EncInt starts */
+    EncInt ch[SCOLOUR_CHANNELS];       /* +0x20 .. +0x170, seven of them */
+} ColourObj;
+/* FUN_0043BC68 formats "%02X" five times: w0, w2, w4, w5 and channel 6. */
+static char colour_palette[SCOLOUR_OBJS*10+1];
+static void colour_palette_build(void)
+{
+    int o;
+    size_t n=0;
+    colour_palette[0]=0;
+    for(o=0;o<SCOLOUR_OBJS;o++) {
+        const ColourObj *ob=(const ColourObj *)(const void *)colour_slot_obj(0,o);
+        if(!ob) break;
+        n+=(size_t)snprintf(colour_palette+n,sizeof colour_palette-n,"%02X%02X%02X%02X%02X",
+                            ob->w0&0xff,ob->w2&0xff,ob->w4&0xff,ob->w5&0xff,
+                            (int)(enc_raw(&ob->ch[6])&0xff));
+    }
+}
+/* FUN_0048A7DA's first branch: seal `channel` into every object of every slot. */
+void scene_colour_apply(int channel)
+{
+    int s,o;
+    channel&=0xff;
+    for(s=0;s<SCOLOUR_SLOTS;s++)
+        for(o=0;o<SCOLOUR_OBJS;o++) {
+            const ColourObj *ob=(const ColourObj *)(const void *)colour_slot_obj(s,o);
+            if(ob) enc_set((EncInt *)&ob->ch[channel%SCOLOUR_CHANNELS],channel);
+        }
+}
+/* FUN_004436A5: clamp the delta to 0..2 and reseal channel 0. One enc_get (free)
+ * and one enc_set (4 draws) per object, in ascending address order. */
+int scene_colour_jitter(int slot,int delta)
+{
+    int o,v=delta+((delta>=0&&delta<3)?0:0);
+    (void)v;
+    for(o=0;o<SCOLOUR_OBJS;o++) {
+        const ColourObj *ob=(const ColourObj *)(const void *)colour_slot_obj(slot,o);
+        int n;
+        if(!ob||!ob->w0) continue;       /* the original skips a record whose w0 is 0 */
+        n=delta+enc_raw(&ob->ch[0]);
+        if(n<0) n=0;
+        if(2<n) n=2;
+        enc_set((EncInt *)&ob->ch[0],n);
+    }
+    return 0;
+}
+static void construct_table_b(void *user)
+{
+    int s,o,i;
+    (void)user;
+    for(s=0;s<SCOLOUR_SLOTS;s++)
+        for(o=0;o<SCOLOUR_OBJS;o++) {
+            unsigned char *obj=colour_table + (size_t)s*SCOLOUR_SLOT_STRIDE
+                             + 8 + (size_t)o*SCOLOUR_OBJ_STRIDE;
+            for(i=0;i<SCOLOUR_CHANNELS;i++)
+                enc_clear((EncInt *)(void *)(obj+colour_channel_off[i]));
+        }
+    colour_palette_build();
+}
+/* FUN_0044462C, the level-up colour flash: three seals into ONE colour record, in
+ * ascending address order, at object offsets +0x58, +0x90 and +0x138. The 0x38
+ * spacing is the EncInt stride and the record carries EncInts at +0x58, +0x90,
+ * +0xC8, +0x100 and +0x138, so this seals the 1st, 2nd and 5th of the five.
+ * Each enc_set costs 4 crt_rand, so the sequence is 12 draws.
+ *   VA 0x0044469A / 0x004446E4 / 0x004446F1.
+ *
+ * `monster_9c` is the PLAIN dword the original reads at monster-table+0x9C
+ * (0x004446D3, `add 0x9c(%edi),%eax`) - note it is not one of the two enc_get
+ * targets, which are plain ints feeding the arithmetic. The monster table is
+ * Battle3's, so the caller supplies that word rather than my file reaching into
+ * a table it does not own. Pass a negative value when there is no monster record:
+ * the original guards the whole block on DAT_004EC428 and the record pointer, and
+ * then seals nothing.
+ *
+ * Seal 3 is the literal 2, a plain re-seal that still costs its 4 draws. */
+void scene_colour_level_flash(int slot,int obj,int monster_9c)
+{
+    ColourObj *ob=(ColourObj *)(void *)colour_slot_obj(slot,obj);
+    int a;
+    if(!ob||monster_9c<0) return;
+    a=enc_raw(&ob->ch[1])*2-2+monster_9c;
+    enc_set(&ob->ch[1],a);        /* +0x58 */
+    a=enc_raw(&ob->ch[2])*2-2+monster_9c;
+    enc_set(&ob->ch[2],a);        /* +0x90 */
+    enc_set(&ob->ch[5],2);        /* +0x138, the literal 2 */
+}
+/* Core calls this next to boot_register_core(), before boot_run(). */
+void scene_boot_register(void)
+{
+    boot_register(BOOT_CRT_TABLE_B,"tableB_4x9x7",construct_table_b,NULL);
 }
 
 /* --- entry ---------------------------------------------------------------- */

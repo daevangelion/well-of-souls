@@ -14,6 +14,7 @@ typedef struct {
     uint32_t deadline; /* virtual ms at which the WM_TIMER is posted */
     uint32_t seq;      /* registration order; deterministic tie-break */
     int active;
+    int pending;       /* a WM_TIMER for this timer is outstanding */
 } TimerSlot;
 
 static struct {
@@ -105,6 +106,7 @@ void clock_set_timer(void *owner, int id, uint32_t interval_ms, ClockTimerFn fn,
     g.slot[i].seq = ++g.seq;
     g.slot[i].active = 1;
     g.slot[i].deadline = clock_ms() + interval_ms;
+    g.slot[i].pending = 0;
 }
 
 void clock_kill_timer(void *owner, int id)
@@ -134,13 +136,26 @@ int clock_dispatch_timers(void)
     for (;;) {
         int i = pick();
         TimerSlot t;
-        if (i < 0 || (int32_t)(g.slot[i].deadline - clock_ms()) > 0) break;
+        if (i < 0 || g.slot[i].pending) break;         /* one WM_TIMER outstanding */
+        if ((int32_t)(g.slot[i].deadline - clock_ms()) > 0) break;
         /* Stamp the message with its due time, as WM_TIMER carries the queue time. */
         if ((int32_t)(g.slot[i].deadline - g.now_ms) > 0) g.now_ms = g.slot[i].deadline;
         t = g.slot[i];
         if (!g.slot[i].active || g.slot[i].seq != t.seq) continue; /* re-armed in place */
-        g.slot[i].deadline += t.interval; /* coalesce: never replay missed ticks */
+        /* WIN32 COALESCING, and this is the rule that matters. A timer with a WM_TIMER
+         * already in the queue does NOT post another, so a stall delivers ONE message
+         * and not one per missed period. `pending` models the outstanding message: it is
+         * set as the message is posted and cleared when the handler runs, and the next
+         * period is measured from the deadline so a busy handler drifts the way Windows
+         * does. Walking `deadline += interval` unconditionally, which is what this did
+         * before, replays every missed period -- the oracle measured 6 extra draws over a
+         * 650 ms script window, and that is this line. */
+        g.slot[i].pending = 1;
+        g.slot[i].deadline += t.interval;
         t.fn(t.owner, t.user);
+        /* The handler ran, so the message was taken: clear it and let the next period
+         * fire from wherever the clock now is. */
+        if (g.slot[i].active && g.slot[i].seq == t.seq) g.slot[i].pending = 0;
         ++fired;
         if (fired > TIMER_SLOTS * 2) break; /* a handler that re-arms at 10 ms */
     }
@@ -163,7 +178,19 @@ int clock_idle_due(void)
     return 1;
 }
 
-uint32_t clock_20hz_next(void) { return g.idle_last + 20u; }
+/* The next 20 ms boundary. It CATCHES the stamp up to the present time first, so
+ * a driver that asks for the next boundary always gets one strictly greater than
+ * now. Without the catch-up this returned a value <= now once the clock had
+ * advanced past the stamp, the script loop's `min(next, 20hz_next())` stopped
+ * moving, and the virtual clock froze -- silently starving every ms-gated rule in
+ * the port. The catch-up is idempotent for a given now, so the loop still lands on
+ * each boundary exactly once. */
+uint32_t clock_20hz_next(void)
+{
+    uint32_t now = clock_ms();
+    while ((uint32_t)(now - g.idle_last) >= 20u) g.idle_last += 20u;
+    return g.idle_last + 20u;
+}
 
 /* --- private rate gates (the `GetTickCount() - last < N` idiom) --------------- */
 #define GATE_SLOTS 32

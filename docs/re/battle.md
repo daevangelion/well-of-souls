@@ -42,8 +42,8 @@ The combatant record is the heart of combat. Selected fields (offsets from recor
 +0x284  [0xA1]   target/goal y
 +0x290  [0xA4]   anim phase accumulator
 +0x294  [0xA5]   "is not a monster" flag (XORed into the flip)
-+0x2A8  [0xAA]   current HP
-+0x2AC  [0xAB]   max HP
++0x2A8  [0xAA]   max HP        (FUN_0042bb5c 0x42bf82: rec[0xAA] = hero[0x74], max HP)
++0x2AC  [0xAB]   max MP        (FUN_0042bb5c 0x42bf8b: rec[0xAB] = hero[0x7C], max MP)
 +0x2B0  [0xAC]   gold reward (monsters)
 +0x2B4  [0xAD]   XP reward (monsters)
 +0x2E8  [0xBA]   queued action: 0 = physical, >0 = spell id, -1 cancel, -3..-5 special, -4 = give gold
@@ -53,6 +53,14 @@ The combatant record is the heart of combat. Selected fields (offsets from recor
 +0x380  [0xE0]   last damage delta
 +0x384  [0xE1]   tick of last damage
 +0x388  [0xE2]   anim state override
++0x5B8  current HP   SEALED (FUN_0049b71b). This, not +0x2A8, is the live HP a fight reads.
++0x5F0  current MP   SEALED (FUN_0049b71b). Likewise the live MP, against +0x2AC's max MP.
+The +0x2A8/+0x2AC pair used to be labelled "current HP"/"max HP" here and that was wrong, and it
+misled four separate readings of FUN_0042BB5C and FUN_00480499: both write +0x2A8 from a MAX HP
+source (hero+0x74, and the monster table's +0xF4) and +0x2AC from a MAX MP source (hero+0x7C, and
++0xF8). The current values live in the two SEALED EncInts at +0x5B8 and +0x5F0. Every FUN_0049b71B
+site in the binary targets one of the five EncInts +0x5B8/+0x5F0/+0x628/+0x660/+0x698; +0x2A8,
++0x2AC, +0x2B0 and +0x2B4 are plain words everywhere they appear.
 +0x38C  [0xE3]   *** TURN STATE ***  0x2F = "not this actor's turn / done", 0x5F = READY, 0x94 = committed
 +0x390  [0xE4]   attack rating (weapon/derived)
 +0x398  [0xE5]   last action was a spell

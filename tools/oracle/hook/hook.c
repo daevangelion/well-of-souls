@@ -96,6 +96,13 @@ static void civil_from_days(int64_t z, int *py, int *pm, int *pd)
     *pd = (int)(doy);
     if (*pm <= 2) (*py)++;
 }
+/* See the DETOUR below for why Sleep is virtual rather than real. */
+static VOID WINAPI hook_Sleep(DWORD ms)
+{
+    if (!ms) { vadvance(vnow()); return; }     /* a yield, not a wait */
+    vadvance(vnow() + ms);
+}
+
 static void vfill_systemtime(SYSTEMTIME *st)
 {
     uint32_t t = vtime_s();
@@ -353,6 +360,7 @@ typedef struct {
     UINT_PTR  id;
     uint32_t  interval;
     uint32_t  deadline;
+    uint32_t  last_delivered;   /* virtual ms of the previous delivery, for the gap log */
     int       live;
     int       outstanding;
 } Timer;
@@ -1255,6 +1263,316 @@ static int label_module(const char *l)
     for (i = 0; names[i]; i++) if (label_is(l, names[i])) return 1;
     return 0;
 }
+/* ------------------------------------------------------- the module read-outs
+ *
+ * Everything below reads the ORIGINAL's own memory, at the address the module owner
+ * cited, so the key has the same meaning on both sides. Where the original has NO
+ * counterpart for a key the port emits, the key is NOT emitted here and the reason is
+ * recorded in docs/re/oracle.md section 5.4 -- a port-only key must be named as one
+ * rather than given a plausible-looking original value, because a value that is
+ * "obviously the same thing" is how a modelling gap hides.
+ *
+ * Two indirections are load-bearing and easy to get wrong:
+ *   DAT_0067FBF8 is a POINTER to the hero table, assigned once at 0x426B9A as
+ *     `DAT_004e4870 + 0x1560a5c`. Every record-relative address is
+ *     `*(u32*)0x0067FBF8 + offset` -- deref once, then add.
+ *   DAT_004E4874 is a POINTER to the scene block, re-pointed to a fresh random
+ *     16-aligned offset inside the 0x7C140 block on every scene load (0x426BE0).
+ *     Every scene-block address is `*(u32*)0x004E4874 + offset`.
+ */
+static unsigned char *hero_rec(void)
+{
+    unsigned char *p = *(unsigned char **)(g_base + (0x0067FBF8u - IMAGE_BASE));
+    return p ? p : (unsigned char *)(g_base + (0x0067FBF8u - IMAGE_BASE));
+}
+static unsigned char *scene_blk(void)
+{
+    unsigned char *p = *(unsigned char **)(g_base + (0x004E4874u - IMAGE_BASE));
+    return p ? p : (unsigned char *)(g_base + (0x004E4874u - IMAGE_BASE));
+}
+#define RDI(p, off)   (*(int *)((p) + (off)))
+#define RDX(p, off)   (*(int *)((p) + (off)))
+
+/* map.* -- the walk state lives in hero record 0. Offsets from the disassembly of
+ * FUN_004620F3 (0x4620F3), FUN_0046230E (0x46230E) and FUN_00461948 (0x461948), and
+ * the path/link globals from FUN_00461DCC's callers. Positions are 24.8 fixed: every
+ * consumer shifts by 8 (0x462958, 0x4620F3), so the port's map-unit keys are the
+ * stored word shifted, and map.fx/map.fy are the stored word itself. */
+/* `map.*` describes the hero's position, and the hero lives in record 0. When no soul
+ * is loaded that record is the post-memset zero block, so every field reads 0 -- which
+ * is not "the hero is at map 0", it is "there is no hero". The port says map.id=-1 in
+ * that state, and it is right to. So the whole namespace is gated on the same liveness
+ * test hero.valid uses (FUN_0041F832/FUN_0042095E leave 1 alive, 2 ghost, 4 loaded but
+ * unincarnated), and a dump with no hero emits map.id=-1 and nothing else, rather than
+ * a table of zeros that reads like agreement. */
+static void dump_map(FILE *f)
+{
+    unsigned char *h = hero_rec();
+    uintptr_t b = g_base;
+    int inuse = RDI(h, 0x00);
+    int x, y;
+    if (inuse < 1 || inuse > 4) { fprintf(f, "map.id=-1\n"); return; }
+    x = RDI(h, 0x94); y = RDI(h, 0x98);
+    fprintf(f, "map.fx=%d\n", x);
+    fprintf(f, "map.fy=%d\n", y);
+    fprintf(f, "map.x=%d\n", x >> 8);
+    fprintf(f, "map.y=%d\n", y >> 8);
+    fprintf(f, "map.tx=%d\n", RDI(h, 0x9C));
+    fprintf(f, "map.ty=%d\n", RDI(h, 0xA0));
+    fprintf(f, "map.speed=%d\n", RDI(h, 0xAC));
+    fprintf(f, "map.duration=%d\n", RDI(h, 0xB4));
+    /* +0x90 is the MAP (START_LOCATION arg 1, written at all.c:24389 from the class
+     * table's +0x1ABCC) and +0x67C is the LINK (arg 2, +0x1ABD0). The two are told
+     * apart by the use site: all.c:24099 sends 0x46A(link, map) with 0x67C first. */
+    fprintf(f, "map.id=%d\n", RDI(h, 0x90));
+    /* the facing is the original's own encoding: fy*4+fx with a 5->9 remap (0x46230E),
+     * NOT the port's fy*3+fx, so this is compared as the raw stored word. */
+    fprintf(f, "map.facing_raw=%d\n", RDI(h, 0x88));
+    fprintf(f, "map.path_count=%d\n", RDI(b + (0x004F2168u - IMAGE_BASE), 0));
+    fprintf(f, "map.path_cursor=%d\n", RDI(b + (0x004F216Cu - IMAGE_BASE), 0));
+    fprintf(f, "map.nearest=%d\n", RDI(b + (0x004F2240u - IMAGE_BASE), 0));
+    fprintf(f, "map.hit=%d\n", RDI(b + (0x004F2244u - IMAGE_BASE), 0));
+    fprintf(f, "map.latched=%d\n", RDI(b + (0x004F222Cu - IMAGE_BASE), 0));
+    /* ELAPSED, not the raw stamp. The original's own test is
+     * `5000 < GetTickCount() - _DAT_004f2220` (FUN_0046260E's encounter roll), i.e. the
+     * quantity the rule consumes is the DIFFERENCE. A raw GetTickCount word only means
+     * something relative to another GetTickCount reading, so emitting it raw made the
+     * key a wall-clock stamp that is not comparable between two processes even when both
+     * are correct -- and it compared the original's 0 against the port's 1200, which are
+     * not two values of one thing but two different quantities. With a fresh stamp of 0
+     * this correctly reads as "time since boot", which is the honest initial state. */
+    fprintf(f, "map.enc_a=%ld\n", (long)(vnow() - (unsigned)*(unsigned *)(b + (0x004F2220u - IMAGE_BASE))));
+    fprintf(f, "map.enc_b=%ld\n", (long)(vnow() - (unsigned)*(unsigned *)(b + (0x004F2224u - IMAGE_BASE))));
+    /* 0, not -1: the key is a time and -1 is not one. The original's word is 0 until a
+     * fight ends, and MapView-2's -1 sentinel meant the same thing through a different
+     * convention, which is exactly the kind of aliasing this registry exists to remove. */
+    fprintf(f, "map.enc_grace=%ld\n", (long)(vnow() - (unsigned)*(unsigned *)(b + (0x004E70A8u - IMAGE_BASE))));
+    fprintf(f, "map.no_monsters=%d\n", RDI(b + (0x004F2228u - IMAGE_BASE), 0));
+    fprintf(f, "map.wander=%d\n", RDI(b + (0x004F2190u - IMAGE_BASE), 0) != 0);
+    fprintf(f, "map.wander_legs=%d\n", (int)(*(unsigned *)(b + (0x004F219Cu - IMAGE_BASE))));
+    fprintf(f, "map.music=%d\n", RDI(b + (0x004E70B8u - IMAGE_BASE), 0));
+    /* option 7, "Enable automatic Way Point calculations": the port's map.waypoints */
+    fprintf(f, "map.waypoints=%d\n", RDI(b + (0x006840D0u - IMAGE_BASE), 7 * 4));
+}
+
+/* battle.* -- the fight's `this` is the CWnd sub-object at pane+0xBC, where the pane
+ * is CSplitterWnd::GetPane(*(void**)0x004E483C + 0x13FC, 0, 0). 0x004E483C is the
+ * CSoulsView pointer, live for the whole game, so it is NOT "a fight is open" and is
+ * not a minigame flag either. The chain is read by walking the MFC thunk
+ * FUN_004C52EE (`jmp [0xD8B1EC]`, rizin names it GetPane), which lands in MFC42 --
+ * so the oracle cannot follow it, and battle.state is emitted as the scene block's
+ * own fight word instead, which is the same value the port calls state. */
+static void dump_battle(FILE *f)
+{
+    unsigned char *sc = scene_blk();
+    uintptr_t b = g_base;
+    int i, n = RDI(sc, 0x0D0);
+    if (n < 0 || n > 8) n = 0;
+    fprintf(f, "battle.state=%d\n", RDI(sc, 0x0C0));
+    fprintf(f, "battle.result=%d\n", RDI(sc, 0x0C4));
+    fprintf(f, "battle.count=%d\n", n);
+    fprintf(f, "battle.target=%d\n", RDI(sc, 0x0C8));
+    fprintf(f, "battle.attacker=%d\n", RDI(sc, 0x0CC));
+    fprintf(f, "battle.victim=%d\n", RDI(sc, 0x0B4));
+    fprintf(f, "battle.spell=%d\n", RDI(sc, 0x0B8));
+    fprintf(f, "battle.participation_total=%d\n", RDI(b + (0x00502830u - IMAGE_BASE), 0));
+    fprintf(f, "battle.scene_kills=%d\n", RDI(sc, 0x3E034));
+    fprintf(f, "battle.auto_resurrect=%d\n", RDI(b + (0x00502A48u - IMAGE_BASE), 0));
+    fprintf(f, "battle.sticky=%d\n", RDI(b + (0x00502B14u - IMAGE_BASE), 0));
+    fprintf(f, "battle.hp_gauge=%d\n", (int)(*(unsigned *)(b + (0x004F91CCu - IMAGE_BASE))));
+    fprintf(f, "battle.mp_gauge=%d\n", (int)(*(unsigned *)(b + (0x004F91D0u - IMAGE_BASE))));
+    /* the combatant records: rec(i) = scene + 0x128 + i*0x6E0, 144 slots. The sealed
+     * fields are NOT encrypted at rest -- FUN_0049B71B stores the plain dword and
+     * FUN_0049B70F returns it -- so they are directly readable ints. The x/y are
+     * PLAIN logical units in 0..360 x 0..256 (FUN_0048B13C returns 360, and 0x4806CE
+     * adds it straight to a rand()%32), so there is no >>8 here. */
+    for (i = 0; i < n; i++) {
+        unsigned char *r = sc + 0x128 + (size_t)i * 0x6E0;
+        if (RDI(r, 0x000) == 0 && RDI(r, 0x004) == 0) continue;
+        fprintf(f, "battle.slot%d.id=%d\n", i, RDI(r, 0x004));
+        fprintf(f, "battle.slot%d.hp=%d\n", i, RDI(r, 0x5B8));
+        fprintf(f, "battle.slot%d.maxhp=%d\n", i, RDI(r, 0x2A8));
+        fprintf(f, "battle.slot%d.mp=%d\n", i, RDI(r, 0x5BC));
+        fprintf(f, "battle.slot%d.x=%d\n", i, RDI(r, 0x51C));
+        fprintf(f, "battle.slot%d.y=%d\n", i, RDI(r, 0x520));
+        fprintf(f, "battle.slot%d.state=%d\n", i, RDI(r, 0x524));
+        fprintf(f, "battle.slot%d.participation=%d\n", i, RDI(r, 0x11A));
+    }
+}
+
+/* items.* -- the trophy bag is 128 words at hero+0x0CE0 (FUN_0046F726 reads,
+ * FUN_0046F779 writes `(count<<8 | id<<16) ^ 0x1D43E217`) and the geometry word at
+ * hero+0x0EE0 (`w<<16 | h&0xFFFF`, split by FUN_0046F60F). The pet pen is its own
+ * block: base DAT_004E4878, stride 0x608, 32 slots (FUN_0040FBFD's fixup loop). */
+static void dump_items(FILE *f)
+{
+    unsigned char *h = hero_rec();
+    uintptr_t b = g_base;
+    unsigned char *pen = (unsigned char *)(b + (0x004E4878u - IMAGE_BASE));
+    int i, used = 0, geo = RDI(h, 0xEE0);
+    int w = (geo >> 16) & 0xFFFF, hh = geo & 0xFFFF;
+    char text[1024];
+    int len = 0;
+    text[0] = 0;
+    for (i = 0; i < 128 && len < (int)sizeof text - 40; i++) {
+        int word = RDI(h, 0x0CE0 + i * 4);
+        int id, count;
+        if (!word) continue;
+        /* the stored word is the obfuscated (count, id) pair */
+        id = ((word ^ 0x1D43E217) >> 16) & 0xFF;
+        count = ((word ^ 0x1D43E217) >> 8) & 0xFF;
+        if (!id || !count) continue;
+        len += snprintf(text + len, sizeof text - (size_t)len, "%s%d:%d", len ? "," : "", id, count);
+        ++used;
+    }
+    if (!used) snprintf(text, sizeof text, "0");
+    fprintf(f, "items.trophy_bag=%s\n", text);
+    snprintf(text, sizeof text, "%dx%d", w, hh);
+    fprintf(f, "items.trophy_bag_size=%s\n", text);
+    fprintf(f, "items.trophy_bag_used=%d\n", used);
+    fprintf(f, "items.trophy_bag_free=%d\n", (w * hh) - used);
+    /* +0x0EE8 is the pet's live id (read only as "!= 0"); +0x0EEC is a GetTickCount
+     * stamp written by FUN_0043B8E7, NOT a second pet id. */
+    fprintf(f, "items.pet_ids0=%d\n", RDI(h, 0x0EE8));
+    fprintf(f, "items.pet_ids1=%d\n", (int)(*(unsigned *)(h + 0x0EEC)));
+    {
+        int pets = 0;
+        for (i = 0; i < 32; i++) if (RDI(pen + (size_t)i * 0x608, 0)) ++pets;
+        fprintf(f, "items.pet_count=%d\n", pets);
+    }
+}
+
+/* minigame.* -- DAT_004E18A4 is the armed game number. There is NO original global for
+ * "a minigame window is open": the original keys off the dialog's own window, and
+ * DAT_004E483C (which the port cited) is the CSoulsView pointer, live all game. */
+static void dump_minigame(FILE *f)
+{
+    uintptr_t b = g_base;
+    fprintf(f, "minigame.armed=%d\n", RDI(b + (0x004E18A4u - IMAGE_BASE), 0));
+}
+
+/* options.* -- the 33 numbered options are REAL and live at DAT_006840D0.
+ *
+ * The table itself (DAT_004F2A58, 32 records of {id, default, label}, count 32 at
+ * DAT_004F2BD8) is initialised .data, not built by a constructor -- the byte-pattern
+ * search for a store to it in .text correctly finds nothing, because it is never
+ * supposed to be stored by code. FUN_00466EF3 loads each record with
+ * `GetProfileInt("Preferences", "option <id>", <default>)`, so the value a run sees is
+ * the registry's if the key exists and the .data default otherwise. The dump reads the
+ * LIVE array, which is what the game is actually using, not the defaults.
+ *
+ * Nine NAMED scalars (worldLocation, seanceInProgress, enableMusic,
+ * enableEnvironmentalSounds, enableSFX, enableSoundCard, askForSkins, enableHowDoYou,
+ * eavesdropEnabled) are read the same way but have no array slot, so they are PORT-ONLY
+ * here: their value lives in the registry, not in the image. */
+static void dump_options(FILE *f)
+{
+    unsigned char *a = (unsigned char *)(g_base + (0x006840D0u - IMAGE_BASE));
+    int i;
+    for (i = 0; i < 33; i++) fprintf(f, "options.%d=%d\n", i, RDI(a, i * 4));
+}
+
+/* The front end's clickable regions, read straight out of the original.
+ *
+ * FUN_004056E7 (0x4056E7) is `AddHotspot`: it finds a free slot in the table at
+ * DAT_005339F8 and calls FUN_00405000 (0x405000), which fills one 0x2F-dword record.
+ * FUN_00405765 (0x405765) is the hit test the front end runs on every mouse-up: it
+ * walks the same table, skips records whose state word is not 1..2 or whose flag byte
+ * has bit 2 clear, and `PtInRect`s the RECT at record+0x1D dwords; on a hit it posts
+ * `(&DAT_00533a60)[i*0x2F]` the message `(&DAT_00533a64)[i*0x2F]` with wParam = i.
+ *
+ * This is the ONLY reliable way to get a click coordinate for the front end, and it is
+ * worth reading rather than inferring from the art for three reasons. The layout is
+ * computed from `GetClientRect` at the moment each state is entered, so the same
+ * button is at a different pixel after a resize; the label text is a heap string the
+ * hook can print, which names the button; and a `dump` of the table is a `front.*` key
+ * that the port can answer from its own hotspot list, which is the parity question that
+ * actually matters (same buttons, same rects, same order) rather than "a click
+ * somewhere in the middle looked right".
+ *
+ * Stride 0xBC bytes, 100 slots, bounds (&DAT_005339F8, &DAT_00538368). */
+#define VA_HOTSPOT      0x005339F8u
+#define HOTSPOT_STRIDE  0xBCu
+#define HOTSPOT_SLOTS   100
+#define HOTSPOT_RECT    0x74u   /* record + 0x1D dwords, per FUN_00405765 */
+/* Emit every live hotspot. `pfx` is the key prefix, so the same reader serves the
+ * `front` label and a diagnostic label. */
+static void dump_hotspots(FILE *f, const char *pfx)
+{
+    uintptr_t b = g_base;
+    unsigned char *t = (unsigned char *)(b + (VA_HOTSPOT - IMAGE_BASE));
+    int i, live = 0;
+    for (i = 0; i < HOTSPOT_SLOTS; i++) {
+        unsigned char *r = t + (size_t)i * HOTSPOT_STRIDE;
+        int state = *(int *)r;
+        int rect[4], flags, msg, target;
+        const char *label;
+        int k;
+        if (state < 1 || state > 2) continue;      /* FUN_00405765's own liveness test */
+        for (k = 0; k < 4; k++) rect[k] = *(int *)(r + HOTSPOT_RECT + 4 * k);
+        /* FUN_00405765 tests the byte at record+9 against 4, which is bit 10 of the
+         * dword at +0x08 -- the port's 0x400 "the entry is clickable".  Emitting the
+         * dword's whole low byte would report 4 for an entry that is not clickable. */
+        flags = *(int *)(r + 0x08) & 0x400;
+        label = *(const char **)(r + 0x14);
+        msg   = *(int *)(r + 0x6C);
+        target= *(int *)(r + 0x70);
+        if (rect[2] <= rect[0] || rect[3] <= rect[1]) continue;   /* an empty rect never hits */
+        fprintf(f, "%s.hotspot.%d.state=%d\n", pfx, i, state);
+        fprintf(f, "%s.hotspot.%d.rect=%d,%d,%d,%d\n", pfx, i,
+                rect[0], rect[1], rect[2], rect[3]);
+        fprintf(f, "%s.hotspot.%d.clickable=%d\n", pfx, i, flags ? 1 : 0);
+        fprintf(f, "%s.hotspot.%d.msg=%04X\n", pfx, i, (unsigned)msg);
+        fprintf(f, "%s.hotspot.%d.target=%d\n", pfx, i, target);
+        if (label) {
+            char buf[96];
+            int n = 0;
+            for (k = 0; k < 95 && label[k]; k++)
+                buf[n++] = (label[k] >= 32 && label[k] < 127) ? label[k] : '.';
+            buf[n] = 0;
+            fprintf(f, "%s.hotspot.%d.label=%s\n", pfx, i, buf);
+        }
+        if (++live >= 24) break;      /* bounded: a pathological table must not flood the file */
+    }
+    fprintf(f, "%s.hotspot_count=%d\n", pfx, live);
+    /* The client size the hotspot rects were laid out against.  Without it a rect
+     * that runs off the client cannot be told apart from a wrong one, and the front
+     * end recomputes every rect on entry, so a resize between entry and dump makes
+     * the stored rects stale -- which is exactly the case that has to be visible. */
+    if (g_main) {
+        RECT c;
+        GetClientRect(g_main, &c);
+        /* TWO keys, not one "WxH" pair: a single pair key aliases a width change into a
+         * height change -- the value differs either way, but the key does not say which,
+         * so a bisect has to go back to the live process to find out. FrontHero-2's
+         * front_dump emits client_w/client_h and the oracle matches it. */
+        fprintf(f, "%s.client_w=%ld\n", pfx, (long)(c.right - c.left));
+        fprintf(f, "%s.client_h=%ld\n", pfx, (long)(c.bottom - c.top));
+    }
+}
+/* The hero record's offset inside the 0x15C0170 block FUN_00426149 malloc'd:
+ * 0x1560A5C + (rand() % 0x3FFF & ~0xF), the draw taken at 0x426B94 and added into the
+ * table base at 0x426B9A. It is the one part of the record's address both sides can
+ * agree on, and because it is that rand() it pins WHERE in the boot LCG stream the
+ * record landed -- a mismatch here means the boot rand order diverged even when
+ * rng.calls happens to match. */
+static unsigned hero_base_offset(void)
+{
+    uintptr_t b = g_base;
+    unsigned char *blk = *(unsigned char **)(b + (0x004E486Cu - IMAGE_BASE));
+    unsigned char *rec = *(unsigned char **)(b + (0x0067FBF8u - IMAGE_BASE));
+    if (!blk || !rec) return 0;
+    /* The KEY is the rand() draw, not the offset from the malloc block. The block
+     * offset is that draw plus the constant 0x1560A5C, and the constant is fixed, so
+     * the two differ by 22417116 on every run -- which reads as a mismatch on a key
+     * that is in fact identical. The draw is also the only part the port can compute
+     * from its own RNG stream, which is the whole point: a difference here means the
+     * boot LCG diverged at draw 1409. Measured on a boot run: the block offset is
+     * 22417132 and the draw is 16, i.e. 22417132 - 0x1560A5C, and `rand() % 0x3FFF`
+     * returned 16 with the low 4 bits already clear. */
+    return (unsigned)(intptr_t)(rec - blk) - 0x1560A5Cu;
+}
+
 static void do_dump(const char *label)
 {
     char path[700];
@@ -1264,6 +1582,7 @@ static void do_dump(const char *label)
     unsigned char *hero;
     uintptr_t b = g_base;
     int i, live, is_hero = label_is(mod, "hero");
+    int is_clock = label_is(mod, "clock") || label_is(mod, "rng");
     wsprintfA(path, "%s\\%s.txt", g_outdir, label);
     f = fopen(path, "wb");
     if (!f) { tr("oracle: cannot write %s", path); return; }
@@ -1283,12 +1602,38 @@ static void do_dump(const char *label)
      * exactly one module on both sides, and putting clock.* in a `dump hero`
      * would make every hero label a mismatch over a key that is not the
      * hero's. */
-    if (label_is(mod, "clock") || label_is(mod, "rng")) {
+    if (is_clock) {
         fprintf(f, "clock.ms=%u\n", vnow());
         fprintf(f, "clock.time_s=%u\n", vtime_s());
         fprintf(f, "rng.state=%u\n", g_holdrand);
         fprintf(f, "rng.calls=%d\n", (int)g_rand_calls);
+        /* UNPREFIXED, because the port emits it: src/game_main.c's dump_builtin writes
+         * rng.srand_calls on the clock and rng labels. Emitting it as oracle.srand_calls
+         * instead made every one of those labels report "only in port" for a key the
+         * oracle has and simply misfiled. */
+        fprintf(f, "rng.srand_calls=%d\n", (int)g_srand_calls);
+        /* hero.base_offset is a property of the boot, not of the hero, and the port
+         * emits it on every label. Emitting it only under `dump hero` made it read as
+         * missing from the clock and rng labels. */
+        fprintf(f, "hero.base_offset=%u\n", hero_base_offset());
     }
+
+    /* --- the front end's clickable regions ---------------------------------
+     * Only on a `front` label. The hotspot table IS front-end state, but there is no
+     * `front` module in src/game_main.c's dump table, so emitting `front.*` on every
+     * label would add ~100 un-comparable keys to every other module's dump and bury the
+     * real differences. `front.*` is PORT-ONLY until the port grows a front_dump; the
+     * keys are what such a dump would answer, and cmp_dump.py lists the prefix as
+     * no-source rather than as a mismatch (docs/re/oracle.md 5.4.4). */
+    if (label_is(mod, "front")) dump_hotspots(f, "front");
+
+    /* --- the module read-outs, in the port's key vocabulary ---------------- */
+    if (label_is(mod, "map"))       dump_map(f);
+    if (label_is(mod, "battle"))    dump_battle(f);
+    if (label_is(mod, "items"))     dump_items(f);
+    if (label_is(mod, "panels"))    dump_items(f);   /* panels_dump calls items_dump */
+    if (label_is(mod, "minigame"))  dump_minigame(f);
+    if (label_is(mod, "options"))   dump_options(f);
 
     /* --- the hero record, in the port's spelling -------------------------- */
     if (is_hero) {
@@ -1332,15 +1677,14 @@ static void do_dump(const char *label)
          * that rand() draw it pins WHERE in the boot LCG stream the record landed --
          * a mismatch here means the boot rand order diverged even when rng.calls
          * happens to match.  Core is asked to emit it from the same expression. */
-        fprintf(f, "hero.base_offset=%u\n",
-                (unsigned)(intptr_t)(hero - *(unsigned char **)(b + (0x004E486Cu - IMAGE_BASE))));
+        fprintf(f, "hero.base_offset=%u\n", hero_base_offset());
 hero_done: ;
     }
 
     /* --- oracle-only: everything the port has no key for ------------------ */
     fprintf(f, "oracle.seq=%d\n", g_dump_seq++);
-    fprintf(f, "oracle.gate_stamp=%u\n",
-            *(volatile DWORD *)(b + (VA_GATE_STAMP - IMAGE_BASE)));
+    fprintf(f, "oracle.gate_stamp=%lu\n",
+            (unsigned long)*(volatile DWORD *)(b + (VA_GATE_STAMP - IMAGE_BASE)));
     fprintf(f, "oracle.steps=%ld\n", (long)g_steps);
     fprintf(f, "oracle.timers_live=%d\n", (live = timer_live_count(), live));
     fprintf(f, "oracle.next_deadline=%u\n", timer_next_deadline());
@@ -1387,6 +1731,14 @@ static void script_init(void);
 static int pump_step_inner(void);
 static volatile LONG g_pump_depth;
 static uint32_t g_last_gate = 0xFFFFFFFFu;
+/* the thread pump_step runs on -- the app's own -- recorded in script_init and used by
+ * the stall reporter, which must not guess: a Wine process has RPC and console helper
+ * threads whose EIP is in ntdll and says nothing about the app. */
+static volatile DWORD g_app_tid;
+/* set from WOS_STALL in script_init; declared here because the watchdog is defined after
+ * script_init and the flag belongs to the stall reporter, not to the script parser. */
+static volatile LONG stall_dump;
+/* forward: the stall reporter is defined after script_init, which is where it is set */
 
 /* Re-entrancy guard.  Everything pump_step does runs on the app's own thread inside a
  * message-pump call, and several of those calls (RedrawWindow with RDW_UPDATENOW,
@@ -1510,6 +1862,19 @@ static int pump_step_inner(void)
         Timer *t = &g_timers[i];
         if (t->live && !t->outstanding && t->deadline <= target) {
             t->outstanding = 1;
+            /* Log every WM_TIMER the harness actually delivers, with the id and the gap
+             * since the previous delivery of the SAME id. The question this answers is
+             * whether the original's timers run on their nominal period or at a rate set
+             * by how busy the app is: Oracle3's trace saw `WM_TIMER id 0x16` (the main
+             * frame's 100 ms timer) fire ONCE, at 1500 ms, in a whole run, which is not
+             * a 100 ms cadence. A timer that delivers on a period shows a constant gap
+             * here; a timer whose delivery is load-dependent does not, and no fixed
+             * period in the port can reproduce the second case. Bounded output: one line
+             * per delivery, and a run posts tens of thousands of messages but only
+             * hundreds of timers. */
+            tr("timer: delivered id=%u at=%u gap=%ld", (unsigned)t->id, vnow(),
+               (long)(vnow() - t->last_delivered));
+            t->last_delivered = vnow();
             PostMessageA(t->hwnd, WM_TIMER, (WPARAM)t->id, 0);
             return 1;
         }
@@ -1593,16 +1958,83 @@ static BOOL WINAPI hook_PeekMessageA(LPMSG m, HWND h, UINT a, UINT b, UINT rm)
 }
 
 static volatile LONG g_gets;
+/* WHY THE NEVER-BLOCK GUARD EXISTS, AND WHY IT HAS TO MATCH THE CALLER'S FILTER.
+ *
+ * The harness owns the virtual clock, and it only advances inside a hooked pump call.
+ * So if the app ever reaches a REAL blocking `GetMessage`, the clock freezes and the
+ * run hangs -- there is no thread left to move it.  The guard makes that impossible by
+ * ensuring a message is always available before the blocking call.
+ *
+ * The first version of the guard was wrong in a way that cost a whole debugging pass:
+ * it probed with `PeekMessage(&probe, NULL, 0, 0, PM_NOREMOVE)` -- every message to
+ * every window -- and, finding none, posted `WM_NULL` to the THREAD queue.  Both halves
+ * are wrong when the caller filters.  Measured with WOS_STALL=1: the app parked at
+ * `win32u+0x11248` (`NtUserGetMessage`) with the return address inside hook.dll, i.e.
+ * inside this very function, and the run stopped dead at 800 ms.  MFC's modal and
+ * menu-tracking loops call `GetMessage(&msg, hwnd, 0, 0)` for ONE window, so a thread
+ * message the caller's filter excludes is invisible to it, and the probe's "there is
+ * nothing" was reading a queue the caller does not look at.
+ *
+ * The fix is to make the guard ask the CALLER'S question.  Two things have to match:
+ * the window and the message range.  Probing with the caller's own hwnd/min/max is
+ * half of it; the other half is that the synthesised wake-up has to be a message the
+ * caller's filter actually accepts.  MFC's keyboard loops call
+ * `GetMessage(&msg, hwnd, WM_KEYFIRST, WM_KEYLAST)`, and WM_NULL (0) is BELOW
+ * WM_KEYFIRST (0x0100) -- so a guard that posts WM_NULL to a range-filtered caller is
+ * invisible to it, which is a second way to hang, and the first fix did not find it
+ * because the callers that hung had hwnd == NULL and no range.
+ *
+ * So the wake-up message is chosen from inside the caller's own [min,max] window: a
+ * message the filter accepts, and one no window procedure acts on by default.  For an
+ * unfiltered call (0,0) that is WM_NULL.  For a range that excludes it, WM_NULL is
+ * moved up to the range's low bound, which is a synthesised no-op the same way: the
+ * game never reads a message it did not post, and the alternative -- letting it block
+ * -- freezes the virtual clock and loses the whole run. */
+static UINT getmessage_wakeup_id(HWND h, UINT a, UINT b)
+{
+    UINT id = WM_NULL;
+    if (a > id) id = a;
+    if (b && id > b) id = b;          /* min>max is legal and matches nothing */
+    (void)h;
+    return id;
+}
+static BOOL getmessage_wakeup(HWND h, UINT a, UINT b)
+{
+    UINT id = getmessage_wakeup_id(h, a, b);
+    return h ? PostMessageA(h, id, 0, 0)
+             : PostThreadMessage(GetCurrentThreadId(), id, 0, 0);
+}
 static BOOL WINAPI hook_GetMessageA(LPMSG m, HWND h, UINT a, UINT b)
 {
     BOOL r;
     InterlockedIncrement(&g_gets);
-    tr("hook_GetMessageA: call %ld", (long)g_gets);
-    if (!pump_step()) {
+    if (InterlockedCompareExchange(&g_gets, 0, 0) < 8)
+        tr("hook_GetMessageA: call %ld hwnd=%p min=%04X max=%04X",
+           (long)g_gets, (void *)h, a, b);
+    /* THE PROBE IS THE AUTHORITY ON "IS THE QUEUE EMPTY", NOT pump_step's RETURN VALUE.
+     *
+     * The obvious guard -- "only probe if pump_step said it posted nothing" -- is
+     * wrong, and it is what hung this harness.  pump_step returns 1 for two different
+     * situations: it genuinely posted a message, and it ran an event that posts
+     * nothing.  `dump` is the second kind: it writes a file and calls RedrawWindow,
+     * which is a synchronous SendMessage and leaves the queue untouched.  So after a
+     * dump at t=800 the guard was skipped, the queue was empty, and
+     * real_GetMessageA slept forever -- the virtual clock stopped with it, because
+     * the clock only moves inside a pump call.  Measured with WOS_STALL=1: the app
+     * parked at win32u+0x11248 with the return address at hook.dll+0x248D, which is
+     * the instruction after this function's own real_GetMessageA call.
+     *
+     * So: pump, then ALWAYS probe with the caller's own filter, and wake only what the
+     * probe says is missing.  One extra PeekMessage per GetMessage is a rounding error
+     * against a run that posts hundreds of thousands of messages, and it removes the
+     * whole class of bug where the harness's idea of "did I post something" and
+     * user32's disagree. */
+    {
         MSG probe;
+        pump_step();
         memset(&probe, 0, sizeof probe);
-        if (!real_PeekMessageA(&probe, NULL, 0, 0, PM_NOREMOVE))
-            PostThreadMessage(GetCurrentThreadId(), WM_NULL, 0, 0);  /* never block */
+        if (!real_PeekMessageA(&probe, h, a, b, PM_NOREMOVE))
+            getmessage_wakeup(h, a, b);
     }
     r = real_GetMessageA(m, h, a, b);
     if (r) msglog(m, "Get", PM_REMOVE, r);
@@ -1653,6 +2085,18 @@ static void script_init(void)
         n = GetEnvironmentVariableA("WOS_WINTREE_MS", g_scratch, sizeof g_scratch);
         wintree_at = (n && n < sizeof g_scratch) ? (uint32_t)atol(g_scratch) : 0u;
     }
+    n = GetEnvironmentVariableA("WOS_STALL", g_scratch, sizeof g_scratch);
+    if (n && n < sizeof g_scratch) stall_dump = atol(g_scratch);
+    /* Force the client to 640x480 BEFORE the front end lays itself out, not lazily on
+     * the first click.  The front end computes every hotspot rect from `GetClientRect`
+     * when a state is entered (FUN_00405153: pixel = per_mille * client / 1000), so a
+     * resize that lands after that leaves every stored rect describing a client area
+     * that no longer exists -- and a click coordinate derived from such a rect is off
+     * screen.  Measured: with the resize deferred to the first input, "Play now" was
+     * registered at rect (-269,397)-(282,606), i.e. 126 px below a 480-tall client,
+     * and was unreachable.  Both sides must be at 640x480 before the first state. */
+    ensure_main();
+    if (!g_app_tid) g_app_tid = GetCurrentThreadId();
     if (!parse_script(v)) { tr("script_init: FATAL parse failed"); return; }
     tr("script_init: parsed %d events, end=%u", g_nev, g_end_ms);
     InterlockedExchange(&g_ready, 1);
@@ -2026,6 +2470,69 @@ static int pump_next_event(void)
     for (i = 0; i < g_nev; i++) if (!g_ev[i].done) return i;
     return -1;
 }
+/* `WOS_STALL=1`: when the pump counters stop moving, say where the app is parked.
+ *
+ * The counters alone cannot distinguish "the app is blocked in a real GetMessage with
+ * an empty queue" from "the app is inside a long operation" from "the app crashed into
+ * a modal box the hook does not own", and those need three different fixes.  So the
+ * watchdog suspends the main thread, reads its context, and logs the EIP plus a bounded
+ * EBP-chain walk of return addresses.  `DbgBreakPoint` is not used and no debugger is
+ * attached, so the suspend is brief and the process resumes exactly where it was. */
+static void stall_report(void)
+{
+    HANDLE t;
+    CONTEXT ctx;
+    DWORD want = g_app_tid;
+    int k;
+    /* g_app_tid, not "the first thread that is not me": a Wine process has RPC and
+     * console helper threads whose EIP sits in ntdll, and reporting one of those says
+     * nothing about the app.  The app's own thread is recorded the first time the
+     * script parser runs, which is by definition the thread that drives the pump. */
+    if (!want) { tr("stall: g_app_tid not recorded yet"); return; }
+    {
+        DWORD_PTR fs;
+        t = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+                       THREAD_QUERY_INFORMATION, FALSE, want);
+        if (!t) { tr("stall: OpenThread(%lu) failed %lu", want, (DWORD)GetLastError()); return; }
+        SuspendThread(t);
+        memset(&ctx, 0, sizeof ctx);
+        ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        if (!GetThreadContext(t, &ctx)) {
+            tr("stall: GetThreadContext failed %lu", (DWORD)GetLastError());
+            ResumeThread(t); CloseHandle(t); return;
+        }
+        tr("stall: tid=%lu eip=%08lX ebp=%08lX esp=%08lX",
+           want, (unsigned long)ctx.Eip, (unsigned long)ctx.Ebp, (unsigned long)ctx.Esp);
+        /* the return-address chain, bounded: 6 frames is enough to name the call path
+         * and cannot walk off a stack that is nearly exhausted */
+        fs = (DWORD_PTR)ctx.Ebp;
+        for (k = 0; k < 6; k++) {
+            DWORD prev, ret;
+            /* No SEH: this is built with -fno-exceptions and no __try support, so the
+             * frame pointer is validated by hand instead.  A plausible EBP is one that
+             * is above the stack pointer, below the top of the thread's committed stack,
+             * and monotonically increasing as the chain is walked -- which is exactly
+             * the condition that a corrupted chain would violate. */
+            if (fs < (DWORD_PTR)ctx.Esp || fs > (DWORD_PTR)ctx.Esp + 0x200000u) {
+                tr("stall:   frame %d: ebp %08lX out of range (esp %08lX)",
+                   k, (unsigned long)fs, (unsigned long)ctx.Esp);
+                break;
+            }
+            prev = *(DWORD *)fs;
+            ret  = *(DWORD *)(fs + 4);
+            tr("stall:   frame %d ret=%08lX prev=%08lX", k, (unsigned long)ret,
+               (unsigned long)prev);
+            if (ret < 0x00400000u || ret > 0x00500000u) {
+                tr("stall:   (left Souls.exe: .text)");
+                break;
+            }
+            if (prev <= fs) break;
+            fs = prev;
+        }
+        ResumeThread(t);
+        CloseHandle(t);
+    }
+}
 static DWORD WINAPI watchdog_thread(LPVOID unused)
 {
     (void)unused;
@@ -2035,11 +2542,22 @@ static DWORD WINAPI watchdog_thread(LPVOID unused)
      * diagnostic that can deadlock the thing it measures is not a diagnostic. */
     Sleep(4000);                       /* let DllMain return and the game start */
     for (;;) {
+        LONG last;
         Sleep(3000);
+        last = InterlockedCompareExchange(&g_steps, 0, 0);
         tr("watch: steps=%ld peeks=%ld gets=%ld modal=%d ready=%ld finished=%d "
            "rng=%ld ticks=%u next_in=%d",
            (long)g_steps, (long)g_peeks, (long)g_gets, g_modal_depth,
            (long)g_ready, g_finished, (long)g_rand_calls, vnow(), pump_next_event());
+        /* A stall is the one failure the counters cannot explain.  `steps` not moving
+         * means the app is no longer calling any hooked pump entry point, and the only
+         * way to say WHERE it is parked is to read its context.  The main thread's EIP
+         * is mapped back through the image base to a VA in Souls.exe, and a bounded
+         * EBP-chain walk gives the callers above it, which is enough to name the
+         * function without a symbol server.  Off unless WOS_STALL=1: suspending the
+         * app's own thread changes the run's timing, so it must be a deliberate act. */
+        if (stall_dump && last == InterlockedCompareExchange(&g_steps, 0, 0))
+            stall_report();
     }
     return 0;
 }
@@ -2179,6 +2697,27 @@ static void install_detours(void)
     }
 
     if (grp("wall")) {
+    /* Sleep is VIRTUAL. The harness owns the clock, so a `Sleep(n)` that really slept
+     * for n milliseconds of wall time would do two things at once: make the run's
+     * duration depend on the host, and let the app sit in a wait the harness cannot
+     * observe or advance. The original's worst offender is FUN_0046831C (0x46831C),
+     * the MCI audio shutdown, which after `mciSendStringA("close song")` waits
+     *
+     *     while (DAT_004f416c != 0 && GetTickCount() - t0 < 3000) Sleep(100);
+     *
+     * Under Wine the MCI close FAILS (oracle.md 1.1), so DAT_004f416c is set and
+     * nothing ever clears it, and the loop runs the full three seconds of REAL time.
+     * Measured: a 3400 ms script took 84 s of wall clock and stopped at virtual 1740 ms,
+     * parked in ntdll with the return address at Souls.exe 0x4683CF.
+     *
+     * Advancing the virtual clock by n and returning immediately is the same answer the
+     * original gets on a machine where the MCI device closes properly (the loop exits
+     * after one or two 100 ms sleeps), and it keeps the run deterministic: the number of
+     * Sleep calls is fixed by the code path, so the clock advance is too. Sleep(0) is
+     * left alone -- it is a yield, not a wait, and yielding is how the app lets the
+     * message queue drain. */
+    DETOUR("kernel32.dll", "Sleep",           hook_Sleep);
+
     DETOUR("kernel32.dll", "GetSystemTime",  hook_GetSystemTime);
         DETOUR("kernel32.dll", "GetLocalTime",   hook_GetLocalTime);
     }

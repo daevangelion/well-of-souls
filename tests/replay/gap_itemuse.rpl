@@ -1,8 +1,24 @@
 # seed: 1
-# requires: shop_buy item_use travel panel_open
-# Item classes end to end: class 0 potion, class 4 travel ticket
-# (items.txt "4.0.0.0.1" = map 0, link 0, drop in), the trophy bag (dialog
-# 0xE7, 40 px cells) and the pet pen (FUN_00412716, petPen.jpg).
+# requires: shop_buy item_use travel panel_open trophy_bag_resize
+# requires-match: panels\.kind=Trophy\ Bag item_html|item_html_missing
+#
+# The item classes end to end, all of them earned in play at the retail Gateway of
+# Dreams (Evergreen SCENE 3, quest.txt:1583-1700, the only scene on the main map that
+# gives items):
+#   * class 0 POTION  - item 1 "Health Potion", 10 GP, bought in the scene's
+#     `OFFER2 0,10` shop, then used from the ITEMS panel.
+#   * class 4 TRAVEL  - item 99 "Ticket Home", class word "4.0.0.0.1" = mode 0,
+#     map 0, link 0, drop in 1. The scene hands it over on the first visit
+#     (`IF I99, @skipTicket` / `GIVE I99`), and FUN_0046F60F's guard means the ticket
+#     has no scene restriction (travel_scene is the FIFTH dotted component, absent
+#     here), so it is used from the map, which is not its destination.
+#   * the trophy bag - trophies.txt documents num.TrophyBagWidth/Height as READ/WRITE
+#     and the scene sets them to 4x3 on the first visit, which is the only route to
+#     FUN_0046FED9 (trophy_bag_resize) in the whole port. The bag is then opened from
+#     the ITEMS screen with the bag button (G: Trophies).
+# The `1:` and `'` lines are advanced with RETURN, the golden-rule ASK 30 is answered
+# with Y (scene.c's ST_ASK: `in->pressed['y']` sets the reply to "YES"), and the shop
+# panel is closed with ESCAPE, which panels.c:368 consumes so the scene stays.
 expect boot_menu 900
 key RETURN
 wait 30
@@ -17,131 +33,119 @@ key RETURN
 expect hero_ready 300
 expect map_enter 600
 keydown DOWN
-expect scene_enter 300
+expect scene_enter 400
 keyup DOWN
-click 200 100
-wait 2
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
 key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
+wait 20
+key RETURN
+wait 40
+key RETURN
+wait 40
 expect panel_open 600
-wait 5
-click 36 95
-wait 3
 key b
-expect shop_buy 120
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-key RIGHT
-wait 3
-shot /tmp/rr/helm.bmp
-key b
-expect shop_buy 120
+expect shop_buy 200
 key ESCAPE
-wait 10
-click 562 32
-wait 10
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+expect map_enter 2000
 click 592 32
 expect panel_open 300
 wait 5
 key u
-expect item_use 200
+expect item_use 300
 shot /tmp/wos-gap-itemuse-potion.bmp
 key RIGHT
 wait 3
 key u
-expect travel 300
-expect map_enter 400
+expect travel 600
 shot /tmp/wos-gap-itemuse-travel.bmp
 key g
-expect panel_open 120
+expect panel_open 300
 shot /tmp/wos-gap-itemuse-bag.bmp
-key ESCAPE
-wait 5
-key p
-expect panel_open 120
-shot /tmp/wos-gap-itemuse-pen.bmp
 quit

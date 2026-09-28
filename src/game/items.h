@@ -3,7 +3,7 @@
  * Evidence (all VAs are Ghidra VAs in extracted/Souls.exe, ImageBase 0x400000):
  *   items.txt row layout            FUN_00482FC1  (arg2 class at record +0x88)
  *   item apply ("use")              FUN_004A6353
- *   disease cure                     FUN_004A6B55
+ *   disease cure                     FUN_004A6B55, on the COMBATANT record
  *   ailment get                      FUN_004A6A6A
  *   item requirements                FUN_0040D6B4
  *   item carry limit                 FUN_00403349
@@ -134,10 +134,39 @@ typedef struct {
      * Cost: 10 ctors + 5 sets = 10*4 + 5*4 = 60 crt_rand(). */
     EncInt str, sta, agi, dex, wis;
     int level, hp, max_hp;        /* plain: set outside the sealed block */
+    /* ---- the pen record fields FUN_004142F2 reads and writes (offsets in the
+     * 0x608 per-slot record at DAT_00538C40; see docs/re/boot_flow.md 3). ---- */
+    int state;                    /* +0x000  0 none, 1 idle, 2 fought, 3 battled, 4+ */
+    char name[40];                /* +0x008 */
+    int away_a;                   /* +0x228  pending-away counter A */
+    int away_b;                   /* +0x22C  pending-away counter B */
+    /* The five rec[0x10B..0x10F] ability seals FUN_00414059 writes, in its order. */
+    EncInt abil[5];
+    int spawn_offense, spawn_defense, spawn_xp, spawn_mp, spawn_max_mp;
+    int seen_key;                 /* +0x230  FUN_004142D8(monster_id) at first sight */
+    int fatigue;                  /* +0x0D4  counts up to 1000000 */
+    int out_timer;                /* +0x0D8  FUN_00410B1A, clamp 0..2000000 */
+    int call_timer;               /* +0x0E8  FUN_00410B42, clamp 0..1000000 */
     int owner_class;              /* 0x224, the class that owns the pen slot */
     int token;                    /* 0x228, negative hero serial by default */
     int flags;
 } Pet;
+
+/* FUN_004142F2: the pet call/recall trigger. mode is PET_CALL / PET_RECALL /
+ * PET_RELEASE; the return is the original's -1 on refusal, else the index of
+ * the combatant the pet ended up in. */
+enum { PET_CALL = 0, PET_RECALL = 1, PET_RELEASE = 2 };
+int  pet_trigger(int mode);
+/* FUN_00413DE7: 1 when the pet is already in a fight (so it can be recalled)
+ * and the reason string when it is not. */
+int  pet_state_message(char *out, size_t cap, int *out_state, int *in_combat);
+/* FUN_00410B1A / FUN_00410B42: the two pen countdowns. */
+void pet_tick_out(int amount);
+void pet_tick_call(int amount);
+#define PET_TIMER_OUT_MAX  2000000   /* FUN_00410B1A */
+#define PET_TIMER_CALL_MAX 1000000   /* FUN_00410B42 */
+#define PET_CALL_LEAD       200000   /* FUN_00410B42(pen, 200000) at call time */
+#define PET_FATIGUE_MAX     1000000
 
 int  pet_count(void);
 Pet *pet_at(int index);

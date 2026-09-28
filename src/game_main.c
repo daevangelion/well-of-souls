@@ -1,5 +1,6 @@
 #include "game_main.h"
 #include "platform/platform.h"
+#include "engine/boot.h"
 #include "engine/clock.h"
 #include "engine/dscript.h"
 #include "engine/dump.h"
@@ -29,6 +30,7 @@ __attribute__((weak)) void scene_tick(void);
 __attribute__((weak)) int front_dialog_op(int dialog_id, const char *const *kv, int n, int ok);
 #include "game/options.h"
 #include "game/sched.h"
+#include "game/scene.h"
 static void scene_tick_if_any(void) { if (scene_tick) scene_tick(); }
 #include <errno.h>
 #include <stdlib.h>
@@ -51,7 +53,19 @@ void game_request_quit(void) { quitting = 1; }
 typedef void (*DumpFn)(DumpEmit, void *);
 #define WOS_DUMP(n) extern void n##_dump(DumpEmit, void *);
 WOS_DUMP(hero) WOS_DUMP(map) WOS_DUMP(scene) WOS_DUMP(battle)
-WOS_DUMP(panels) WOS_DUMP(items) WOS_DUMP(minigame) WOS_DUMP(options) WOS_DUMP(world)
+WOS_DUMP(panels) WOS_DUMP(items) WOS_DUMP(missions) WOS_DUMP(minigame)
+WOS_DUMP(options) WOS_DUMP(world) WOS_DUMP(front) WOS_DUMP(chat)
+WOS_DUMP(editors)
+WOS_DUMP(html)
+WOS_DUMP(pet)
+WOS_DUMP(minigame_asteroids)
+WOS_DUMP(minigame_blackjack)
+WOS_DUMP(minigame_pi)
+WOS_DUMP(minigame_racer)
+WOS_DUMP(minigame_slots)
+WOS_DUMP(minigame_stocks)
+WOS_DUMP(minigame_tetris)
+WOS_DUMP(minigame_train)
 #undef WOS_DUMP
 #define WOS_WEAK __attribute__((weak))
 WOS_WEAK void hero_dump(DumpEmit e, void *u) { (void)e; (void)u; }
@@ -60,9 +74,23 @@ WOS_WEAK void scene_dump(DumpEmit e, void *u) { (void)e; (void)u; }
 WOS_WEAK void battle_dump(DumpEmit e, void *u) { (void)e; (void)u; }
 WOS_WEAK void panels_dump(DumpEmit e, void *u) { (void)e; (void)u; }
 WOS_WEAK void items_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void missions_dump(DumpEmit e, void *u) { (void)e; (void)u; }
 WOS_WEAK void minigame_dump(DumpEmit e, void *u) { (void)e; (void)u; }
 WOS_WEAK void options_dump(DumpEmit e, void *u) { (void)e; (void)u; }
 WOS_WEAK void world_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void front_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void chat_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void editors_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void html_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void pet_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void minigame_asteroids_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void minigame_blackjack_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void minigame_pi_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void minigame_racer_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void minigame_slots_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void minigame_stocks_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void minigame_tetris_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void minigame_train_dump(DumpEmit e, void *u) { (void)e; (void)u; }
 
 typedef struct { const char *label; DumpFn fn; } DumpEntry;
 static const DumpEntry dump_table[] = {
@@ -74,9 +102,22 @@ static const DumpEntry dump_table[] = {
     { "battle", battle_dump },
     { "panels", panels_dump },
     { "items",  items_dump },
+    { "missions", missions_dump },
     { "minigame", minigame_dump },
     { "options", options_dump },
-    { "world",   world_dump }
+    { "world",   world_dump },
+    { "chat", chat_dump },
+    { "editors", editors_dump },
+    { "html", html_dump },
+    { "pet", pet_dump },
+    { "minigame_asteroids", minigame_asteroids_dump },
+    { "minigame_blackjack", minigame_blackjack_dump },
+    { "minigame_pi", minigame_pi_dump },
+    { "minigame_racer", minigame_racer_dump },
+    { "minigame_slots", minigame_slots_dump },
+    { "minigame_stocks", minigame_stocks_dump },
+    { "minigame_tetris", minigame_tetris_dump },
+    { "minigame_train", minigame_train_dump },
 };
 #define DUMP_ENTRIES ((int)(sizeof(dump_table) / sizeof(dump_table[0])))
 
@@ -93,6 +134,8 @@ static void dump_builtin(DumpEmit emit, void *user)
     emit("rng.calls", buf, user);
     snprintf(buf, sizeof(buf), "%llu", (unsigned long long)crt_srand_calls());
     emit("rng.srand_calls", buf, user);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)crt_boot_base_offset());
+    emit("hero.base_offset", buf, user);
 }
 
 static void dump_emit_file(const char *key, const char *value, void *user)
@@ -207,7 +250,13 @@ static void seed_crt(uint32_t pin, int have_pin)
 {
     uint32_t t = have_pin ? pin : clock_time_s();
     crt_srand(t);
-    (void)crt_rand();
+    /* The one draw between the two boot seeds. It places the hero block, so the
+     * value is kept rather than discarded: DAT_004E4870 = (this & 0x3FFF & ~15) + block,
+     * and DAT_0067FBF8 = DAT_004E4870 + 0x1560A5C. See rng.h for the derivation. */
+    {
+        int draw = crt_rand();
+        crt_boot_base_offset_set((uint32_t)(draw & 0x3fff) & ~0xfu);
+    }
     t = have_pin ? pin : clock_time_s();
     crt_srand(t);
     wos_log_event("rng_seeded", "seed=%lu", (unsigned long)t);
@@ -486,16 +535,21 @@ int game_main(int argc, char **argv)
     if(have_epoch) clock_set_time_base(epoch);
     seed_crt(seed,have_seed);
     options_load();
-    /* FUN_00456C51's four appends and FUN_0042B4E0's mixer both run in offline solo
-     * play, so the port has them: four crt_rand() from the table, and the mixer's
-     * five-per-iteration fold. The order between them is the original's, which is
-     * FUN_004096E7 (the mixer) relative to the first FUN_00456D2F -- not yet
-     * established; see docs/re/timing.md section 8.2b. */
-    sched_boot();
-    srn_mix();
     if (!clock_date_check(clock_time_s())) {
         /* The original blocks here on a modal MessageBoxA and then continues into the
          * same init path, so the port shows the same box and does the same. */
+        clock_box_modal(&fb);
+    }
+    /* The boot sequence, in the original's CRT initialiser order. seed_crt() above
+     * already took the two srand calls and the base-offset draw that
+     * FUN_004269AF does as a static initialiser (index 0, i.e. before the table);
+     * this runs the _initterm steps, table A first. */
+    boot_register_core();
+    scene_boot_register();
+    boot_run();
+    if (!clock_date_check(clock_time_s())) {
+        /* The original blocks here on a modal MessageBoxA and then continues into
+         * the same init path, so the port shows the same box and does the same. */
         clock_box_modal(&fb);
     }
     /* FUN_00428360, the main frame's id-0x16 100 ms timer, armed at the original's
