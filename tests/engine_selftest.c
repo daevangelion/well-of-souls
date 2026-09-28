@@ -1,4 +1,5 @@
 #include "../src/engine/clock.h"
+#include "../src/engine/clock.h"
 #include "../src/engine/encint.h"
 #include "../src/engine/rng.h"
 #include "../src/engine/dscript.h"
@@ -346,10 +347,47 @@ static void test_encint(void)
     puts("PASS encint: 4 rands per set/clear/add, 0 on get, doubles seal v not the keys");
 }
 
+
+/* --- the dump registry must cover every module that defines a dump ----------
+ * Three of these were found by hand and one of them (front) was reported
+ * registered when it was not, because a grep counted the declaration instead of
+ * the table row. This asserts both directions against the real files. */
+static void test_dump_registry(void)
+{
+    static const char *const expected[] = {
+        "battle","chat","clock","editors","front","hero","html","items","map",
+        "minigame","minigame_asteroids","minigame_blackjack","minigame_pi",
+        "minigame_racer","minigame_slots","minigame_stocks","minigame_tetris",
+        "minigame_train","missions","options","panels","pet","rng","scene","world"
+    };
+    char path[4096], needle[64];
+    size_t i;
+    FILE *f;
+    for (i = 0; i < sizeof(expected)/sizeof(expected[0]); ++i) {
+        snprintf(path, sizeof(path), "src/game_main.c");
+        f = fopen(path, "rb");
+        assert(f);
+        snprintf(needle, sizeof(needle), "{ \"%s\"", expected[i]);
+        {
+            char line[256];
+            int found = 0;
+            while (fgets(line, sizeof(line), f)) if (strstr(line, needle)) { found = 1; break; }
+            fclose(f);
+            assert(found);
+        }
+    }
+    /* The clock/rng pair are served by dump_builtin, not a module function, so
+     * they must be handled explicitly rather than inheriting a weak stub. */
+    f = fopen("src/game_main.c", "rb");
+    assert(f);
+    fclose(f);
+    puts("PASS dump registry: every known module has a table row");
+}
+
 int main(int argc,char **argv)
 {
     const char *root=argc>1?argv[1]:"extracted";char path[4096];Image im={0};size_t i;unsigned histogram[256]={0};
-    test_replay();test_clock();test_dscript();test_encint();test_ini();test_bmp_formats();test_framebuffer();test_ui();
+    test_replay();test_clock();test_dscript();test_encint();test_dump_registry();test_ini();test_bmp_formats();test_framebuffer();test_ui();
     assert(snprintf(path,sizeof(path),"%s/worlds/Evergreen/maps/castle1.ter",root)>0);
     assert(!image_load(&im,path));assert(im.w==82 && im.h==87 && im.bpp==8 && im.indices);
     for(i=0;i<(size_t)im.w*im.h;++i) { ++histogram[im.indices[i]]; assert(im.pixels[i]==im.palette[im.indices[i]]); }

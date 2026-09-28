@@ -52,14 +52,22 @@
 #   EVT link_used map=0 link=9 / EVT link_used map=2 link=3 / EVT scene_enter scene=1005 /
 #   EVT minigame_arm game=1 label=' Try your luck! /
 #   EVT minigame_slots_open spins=0 won=0 bet=0 / EVT minigame_open game=1 ok=1 /
-#   EVT minigame_slots_spin ok=1 bet=10 gold=492 /
-#   EVT minigame_slots_result matches=3 symbol=7 pay=100 gold=592 /
+#   EVT minigame_slots_spin ok=1 bet=10 gold=497 /
+#   EVT minigame_slots_result matches=1 symbol=2 pay=0 gold=497 /
 #   EVT minigame_disarm game=0
+# The eleven `key a` presses in the opening encounter are load-bearing: the walk out of
+# the Gateway rolls a distance-44 Green Jelly that survives the first 10-damage hit, so
+# the hero needs a second committed action to win. One press is not enough.
 # The SPIN click works because scene.c:1364 hands minigame_click the port's left-button
 # bit `(in->mouse_pressed&(1u<<1))`, the same mask `hit()` uses for the armed GAME slot at
 # 1379 - the slot-6 dispatch that arms the button and the dialog control that spends it
 # are now the same device bit.
 expect boot_menu 900
+# FUN_00402A73's Terms of Service modal opens on entry to the main menu (front.c:534
+# tos_gate, consumed at front.c:770) and swallows the next key. "I Accept" is
+# tos_accept = (356,371,75,23), so its centre is (393,382).
+click 393 382
+expect tos_accept 300
 key RETURN
 wait 30
 key RETURN
@@ -146,7 +154,27 @@ expect map_enter 2000
 click 19 40
 expect battle_start 4000
 key a
-wait 60
+wait 30
+key a
+wait 30
+key a
+wait 30
+key a
+wait 30
+key a
+wait 30
+key a
+wait 30
+key a
+wait 30
+key a
+wait 30
+key a
+wait 30
+key a
+wait 30
+key a
+wait 30
 expect battle_won 4000
 expect map_enter 4000
 # (151,275) is map 0 link 9, eleven units south of where the fight left the hero.

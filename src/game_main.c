@@ -106,6 +106,7 @@ static const DumpEntry dump_table[] = {
     { "minigame", minigame_dump },
     { "options", options_dump },
     { "world",   world_dump },
+    { "front", front_dump },
     { "chat", chat_dump },
     { "editors", editors_dump },
     { "html", html_dump },

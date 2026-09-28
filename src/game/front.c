@@ -857,15 +857,31 @@ static void front_update(const Input *in)
          *        else { FUN_0041D374(); FUN_00429C9C("MainMenu.wav"); }
          *    0x46F's only posters are the REGISTRATION dialog's DoModal path
          *    (all.c:7308, 7325, 7336 in FUN_0040930D), wParam 1/2/3/4 for
-         *    ok/retry/needs-serial/gold. I reasoned that solo therefore returns
-         *    0 and bounces to state 1 -- ORACLE4'S MEASUREMENT REFUTES THAT: the
-         *    state stayed 2, so 0x46F did NOT return 0 and the else branch ran,
-         *    which means the game considers a world loaded at that point in an
-         *    offline run. That is an upstream fact about solo boot nobody has
-         *    chased yet, and it may be the missing route.
+         *    ok/retry/needs-serial/gold. Read literally, solo returns 0 here and
+         *    FUN_0041F699 bounces to state 1 -- but the measured state is 2, and
+         *    Oracle4's WOS_MSGLOG trace shows WHY that reading fails: FUN_0041D374
+         *    (the "--- Scanning ---" label, all.c:16956) was NOT called, so the
+         *    else branch did not run, so 0x46F DID return 0. So 0x46F returned 0
+         *    AND the state is 2, which cannot both follow from FUN_0041F699.
+         *    The likely conclusion is that FUN_0041F699 is not the handler the
+         *    0x46B entry actually reaches: that entry is at 0x4C8A20 and its pfn
+         *    0x424BB3 disassembles to `call 0x4C4E08; ret 0xC`, an MFC dispatcher
+         *    thunk rather than a state-changing handler. Unresolved, and the
+         *    next thing to look at.
+         *  - What is SOLID, all measured, and is the whole of what we know:
+         *    the original stays at front_state 2 for nine seconds after Play now;
+         *    clicks at 240/200/300/400, RETURN, ESC, SPACE and idle do nothing;
+         *    0x046B is posted three times and its LBUTTONDOWN reaches the front
+         *    view (6 of 6 hits, hwnd 0001007A), so the click path is intact and
+         *    the TOS modal was the blocker; and the state-2 hotspot table holds
+         *    only the non-clickable "Where Do You Want To Play Today?" label
+         *    with no Scanning entry.
          *  - The online route is MFC WM_COMMAND via a message map, not a switch,
          *    so it does not appear as a comparison in the decomp and I have not
-         *    decoded it.
+         *    decoded it. I have NOT been able to find the state 2 -> 3 route by
+         *    reading, and I stopped guessing: the decomp is authoritative about
+         *    the code and silent about which state the code reaches, so this can
+         *    only be settled by running the original.
          *
          * WHY THE PORT ADVANCES ANYWAY: the original's behaviour here is to park,
          * and a front end that cannot leave state 2 is unreachable for every

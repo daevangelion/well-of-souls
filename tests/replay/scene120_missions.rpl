@@ -30,6 +30,11 @@
 # requires: map_enter missions_loaded missions_offer scene_enter
 # requires-match: scene_enter scene=120 scene_op .*op=MISSIONS
 expect boot_menu 900
+# FUN_00402A73's Terms of Service modal opens on entry to the main menu (front.c:534
+# tos_gate, consumed at front.c:770) and swallows the next key. "I Accept" is
+# tos_accept = (356,371,75,23), so its centre is (393,382).
+click 393 382
+expect tos_accept 300
 key RETURN
 wait 30
 key RETURN

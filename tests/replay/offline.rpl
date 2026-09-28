@@ -2,6 +2,11 @@
 # Title -> main menu (boot_menu), Play now -> world list, Evergreen -> the Well,
 # N = New Soul, type the name, RETURN = OK (hero_ready) -> incarnate on map 0 (map_enter).
 expect boot_menu 900
+# FUN_00402A73's Terms of Service modal opens on entry to the main menu (front.c:534
+# tos_gate, consumed at front.c:770) and swallows the next key. "I Accept" is
+# tos_accept = (356,371,75,23), so its centre is (393,382).
+click 393 382
+expect tos_accept 300
 key RETURN
 wait 30
 # FUN_0041B891's own table (all.c:21078) has THREE states before the Well, not two:

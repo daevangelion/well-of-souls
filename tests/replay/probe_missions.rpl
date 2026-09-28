@@ -3,6 +3,12 @@
 # script arms the Missions button with `MISSIONS 1,2,3` (opcode 0x4A) and then suspends in
 # `HTML probe.htm` (opcode 0x29, scene state 10).
 expect boot_menu 900
+# FUN_00402A73's Terms of Service modal opens on entry to the main menu (front.c:534
+# tos_gate, consumed at front.c:770) and swallows the next key. "I Accept" is
+# tos_accept = (356,371,75,23), so its centre is (393,382). This replay runs against
+# tests/probeworld, which ships no tos.rtf, so tos_gate() returns 1 and the modal never
+# opens - hence the click with no `expect tos_accept` (tos_prompt is simply absent).
+click 393 382
 key RETURN
 wait 30
 key RETURN

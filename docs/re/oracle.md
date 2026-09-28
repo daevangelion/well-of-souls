@@ -827,16 +827,24 @@ constant, so the port's per-window draws have no counterpart to be tuned towards
   **THE TERMS OF SERVICE DIALOG IS WHAT WAS COVERING THE MENU, and dismissing it is what
   unblocked the main menu.** A *separate top-level* window, not a child: class `#32770`, caption
   "Terms of Service", at screen (244,174)-(664,555), with `Button "I Accept"` at main-client
-  (356,371)-(431,394) and `Button "Cancel"` at (442,371)-(517,394). It appears a second or two
-  after the menu is entered — after the first two front-end dumps, so a script that dumps early
-  never sees it — and it covers the point "Play now" is drawn at. `WindowFromPoint` finds it
+  (356,371)-(431,394) and `Button "Cancel"` at (442,371)-(517,394). **The modal is raised
+  SYNCHRONOUSLY**: `FUN_0041B891` case 1 calls `FUN_00402A73("tos.rtf", 0)` in the same switch arm
+  that calls `FUN_0041D155` and `FUN_00429C9C("MainMenu.wav")` (all.c:21092), and `CDialog::DoModal`
+  blocks there — so it is up on the same frame the menu is entered, before the menu's first paint.
+  An earlier note here said it "appears ~1.4 s after the menu is entered and is gone by ~1.8 s";
+  that was MY SAMPLING GRID, not the original's behaviour, and as a timing specification it would
+  have a script written to click inside a window that does not exist. What the trace actually
+  shows is that it is a **modal**: it is present for every dump after the menu is entered, and
+  the click aimed at "Play now" lands on it at any time it is up. FrontHero-2's port raises it
+  immediately on entering the menu, which is the decomp's behaviour. `WindowFromPoint` finds it
   and real hit-testing delivers to it, so the click never reached the front view: measured with
   `WOS_MSGLOG=1`, the click at (215,141) was delivered to `hwnd 000203AC`/`000203AA`, class
   `RICHEDIT` text "TERMS OF SERVICE", and `0x046B` — the message `FUN_00405765` posts for
   "Play now" — was posted **zero** times in the whole run.
 
   With `click 393 382` ("I Accept") before the "Play now" click, the front state goes **1 → 2**,
-  verified. "Cancel" does not: it leaves the front end stuck with no dumps at all.
+  verified. "Cancel" does not: it leaves the front end stuck with no dumps at all, because the
+  caller posts `0x46E` and `WM_CLOSE` on a decline — declining quits rather than returning.
   `WOS_WINTREE=1` now enumerates top-level windows as well as the main window's children,
   precisely because a top-level window covering the client is invisible to a child-only walk and
   steals clicks.
@@ -847,16 +855,31 @@ constant, so the port's per-window draws have no counterpart to be tuned towards
   **HWND** at record+0x68, which was the one field it did not emit — an earlier version read
   record+0x70 and called it "target", which is the lParam and is 0 for every entry.
 
-  **State 2 does NOT bounce back to 1 — it persists.** Measured with the TOS accepted and then
-  "Play now" clicked, with no other input: `front_state` is 2 at t=1000, 2000, 5000 and 9000
-  after the click. This settles a live question rather than leaving it open, and it contradicts
-  the reading that `FUN_0041F699` returns to state 1 when `SendMessageA(frame, 0x46F)` answers 0
-  because no world is registered in solo. State 2 persisting means **0x46F answered non-zero** —
-  the game considers a world loaded at that point in an offline run — so the `else` branch ran
-  (`FUN_0041D374()` + `FUN_00429C9C("MainMenu.wav")`). That is a fact about solo boot rather
-  than about the front end, and it is upstream of everything else: either `FUN_00427D89` (the
-  slot-allocation function) marks a world loaded, or the flag is set elsewhere in boot. So there
-  IS a route 2 → 3 that this suite has not found.
+  **State 2 persists, and the click path into it is now proven correct.** With the TOS accepted
+  and `WOS_MSGLOG=1`: `0x046B` — the message `FUN_00405765` posts for "Play now" — is posted
+  **3 times**, and **6 of 6** `WM_LBUTTONDOWN` messages land on `hwnd 0001007A`, the front view.
+  Yet `front_state` is 2 at t=1000, 2000, 5000 and 9000 after the click, and clicks, RETURN,
+  ESCAPE, SPACE and idle all do nothing to it.
+
+  **What state 2 actually contains**, which is the useful part: one hotspot,
+  `state=1 rect=679,60,1173,102 clickable=0 msg=0000 hwnd=0`, labelled "Where Do You Want To Play
+  Today?" — a pure display label with no message and no window. And critically, **there is no
+  "*** Scanning ***" entry**, although `FUN_0041D374` is a single call to
+  `FUN_004056e7(0, 0x280, 3000, s___Scanning_________________004e202c, ...)` (all.c:16956) that would
+  register exactly that. So `FUN_0041D374` was never called, which means the `else` branch of
+  `FUN_0041F699` did not run, which means `SendMessageA(frame, 0x46F)` returned 0, which means
+  `FUN_0041B891(1)` should have set the state to **1** — and the state is **2**. Those cannot all
+  be true, so either `FUN_0041F699` is not the handler for the `0x46B` entry, or the map entry is
+  not the front view's. The entry is at `0x4C8A20` with pfn `0x424BB3`, and `0x424BB3` is
+  `call 0x4C4E08 ; ret 0xC` — an MFC dispatcher thunk, not a state-changing handler. **That is the
+  next lead**, and it is a better one than the world scan: the staged worlds are present and correct
+  (`/mnt/build/wos-oracle-run/worlds/Evergreen`), so the scan is not failing for want of files —
+  it is never being started from this handler.
+
+  **An inference I made and withdrew, recorded because it was load-bearing elsewhere:** "state 2
+  persists, therefore `0x46F` answered non-zero, therefore the game considers a world loaded
+  offline" was wrong. The state persisting says nothing about which branch ran. A comment in
+  `src/game/front.c` cited it; it has been retracted to its author.
 
   **State 2 is still stuck, and now demonstrably so rather than mysteriously.** It registers
   exactly one hotspot, `state=1 rect=39,60,533,102 clickable=0 msg=0000 hwnd=0`, label "Where Do

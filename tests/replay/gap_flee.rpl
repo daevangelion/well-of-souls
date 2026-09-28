@@ -33,6 +33,11 @@
 # over L1 / H5000 / M5000 and a Ticket Home, opens the `OFFER2 0,10` shop, and sizes the
 # trophy bag to 4x3, so this is a real visit and not a scripted cut to the fight.
 expect boot_menu 900
+# FUN_00402A73's Terms of Service modal opens on entry to the main menu (front.c:534
+# tos_gate, consumed at front.c:770) and swallows the next key. "I Accept" is
+# tos_accept = (356,371,75,23), so its centre is (393,382).
+click 393 382
+expect tos_accept 300
 key RETURN
 wait 30
 key RETURN
