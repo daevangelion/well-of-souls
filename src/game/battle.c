@@ -59,10 +59,16 @@ typedef struct {
      * as encrypted ints: a plain int is the value (enc_get is free) and the EncInt beside it is
      * the seal, and every SET or ADD spends exactly 4 crt_rand() in the order k0,k1,k2,k3. The
      * site counts below are the original's own - see each call. */
-    EncInt enc_hp, enc_max_hp, enc_mp, enc_level, enc_offense, enc_defense, enc_rating;
+    /* The five the binary actually seals per combatant, named by the field each one is:
+     * enc_hp rec[0x5B8] current HP, enc_mp rec[0x5F0] current MP, enc_defense rec[0x660],
+     * enc_offense rec[0x698], enc_level rec[0x628]. rec[0x2A8]/[0x2AC]/[0x2B0]/[0x2B4] are
+     * PLAIN in every function that touches them - FUN_00491E45 writes rec[0x2A8]/[0x2B0]/
+     * [0x2B4] and FUN_0042BB5C writes rec[0x2A8]/[0x2AC]/[0x2B4] with plain movs, so they
+     * carry no seal and are plain mirrors here (max_hp, xp, gold). */
+    EncInt enc_hp, enc_mp, enc_level, enc_offense, enc_defense, enc_rating;
     EncInt enc_participation; /* rec[0x11A], FUN_0048b0c7 */
-    EncInt enc_xp, enc_gold;   /* rec[0xAD]/rec[0xAC], FUN_0042bb5c's payout seals */
     int fled;             /* rec[+0x1B4]: already walking off, never re-rolled */
+    int allegiance;       /* rec[0x114], FUN_00414059: 0 = a monster's own, else its owner */
     int participation;    /* rec[0x11A] */
     uint32_t last_turn;   /* rec[+0x45C], GetTickCount() of the last turn */
 } Combatant;
@@ -77,6 +83,7 @@ static struct {
     int spell, chosen_spell, spell_menu, spell_selection, spell_count, known[WORLD_MAX_SPELLS];
     int mp_start, mp_initial, attack_pp, attack_rating, fizzle, mods, sticky, pets, engaged;
     int throw_item, throw_radius, target_x, target_y;   /* FUN_004a4d70 / FUN_004a3a54 */
+    int cast_ratio;           /* rec[0x440], the value FUN_004a7456 is handed */
     int participation_total;  /* DAT_00502830 */
     int scene_kills;          /* DAT_004e4874 + 0x3E034: monsters killed this fight */
     int monster_kills[WORLD_MAX_MONSTERS]; /* DAT_00d2c7d8, zeroed with the fight block */
@@ -90,6 +97,7 @@ static struct {
 
 static BattleSceneEvent scene_event;
 static int compute_rating(const Combatant *a);
+static void spawn_authored(int monster_id, int allegiance);
 /* battle_set_pets() runs before battle_begin_ex(), which resets the fight block, so the FIGHT
  * '+n' pet count has to live outside it. */
 static int pending_pets;
@@ -105,6 +113,45 @@ static void enc_put(EncInt *e, int *mirror, int value)
 {
     enc_set(e,value);
     *mirror = value;
+}
+/* FUN_00491E45, the combatant-slot creator. Four seals, all of them the literal 100, in the
+ * order defence, offence, MP, HP - 0x00491F35/41/4D/59, 16 crt_rand. This is the FIRST thing
+ * both hero and monster spawns do: FUN_00480499 opens by calling FUN_00491E45(-1) to take a
+ * free slot (0x004804D7), and FUN_0049210A opens by calling it on the hero's id. The four
+ * plain writes that follow are rec[0x2A8]/[0x2B0]/[0x2B4] (0x00491F5E..6A). */
+static void combatant_create(Combatant *a)
+{
+    enc_put(&a->enc_defense,&a->defense,100);
+    enc_put(&a->enc_offense,&a->offense,100);
+    enc_put(&a->enc_mp,&a->mp,100);
+    enc_put(&a->enc_hp,&a->hp,100);
+    a->max_hp = 100;
+    a->gold = 100;
+    a->xp = 100;
+}
+/* FUN_00449006(&2), the hero-record push into the live combatant. FIVE seals, 20 crt_rand, at
+ * 0x0044903A/48/E3/F4/12F - Ghidra drops the this-pointer on each, so its decomp reads them as
+ * seals on the hero record, which has no EncInt at all. Each is really
+ * enc_set(<combatant EncInt>, <value loaded from the hero>), in this order:
+ *   0x0044903A rec[0x5B8] HP      = hero[0x70]   (the &1 arm)
+ *   0x00449048 rec[0x5F0] MP      = hero[0x78]   (the &1 arm)
+ *   0x004490E3 rec[0x698] offence = hero[0x84]   (the &2 arm)
+ *   0x004490F4 rec[0x660] defence = hero[0x80]   (the &2 arm)
+ *   0x004912F rec[0x628] level    = hero[0x64]   (the &2 arm, last)
+ * hero+0x84 and hero+0x80 are the attack and defence ratings the .her encoding carries, so the
+ * seals carry hero_offense()/hero_defense() - NOT the combatant's own values. The &1 arm's
+ * rec[0x2A8]/[0x2AC] and the &2 arm's rec[0x42C..0x43C]/[0x440]/[0x444]/[0x2F8]/[0x2B4] are
+ * all PLAIN movs. Both arms run together: FUN_00491767's fight start does NOT call this
+ * (FUN_0049210A does), which is why it must not be spent there. */
+static void hero_sync_stats(void)
+{
+    Combatant *h = &fight.actors[0];
+    enc_put(&h->enc_hp,&h->hp,g_hero.hp);
+    enc_put(&h->enc_mp,&h->mp,g_hero.mp);
+    enc_put(&h->enc_offense,&h->offense,hero_offense(&g_hero));
+    enc_put(&h->enc_defense,&h->defense,hero_defense(&g_hero));
+    enc_put(&h->enc_level,&h->level,g_hero.level);
+    h->max_hp = g_hero.max_hp;
 }
 /* Every rand() in the original is exactly one crt_rand() here, in the same order
  * (docs/re/rng_calls.md section 2.3). */
@@ -143,15 +190,21 @@ static void monster_stats(Combatant *a, const MonsterDef *m)
     a->element = m->element;
     /* Assembly 004808e5..0048091e: these are 1162,513,567,834 / 100,
      * not the decimal multipliers transcribed in battle.md section 2. */
-    /* FUN_00480499 sets rec[0xAA]/[0xAB] (HP/maxHP), [0x3E] (MP), [0x40] (offense) and [0x3F]
-     * (defense) through FUN_0049b71B - 5 seals, 20 rands, at 0x480593/5B0/5CA/5DB/604 - and then
-     * FUN_0049b71b(rec[0x3B]) seals the level. Order matters: HP, MP, offense, defense, level. */
+    /* FUN_00480499 has exactly FIVE seals - 20 crt_rand - at 0x00480593/5B0/5CA/5DB/604, and
+     * each one re-seals an EncInt with a value loaded out of the .mon entry, in this order:
+     *   0x480593 rec[0x5B8] current HP   = entry+0x00
+     *   0x4805B0 rec[0x5F0] current MP   = entry+0xF0
+     *   0x4805CA rec[0x660] defence      = entry+0xFC
+     *   0x4805DB rec[0x698] offence      = entry+0x100
+     *   0x480604 rec[0x628] level        = entry+0xEC
+     * The four movs around them (rec[0x2A4]/[0x2A8]/[0x2AC]/[0x2B0]) are PLAIN, so max_hp is
+     * a plain mirror: it is the same value the current-HP seal carries. */
     enc_put(&a->enc_hp,&a->hp,derived(m->hp, a->level, 1162, s->hp));
-    enc_put(&a->enc_max_hp,&a->max_hp,a->hp);
     enc_put(&a->enc_mp,&a->mp,derived(m->mp, a->level, 513, s->mp));
-    enc_put(&a->enc_offense,&a->offense,derived(m->offense, a->level, 567, s->offense));
     enc_put(&a->enc_defense,&a->defense,derived(m->defense, a->level, 834, s->defense));
+    enc_put(&a->enc_offense,&a->offense,derived(m->offense, a->level, 567, s->offense));
     enc_put(&a->enc_level,&a->level,a->level);
+    a->max_hp = a->hp;
     /* 00480e82..00481094, each stat clamped to 255 after row-0 scaling. */
     a->ability[ABIL_STR] = clamp(derived(m->strength,a->level,197,s->strength),0,255);
     a->ability[ABIL_STA] = clamp(derived(m->stamina,a->level,212,s->stamina),0,255);
@@ -235,6 +288,11 @@ static void spawn(int signed_id)
     a->turn = TURN_DONE;
     a->fled = 0;
     a->participation = 0;
+    a->allegiance = 0;
+    /* FUN_00480499's first act is FUN_00491E45(-1), which takes a free combatant slot and
+     * spends 16 crt_rand sealing 100 into rec[0x660]/[0x698]/[0x5F0]/[0x5B8] (0x00491F35..59)
+     * - BEFORE any of the monster's own five. Omitting it cost every spawn 16 draws. */
+    combatant_create(a);
     monster_stats(a, m);
     /* FUN_00491e45: rec[0x11F] = GetTickCount() - rand()%5000 - 3000. One rand. */
     a->last_action = (int)(tick_now() - (uint32_t)roll(5000) - 3000u);
@@ -248,14 +306,12 @@ static void spawn(int signed_id)
      * trip FUN_0048f913's `x < -10` removal and the flee checks on every monster. */
     roll(64);
     if (a->ally) {
-        /* FUN_00480499's `param_2 == 1` arm: a second rand for the entry offset, then
-         * rec[0x114] = 0x7FFFFFFF and the ally's own two sealed writes. This is the branch the
-         * original takes for every mercenary and pet, so allies pay two extra sets - 8 rands -
-         * that enemies do not. */
+        /* FUN_00480499's `param_1 == 1` arm: a second rand for the entry offset. The arm
+         * reaches no further FUN_0049b71B - the five seals above are on the common path
+         * (0x0048058A..0x00480604, before the 0x0048079B join) - so an ally costs exactly the
+         * same 9 seals as an enemy plus this one extra draw. */
         roll(32);
         a->x = 55 + (ordinal % 3) * 36;
-        enc_put(&a->enc_offense,&a->offense,a->offense);
-        enc_put(&a->enc_defense,&a->defense,a->defense);
     } else a->x = 210 + (ordinal % 3) * 48;
     a->y = 152 + (ordinal / 3) * 40;
     a->last_turn = tick_now();
@@ -396,32 +452,31 @@ void battle_begin_ex(const int *ids, int count, int difficulty, int distance_pct
     distance_pct = clamp(distance_pct,0,100);
     hero = &fight.actors[0];
     hero->ally = 1;
-    /* FUN_00491E45 seals rec[0xAA], [0xAC], [0xAD] and rec[0x3B] at 0x00491F35/41/4D/59 - four
-     * seals, 16 rands - for the hero combatant. */
-    enc_put(&hero->enc_hp,&hero->hp,clamp(g_hero.hp,0,g_hero.max_hp));
-    enc_put(&hero->enc_max_hp,&hero->max_hp,g_hero.max_hp);
-    enc_put(&hero->enc_mp,&hero->mp,g_hero.mp);
+    /* The hero's own combatant is made by FUN_0049210A, the one solo-reachable caller of which
+     * is FUN_00491767 at 0x004919B7 - the fight-start function, on the `local_8 == 0` arm that
+     * means "the local player is combatant 0", i.e. every offline fight. It does NOT call
+     * FUN_00449006 (see hero_sync_stats below), which is why the five seals that used to sit
+     * here do not belong at fight start.
+     *
+     * FUN_0049210A first calls FUN_00491E45(hero id) - four seals of the literal 100 at
+     * 0x00491F35/41/4D/59, 16 draws - then re-seals five fields from the hero record, in the
+     * order 0x004921E6/1F7/208/216/22D, 20 draws:
+     *   rec[0x628] level  = hero[0x64]     rec[0x698] offence = hero[0x84]
+     *   rec[0x660] defence= hero[0x80]     rec[0x5B8] HP      = hero[0x70]
+     *   rec[0x5F0] MP     = hero[0x78]
+     * The three movs interleaved with them (rec[0x2A8] = hero[0x74], rec[0x2AC] = hero[0x7C],
+     * rec[0x2B4] = hero[0x68]) are PLAIN. hero+0x84/+0x80 are the attack and defence ratings
+     * the .her encoding carries, surfaced by hero_offense()/hero_defense(). */
+    combatant_create(hero);
     enc_put(&hero->enc_level,&hero->level,clamp(g_hero.level,1,65535));
-    /* FUN_00449006 is the hero-stats-into-the-live-combatant push and it has FIVE seals, not the
-     * two I first placed - and it runs when the hero's stats are pushed, NOT every frame, so it
-     * belongs here and not in battle_update. Ghidra drops the this-pointer on a FUN_0049B71B
-     * call, so its decomp reads these as seals on the hero record, which is wrong: the hero
-     * record has no EncInt. Each is really enc_set(&combatant_field, <value from the hero>):
-     *   & 1:  seal(HP) hero+0x70, then rec[0x2A8] = hero+0x74  (maxHP, plain)
-     *         seal(maxHP) hero+0x78, then rec[0x2AC] = hero+0x7C  (maxMP, plain)
-     *   & 2:  five FUN_00416c60(hero+0x680..0x690, 0xFF) reads land in rec[0x42C..0x43C] PLAIN,
-     *         then seal(hero+0x84 = attack), seal(hero+0x80 = defence), then seal(hero+0x64 =
-     *         the level), with rec[0x440]/[0x444]/[0x2F8]/[0x2B4] plain copies around them.
-     * hero+0x84 and +0x80 are surfaced by hero_offense()/hero_defense(). Order is the contract. */
-    enc_put(&hero->enc_hp,&hero->hp,g_hero.max_hp);
-    enc_put(&hero->enc_max_hp,&hero->max_hp,g_hero.max_mp);
-    enc_put(&hero->enc_mp,&hero->mp,hero_offense(&g_hero));
-    enc_put(&hero->enc_offense,&hero->offense,hero_defense(&g_hero));
+    enc_put(&hero->enc_offense,&hero->offense,hero_offense(&g_hero));
+    enc_put(&hero->enc_defense,&hero->defense,hero_defense(&g_hero));
+    enc_put(&hero->enc_hp,&hero->hp,clamp(g_hero.hp,0,g_hero.max_hp));
+    enc_put(&hero->enc_mp,&hero->mp,g_hero.mp);
+    hero->max_hp = g_hero.max_hp;
     for (i = 0; i < HERO_ABILITIES; ++i) hero->ability[i] = hero_ability(&g_hero,i);
     hero->ailments = g_hero.ailments;
     hero->x = 80; hero->y = 204;
-    hero->offense = hero_offense(&g_hero);
-    hero->defense = hero_defense(&g_hero);
     hero->turn = TURN_DONE;
     hero->owner = 1;                     /* solo: the local player's account id */
     hero->ability_a = 100;
@@ -514,19 +569,33 @@ static void finish(BattleResult result)
             wos_log_event("battle_share","participation=%d total=%d gold=%d xp=%d",
                           fight.actors[0].participation,fight.participation_total,share_gold,share_xp);
         }
-        /* FUN_0042bb5c seals the hero's XP (hero[0x68]), gold (hero[0x6C]) and the level
-         * (hero[0x64]) through FUN_0049b71b at 0x0042BF75/0x0042C0AB/0x0042C0B9 - 3 seals, 12
-         * rands - before the trophy roll's three. */
-        /* FUN_0042bb5c has THREE seals, and they come before the trophy roll's three rands:
-         * the combatant's XP (rec[0xAD]) and gold (rec[0xAC]) are re-sealed with the awarded
-         * values, then the level (rec[0xAE]) is re-sealed from FUN_0042b6c1's result. Ghidra
-         * drops the this-pointer, so the decomp shows them as seals on the hero record; the hero
-         * record has no EncInt, so they belong to the hero's combatant, which is actors[0]. */
-        enc_put(&fight.actors[0].enc_xp,&fight.actors[0].xp,fight.xp);
-        enc_put(&fight.actors[0].enc_gold,&fight.actors[0].gold,fight.gold);
-        enc_put(&fight.actors[0].enc_level,&fight.actors[0].level,g_hero.level);
-        hero_award(&g_hero,xp,gold);
+        /* The trophy roll is the `local_10 == 0` arm at 0x0042BE28 - THREE rands of its own
+         * plus FUN_0042b867's - and it happens BEFORE the award block that starts at
+         * 0x0042BE8D, so it must precede the seals below. It ran last in the port, which put
+         * 12 draws in the wrong place in the stream. */
         victory_trophy_roll();
+        /* FUN_0042bb5c's THREE seals - 12 crt_rand - and none of them is XP or gold. The
+         * combatant's XP (rec[0x2B4]) and gold (rec[0x2B0]) are PLAIN movs at 0x0042BF6C and
+         * 0x0042BF5A, which is why Ghidra's decomp, having lost the this-pointer, reads the
+         * seals as writes to the hero record. The three, in the binary's order:
+         *   0x0042BF75 rec[0x628] level = hero[0x64]   (the level FUN_0042b6c1 just returned)
+         *   0x0042C0AB rec[0x5B8] HP    = hero[0x70]   (only on an actual level-up)
+         *   0x0042C0B9 rec[0x5F0] MP    = hero[0x78]   (ditto)
+         * The last two are inside the `hero leveled up` arm, which first does the full heal at
+         * 0x0042C096/0x0042C0A5: hero[0x70] = hero[0x74], hero[0x78] = hero[0x7C]. */
+        {
+            int levels = hero_award(&g_hero,xp,gold);
+            Combatant *h = &fight.actors[0];
+            h->xp = (int)g_hero.xp;
+            h->gold = (int)g_hero.gold;
+            enc_put(&h->enc_level,&h->level,g_hero.level);
+            if (levels > 0) {
+                g_hero.hp = g_hero.max_hp;
+                g_hero.mp = g_hero.max_mp;
+            }
+            enc_put(&h->enc_hp,&h->hp,g_hero.hp);
+            enc_put(&h->enc_mp,&h->mp,g_hero.mp);
+        }
         battle_music("victory");
         wos_log_event("battle_won","xp=%d gold=%d share=%d/%d kills=%d",
                       (int)(g_hero.xp-old_xp),(int)(g_hero.gold-old_gold),
@@ -552,7 +621,9 @@ static void hero_died(void)
                   g_hero.level,(long long)g_hero.xp,tenths,fight.scene_kills,fight.killer_id,
                   fight.auto_resurrect);
     if (fight.killer_id > 0) hero_killed_by_monster(fight.killer_id);
-    /* FUN_00494fcd seals the hero's XP at 0x004950B8 (FUN_0049b71b) - one seal, 4 rands. */
+    /* FUN_00494fcd re-seals the hero's LEVEL - rec[0x628] = hero[0x64] - at 0x004950B8
+     * (lea 0x628(%esi),%ecx at 0x004950A6, push (%ebx) where ebx = hero+0x64). One seal,
+     * 4 rands. */
     enc_put(&fight.actors[0].enc_level,&fight.actors[0].level,g_hero.level);
     if (fight.auto_resurrect) {
         /* FUN_0042b765: the XP interpolated at the fractional level the hero had reached, so
@@ -599,7 +670,7 @@ static int physical_damage(Combatant *a, Combatant *b, int monster)
     enc_put(&a->enc_offense,&a->offense,a->offense);
     enc_put(&a->enc_defense,&a->defense,a->defense);
     enc_put(&a->enc_hp,&a->hp,a->hp);
-    enc_put(&a->enc_max_hp,&a->max_hp,a->max_hp);
+    enc_put(&a->enc_mp,&a->mp,a->mp);
     d = clamp(raw,1,32000);
     base = clamp((int64_t)d*9/10,1,32000);
     /* FUN_004a6974: variance is one rand, the crit gate is `rand()%param_5 == 0`, and the crit
@@ -828,7 +899,17 @@ static int monster_spell(int actor, int *target)
 /* FUN_004a7456: the cast-success roller. `base` is 50 below ratio 5, 100 from 95, and
  * 50 + (ratio-5)*50/90 in between; a nonzero practice value pulls it toward 100 by
  * `100 - (100-pp)*(100-base)/100`. config.ini spellSuccessPercent then scales it, clamped at
- * 100, and the result is truncated after +0.5. The original does this in x87 doubles. */
+ * 100, and the result is truncated after +0.5. The original does this in x87 doubles, and
+ * 0x004A750C skips the scaling entirely when the configured value is 100, which is the
+ * `pct != 100.0` guard below. WorldData-2 fixed that default to "100" (0x41E8B1 loads
+ * %ebx = 0x4E246C = "100" and nothing reloads it before the 0x41E922 push).
+ *
+ * CALLERS, corrected: `callers 0x4a7456` returns FUN_00434F95, FUN_00432C28 (the /battle
+ * simulator) and FUN_004A7794 at 0x004A8574 - so it IS on the in-battle spell path, not only
+ * the simulators. FrontHero-2's and WorldData-2's "PK simulators and the admin cast command
+ * only" reading missed that fourth site. The battle fizzle is TWO rolls, not one:
+ * FUN_004904EB's ability difference (see spell_fizzle) and this one, the second of which
+ * lands after the damage variance. */
 static int cast_success(int ratio, int pp)
 {
     double base, pct;
@@ -882,7 +963,7 @@ static int spell_damage(int actor, int target, int spell, int targets)
     enc_put(&a->enc_offense,&a->offense,a->offense);
     enc_put(&a->enc_defense,&a->defense,a->defense);
     enc_put(&a->enc_hp,&a->hp,a->hp);
-    enc_put(&a->enc_max_hp,&a->max_hp,a->max_hp);
+    enc_put(&a->enc_mp,&a->mp,a->mp);
     d = clamp(raw,1,32000); base = clamp((int64_t)d*9/10,1,32000);
     /* FUN_004a6974, same rand shape as the physical branch. */
     if (d > 1) d = roll(d)/5+base;
@@ -931,6 +1012,11 @@ static void apply_spell(void)
         Combatant *a = &fight.actors[actor];
         int monster = 0, choices = 0;
         if (s->damage == -300) {
+            /* FUN_004a6e58's -300 arm, the only one of the five summon codes that calls
+             * FUN_00449006 (0x004A6FA4) before falling through to the common FUN_00414059
+             * spawn at 0x004A70B4: the caster's own hero stats are pushed into its live
+             * combatant first. Twenty draws, and only on this effect. */
+            hero_sync_stats();
             if (fight.victim == 0) hero_give_item(&g_hero,s->summon_id,1);
         } else {
             if (s->damage == -203) monster = s->summon_id;
@@ -940,7 +1026,11 @@ static void apply_spell(void)
                 if (m->used && m->level <= a->level && m->level >= a->level-10 &&
                     (s->damage != -201 || m->element == a->element) && !roll(++choices)) monster = i;
             }
-            if (monster > 0) spawn(a->ally ? -monster : monster);
+            /* FUN_004a6e58 does not call the plain spawner: at 0x004A70B4 it calls
+             * FUN_00414059, which re-seals five fields from the summon template, draws one
+             * rand()%32 for the entry offset and runs FUN_00491BB7's two seals. It also calls
+             * FUN_00449006 (the five hero seals) at 0x004A6FA4 on the -300 arm. */
+            if (monster > 0) spawn_authored(monster,0);
         }
         wos_log_event("spell_cast","caster=%s spell=%d target=%d dmg=0",actor?"monster":"hero",fight.spell,fight.victim);
         return;
@@ -969,9 +1059,22 @@ static void apply_spell(void)
             if (s->damage == -9 && i) b->ally = fight.actors[actor].ally;
         }
         else {
-            int miss = spell_helpful(s) ? 0 : clamp(ability(b,ABIL_AGI)-ability(&fight.actors[actor],ABIL_DEX),0,50);
-            if (miss && roll(100) < miss) { b->damage = INT_MIN; b->floating = (int)tick_now(); continue; }
+            /* FUN_004904eb already drew the ability-difference fizzle in start_attack, and
+             * FUN_004a7794 draws NOTHING before spell_damage. Its cast-success fizzle is at
+             * 0x004A8574, AFTER the FUN_004a6974 variance inside spell_damage, gated on the
+             * spell's element being 1..7 and on DAT_00507898 - which is 1 in the image
+             * (0x507898) and is only ever cleared by the /battle simulator, so it is set
+             * during a real fight. One crt_rand, the same comparison direction as the original:
+             * fizzle when cast_success <= rand()%100. */
             damage = spell_damage(actor,i,fight.spell,targets);
+            if (s->element > 0 && s->element < 8 &&
+                roll(100) >= cast_success(fight.cast_ratio,fight.attack_rating)) {
+                fight.fizzle = 1;
+                damage = 0;
+                wos_log_event("spell_fizzle","caster=%s spell=%d target=%d",
+                              actor?"monster":"hero",fight.spell,i);
+                snprintf(fight.message,sizeof fight.message,"%s fizzles",s->name);
+            }
             /* FUN_004a6255 applies the delta through FUN_0049b71b - one seal, 4 rands, at
              * 0x004A6285 - after clamping to [0, max]. */
             enc_put(&b->enc_hp,&b->hp,clamp((int64_t)b->hp-damage,0,b->max_hp));
@@ -990,6 +1093,26 @@ void battle_open_spells(void)
     for (i = 1; i < WORLD_MAX_SPELLS; ++i)
         if (hero_spell_known(&g_hero,i)) fight.known[fight.spell_count++] = i;
     fight.spell_selection = 0; fight.spell_menu = 1; fight.queued = 0;
+}
+/* FUN_004904EB, the in-battle fizzle roll, called from FUN_00490723 at 0x00490948 for EVERY
+ * spell attack and before FUN_0048FE80 and FUN_004A7794 run, so it is the first draw of the
+ * attack. The rule:
+ *     diff = ability(target, 0x67) - ability(attacker, 0x68)
+ *     if (diff > 0) { if (diff > 50) diff = 50; hit = rand()%100 < diff; }
+ *     if (attacker_rec[0x394]) hit = false;
+ * Both ability ids are DEX: FUN_004a761f reads rec[0x438] for 0x67 and rec[0x438] for 0x68,
+ * and FUN_00490e7c assigns rec[0x438] = rec[0x43C] = the caster's dexterity while
+ * FUN_00449006's &2 arm writes rec[0x438] from hero+0x68C, the same slot it writes for 0x67's
+ * table entry. So this is DEX-vs-DEX, not the agility/dexterity pair the port had.
+ * rec[0x394] has exactly one writer, FUN_0042CB8F at all.c:34247, fed from a network field
+ * (FUN_004261e5) - so offline it is 0 and the override never fires. ONE crt_rand, and only
+ * when the difference is positive, exactly as the original. */
+static int spell_fizzle(Combatant *a, Combatant *t)
+{
+    int diff = ability(t,ABIL_DEX) - ability(a,ABIL_DEX);
+    if (diff <= 0) return 0;
+    if (diff > 50) diff = 50;
+    return roll(100) >= diff;
 }
 static void start_attack(int actor, int target)
 {
@@ -1052,16 +1175,15 @@ static void start_attack(int actor, int target)
     if (!actor) g_hero.mp = a->mp;
     /* rec[0x390]; see the comment above - 0 offline. */
     fight.spell = spell; fight.bound_spell = bound; fight.fizzle = 0;
+    fight.cast_ratio = actor ? clamp(ability(a,ABIL_WIS)/4+50,0,100)
+                             : g_world.classes[g_hero.klass].magic_ratio;
+    /* FUN_004904eb runs first in every spell attack, at 0x00490948, ahead of FUN_0048fe80 and
+     * of the damage. The cast-success roll is NOT here: FUN_004a7794 puts it after the damage
+     * variance, so it belongs in apply_spell. */
+    if (spell && target >= 0) fight.fizzle = spell_fizzle(a,&fight.actors[target]);
     /* FUN_0048fe80: 1000 ms physical, 4000 ms spell, 1250 ms for the -3/-4/-5 specials. */
     fight.duration_ms = spell ? SPELL_MS : PHYSICAL_MS;
-    if (spell) {
-        int ratio = actor ? clamp(ability(a,ABIL_WIS)/4+50,0,100) : g_world.classes[g_hero.klass].magic_ratio;
-        if (s->element > 0 && s->element < 8 && roll(100) >= cast_success(ratio,fight.attack_rating)) {
-            fight.fizzle = 1;
-            wos_log_event("spell_fizzle","caster=%s spell=%d target=%d",actor?"monster":"hero",spell,target);
-            snprintf(fight.message,sizeof fight.message,"%s fizzles",s->name);
-        }
-    } else if (!actor && fight.throw_radius) {
+    if (!spell && !actor && fight.throw_radius) {
         /* FUN_004a4d70 leaves the scatter radius at its default 0x10 for a physical attack
          * (case 0 falls through to `default: *radius = 0x10`), and FUN_004a3a54 then draws the
          * paired `x += rand()%(r*2) - r`, `y += rand()%(r*2) - r`, guarded on r != 0. */
@@ -1082,7 +1204,9 @@ static void start_attack(int actor, int target)
         fight.damage = physical_damage(a,&fight.actors[target],actor != 0);
     }
     /* FUN_0048FE80 seals rec[0x6D8] at 0x00490499 (4 rands) and FUN_0048b0c7 ADDs to rec[0x11A]
-     * and DAT_00502830, which is a get followed by a set, so 4 more. */
+     * and DAT_00502830, which is a get followed by a set, so 4 more. FUN_00490723 calls
+     * FUN_0048FE80 at 0x0049094D, i.e. after the fizzle roll and BEFORE FUN_004A7794 computes
+     * any damage, so the seal precedes the damage draw - the port had it the other way round. */
     enc_put(&a->enc_rating,&a->rating,compute_rating(a));
     /* FUN_0048fe80 rec[0x428]++ (the attack count) and FUN_0048b0c7, which credits an actor only
      * when it has an owner - in solo that is the hero alone, so it always takes the whole pot. */
@@ -1114,6 +1238,93 @@ static Rect actor_rect(int i)
     Rect v = fight.view;
     return (Rect){v.x+(a->x-cell/2)*v.w/360,v.y+(a->y-cell)*v.h/256,
                   cell*v.w/360,cell*v.h/256};
+}
+/* FUN_00432AC8's five seals, 0x00432B53/66/74/80/8C - see battle_run_simulator. */
+static void sim_combatant(Combatant *a)
+{
+    enc_put(&a->enc_defense,&a->defense,1000);
+    enc_put(&a->enc_offense,&a->offense,780);
+    enc_put(&a->enc_level,&a->level,99);
+    enc_put(&a->enc_mp,&a->mp,10000);
+    enc_put(&a->enc_hp,&a->hp,10000);
+    a->max_hp = 10000;
+}
+/* FUN_00414059, the authored-stat SPAWNER - its `param_1 == 0` arm, the one the summon effects
+ * reach at 0x004A70B4. The original is not the plain monster spawner: it creates the slot with
+ * FUN_00480499 (so the four FUN_00491E45 seals and the five FUN_00480499 seals are already
+ * spent by spawn()), then re-seals five fields from the SUMMON TEMPLATE and draws once more.
+ *   0x00414195 rec[0x5B8] of the slot BEFORE the new one = template current HP
+ *   0x004141AC rec[0x5F0] MP     = template MP     (rec[0x2A8] = maxHP, plain, 0x4141A6)
+ *   0x004141C3 rec[0x660] defence= template defence(rec[0x2AC] = maxMP, plain, 0x4141B7)
+ *   0x004141D1 rec[0x698] offence= template offence
+ *   0x004141E8 rec[0x628] level  = template level
+ * then the plain ability writes rec[0x10B..0x10F], the allegiance rec[0x114] and rec[0x116],
+ * FUN_004931C9's formation, ONE rand()%32 for the entry offset (0x00414273) and FUN_00491BB7,
+ * whose two seals (0x00491D2E/0x00491D4E) land last. That is 5+1+2 = 8 seals and one draw
+ * beyond what spawn() already spent. */
+static void spawn_authored(int monster_id, int allegiance)
+{
+    Combatant *a;
+    const MonsterDef *m;
+    int slot;
+    if (fight.count == ACTORS) return;
+    slot = fight.count;
+    spawn(monster_id);
+    if (fight.count <= slot) return;              /* spawn() rejected the id */
+    a = &fight.actors[slot];
+    m = &g_world.monsters[a->id];
+    a->allegiance = allegiance;
+    /* 0x00414195 is the odd one out: its ECX is DAT_004e4874 + (idx+1)*0x6E0 while the record
+     * every other write in the arm targets is DAT_004e4874 + 0x128 + idx*0x6E0, so it lands on
+     * the slot BEFORE the new combatant - which is that slot's rec[0x5B8]. An off-by-one in the
+     * original, and it still costs four draws, so it is reproduced, not tidied away. */
+    if (slot > 0)
+        enc_put(&fight.actors[slot-1].enc_hp,&fight.actors[slot-1].hp,m->hp);
+    /* The template's +0xF4 and +0xF8 are its maxHP and maxMP, and the original seals BOTH the
+     * current and the max with the same word (rec[0x2A8] = param_6 next to the rec[0x5F0]
+     * seal of param_7), so a summon arrives at full HP and full MP. */
+    enc_put(&a->enc_mp,&a->mp,m->mp);
+    enc_put(&a->enc_defense,&a->defense,m->defense);
+    enc_put(&a->enc_offense,&a->offense,m->offense);
+    enc_put(&a->enc_level,&a->level,m->level);
+    a->hp = a->max_hp = m->hp;
+    /* FUN_004931C9 hands back the nine-slot formation point and FUN_0048b13c the scene-width
+     * base the entry offset is measured from; one rand()%32, as at 0x00414273. */
+    roll(32);
+    /* FUN_00491BB7, the rating/desync check: two seals, 8 crt_rand, 0x00491D2E/0x00491D4E. */
+    enc_put(&a->enc_rating,&a->rating,compute_rating(a));
+    enc_put(&a->enc_defense,&a->defense,a->defense);
+    wos_log_event("battle_actor","slot=%d monster=%d hp=%d level=%d offense=%d defense=%d str=%d sta=%d charge=%d",
+                  slot,a->id,a->hp,a->level,a->offense,a->defense,
+                  a->ability[ABIL_STR],a->ability[ABIL_STA],
+                  (int)(tick_now()-(uint32_t)a->last_action));
+}
+/* FUN_00414059's `param_1 == 1` arm, the RECALL (0x0041409F..0x00414156): walk every live
+ * combatant and, for each one that is a monster (rec[+4] == -1) whose allegiance rec[0x114]
+ * equals the given owner, print "%s has recalled the %s from battle" and FUN_0048E16E it -
+ * which is FUN_0048d8c6 plus a 0x6E0 memset and rec[0x38C] = 0x2F, i.e. the slot goes back
+ * in the pool. It draws NOTHING: all five of FUN_00414059's seals are on the spawner arm. */
+void battle_recall(int allegiance)
+{
+    int i, n = 0;
+    if (fight.result != BATTLE_RUNNING) return;
+    for (i = 1; i < fight.count; ++i) {
+        Combatant *a = &fight.actors[i];
+        if (a->owner != -1 || a->allegiance != allegiance) continue;
+        wos_log_event("battle_recalled","slot=%d monster=%d owner=%d",i,a->id,allegiance);
+        /* FUN_0048E16E: FUN_0048d8c6 drops the record out of the live list, then a 0x6E0
+         * memset with rec[0x38C] = 0x2F. The port's actor array is dense, so dropping slot i
+         * is a shift of the tail down by one. */
+        memmove(a,a+1,(size_t)(fight.count-i-1)*sizeof *a);
+        --fight.count;
+        --i;
+        ++n;
+    }
+    if (!n) return;
+    fight.target = first_enemy();
+    if (fight.target < 0) { fight.decided = 1; finish(BATTLE_WON); return; }
+    if (fight.target >= fight.count) fight.target = first_enemy();
+    if (fight.state == ROUND_DAMAGE) { fight.attacker = fight.victim = -1; fight.state = ROUND_ACT; }
 }
 /* FUN_0048b1ad target-selection click: validate the target, then queue
  * rec[0xBA] = spell, rec[0xBB] = target, rec[0x38C] = 0x2F. */
@@ -1485,6 +1696,11 @@ void battle_dump(DumpEmit emit, void *user)
     dump_emit_int(emit,"battle.attacker",fight.attacker,user);
     dump_emit_int(emit,"battle.victim",fight.victim,user);
     dump_emit_int(emit,"battle.spell",fight.spell,user);
+    /* FUN_004a7456's only input that is not the caster: in the ORIGINAL it is read once at
+     * InitInstance and never moves during a fight, but the port's fizzle uses it live, so a
+     * differential that diverges here would otherwise show up as an unexplained later roll.
+     * FrontHero-2's and WorldData-2's request. */
+    dump_emit_int(emit,"battle.spell_success_percent",g_world.spell_success_percent,user);
     dump_emit_int(emit,"battle.participation_total",fight.participation_total,user);
     dump_emit_int(emit,"battle.scene_kills",fight.scene_kills,user);
     dump_emit_int(emit,"battle.auto_resurrect",fight.auto_resurrect,user);
@@ -1537,17 +1753,20 @@ void battle_run_simulator(int mode)
             if (attacker >= fight.count) attacker = fight.count-1;
             target = mode ? 0 : (attacker % (fight.count-1)) + 1;
             if (target >= fight.count || target == attacker) target = attacker == 0 ? 1 : 0;
-            /* FUN_00432AC8 memsets its scratch combatant and then seals it; the simulator is an
-             * admin command, so the seals are what keep its stream honest rather than its rules. */
-            enc_put(&fight.actors[attacker].enc_level,&fight.actors[attacker].level,
-                    fight.actors[attacker].level);
-            enc_put(&fight.actors[attacker].enc_hp,&fight.actors[attacker].hp,
-                    fight.actors[attacker].hp);
-            enc_put(&fight.actors[attacker].enc_max_hp,&fight.actors[attacker].max_hp,
-                    fight.actors[attacker].max_hp);
-            enc_put(&fight.actors[target].enc_hp,&fight.actors[target].hp,fight.actors[target].hp);
-            enc_put(&fight.actors[target].enc_max_hp,&fight.actors[target].max_hp,
-                    fight.actors[target].max_hp);
+            /* FUN_00432AC8 memsets a 0x6E0 scratch combatant, fills its plain fields, and
+             * then seals FIVE of them - 20 crt_rand - at 0x00432B53/66/74/80/8C, in this order
+             * and with the literals FUN_00432C28 passes at 0x00432C6B (level 99, defence 1000,
+             * offence 0x30C, and 10000 for both HP and MP):
+             *   0x00432B53 rec[0x660] defence = 1000
+             *   0x00432B66 rec[0x698] offence = 780
+             *   0x00432B74 rec[0x628] level   = 99
+             *   0x00432B80 rec[0x5F0] MP      = 10000
+             *   0x00432B8C rec[0x5B8] HP      = 10000
+             * FUN_00432C28 calls it twice, once per side, so both scratch combatants pay the
+             * full twenty. The port spent five draws per side on the wrong fields, which is
+             * the same count but a different stream position for every later draw. */
+            sim_combatant(&fight.actors[attacker]);
+            sim_combatant(&fight.actors[target]);
             fight.attacker = attacker; fight.victim = target; fight.spell = 0;
             damage = physical_damage(&fight.actors[attacker],&fight.actors[target],attacker != 0);
             wos_log_event("battle_hit","ms=0 attacker=%d target=%d dmg=%d simulator=%d",

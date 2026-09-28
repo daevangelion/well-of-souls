@@ -130,9 +130,21 @@ int dscript_parse(Dscript *ds, char *text, size_t *error_line)
             }
             if (token(&args)) goto bad;
         } else if (!strcmp(verb, "dump")) {
+            /* "dump <module>" or the tagged "dump <module>@<tag>". The tag is
+             * [A-Za-z0-9_.-]{1,32} and cannot contain '@', and the split is at the
+             * LAST '@', so validate the tail as a whole rather than searching. */
+            const char *at;
             t = token(&args);
             c.kind = DS_DUMP;
             if (!t || strlen(t) >= sizeof(c.text) || token(&args)) goto bad;
+            at = strrchr(t, '@');
+            if (at) {
+                const char *p = at + 1;
+                size_t n = strlen(p);
+                if (!n || n > 32) goto bad;
+                for (; *p; ++p)
+                    if (!(isalnum((unsigned char)*p) || *p == '_' || *p == '.' || *p == '-')) goto bad;
+            }
             memcpy(c.text, t, strlen(t) + 1);
         } else {
             goto bad;

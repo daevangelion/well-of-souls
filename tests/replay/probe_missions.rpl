@@ -1,0 +1,47 @@
+# Probe replay: MISSION/MISSIONS and the HTML viewer end to end in the real binary.
+# Boot -> Probe world -> new soul -> map 0 link 0 is the "Gateway of Dreams" (scene 3), whose
+# script arms the Missions button with `MISSIONS 1,2,3` (opcode 0x4A) and then suspends in
+# `HTML probe.htm` (opcode 0x29, scene state 10).
+expect boot_menu 900
+key RETURN
+wait 30
+key RETURN
+wait 30
+key RETURN
+wait 30
+key n
+wait 5
+text Probe
+key RETURN
+expect hero_ready 600
+expect map_enter 900
+keydown DOWN
+expect scene_enter 1500
+keyup DOWN
+expect missions_offer 400
+expect scene_op 400
+# the HTML page is open now: screenshot it, follow the link, screenshot, then close it
+expect html_open 200
+wait 10
+shot /home/jshield/src/games/WoS/work/shots/wos-probe-html.bmp
+wait 10
+click 60 36
+expect html_link 120
+wait 10
+shot /home/jshield/src/games/WoS/work/shots/wos-probe-html2.bmp
+wait 10
+key ESCAPE
+expect html_close 200
+# the Missions button: FUN_004787B2 slot 6 -> {589-51*6, 8, 48, 48} = {283,8,48,48}
+click 300 30
+expect missions_panel 300
+wait 10
+shot /home/jshield/src/games/WoS/work/shots/wos-probe-missions.bmp
+wait 10
+# ENTER is the action button (id 1): accept Jelly Bellies -> Status 1 in the hero's .mis
+key RETURN
+expect mission_status 200
+expect mission_accept 200
+wait 10
+shot /home/jshield/src/games/WoS/work/shots/wos-probe-accepted.bmp
+quit

@@ -415,6 +415,25 @@ The port's in-framebuffer panels accept the same statements, by control id.
 
 ---
 
+### 5.4.1 The first module key with an oracle source
+
+`battle.spell_success_percent`, read from **`_DAT_004E0FF8`** in the running original.
+Live value measured in a boot run: **100**, which is the "no scaling" case — the original's
+consumer `FUN_004A7456` compares it against 100 at `0x4A750C` and skips the multiply.
+
+It is registered here rather than left implicit because it is the first key of a shape the
+rest of the module dumps will have: **a value the original holds constant during a fight but
+the port applies dynamically.** The original has per-spell fizzle flags at
+`spell[0x124]/[0x128]`; the port's `SpellDef` has no columns for them and substitutes the
+global. So a `.dsc` that casts a spell compares equal on the hero record, the world dump
+and `rng.state`, and can still diverge in the roll. Emitting the value on the battle label
+is what makes that divergence visible *at the moment it happens* instead of arriving later
+as an unexplained `cast_success` difference that reads as replay flakiness.
+
+**Do not resolve it by ignoring the value in `cast_success()`.** A silent constant in place
+of a modelled field is the same defect with the evidence removed. Port the two flag columns
+or record the substitution in `docs/architecture_port.md`'s deliberate-deviations table;
+owner is the spell panel, not the oracle.
 ## 5. The dump key registry
 
 `dump <label>` writes `<outdir>/<label>.txt`, `key=value` lines, UTF-8, LF. The
@@ -483,6 +502,27 @@ maintained here as the owning agents land them; the harness passes them through 
 
 *(to be completed from `work/decomp/all.c` as the module owners land their dumps — the
 front-end, map, scene, battle, shop, quest, minigame and training globals.)*
+
+### 5.4.1 The first module key with an oracle source
+
+`battle.spell_success_percent`, read from **`_DAT_004E0FF8`** in the running original.
+Live value measured in a boot run: **100**, which is the "no scaling" case — the original's
+consumer `FUN_004A7456` compares it against 100 at `0x4A750C` and skips the multiply.
+
+It is registered here rather than left implicit because it is the first key of a shape the
+rest of the module dumps will have: **a value the original holds constant during a fight but
+the port applies dynamically.** The original has per-spell fizzle flags at
+`spell[0x124]/[0x128]`; the port's `SpellDef` has no columns for them and substitutes the
+global. So a `.dsc` that casts a spell compares equal on the hero record, the world dump
+and `rng.state`, and can still diverge in the roll. Emitting the value on the battle label
+is what makes that divergence visible *at the moment it happens* instead of arriving later
+as an unexplained `cast_success` difference that reads as replay flakiness.
+
+**Do not resolve it by ignoring the value in `cast_success()`.** A silent constant in place
+of a modelled field is the same defect with the evidence removed. Port the two flag columns
+or record the substitution in `docs/architecture_port.md`'s deliberate-deviations table;
+owner is the spell panel, not the oracle.
+
 
 ### 5.5 Screenshots
 

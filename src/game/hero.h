@@ -90,6 +90,7 @@ typedef struct {
     int incarnations;           /* hero+0x0730, ++ by FUN_00420240 on every incarnate */
     int saves;                 /* hero+0x0A4C, ++ by every save (FUN_00417F1B) */
     int seconds_played;         /* hero+0x0734 / +0x01CD, the autosave clock */
+    int world_crc;              /* hero+0x06C4, the world CRC the hero last camped in */
     int hunting;                /* hero+0x0A04, the raw signed hunt-training field the
                                  * map encounter roll uses both as a level and
                                  * as a /10000 threshold (FUN_0046260E) */
@@ -144,6 +145,13 @@ int  hero_record_decode(const uint8_t in[HERO_RECORD_SIZE], Hero *out);
  * is the one the save path always writes, and any other value returns the
  * bare seed 0x379ADE because the original has no branch for it. */
 uint32_t hero_record_checksum(const uint8_t in[HERO_RECORD_SIZE], int mode);
+
+/* The soul-switch world check, FUN_0044B196. `avoid` is the
+ * avoidModifiedQuestFiles profile key (default 1). Returns 1 when the soul may
+ * be switched, 0 when it must be refused, and sets *mismatch to 0 when the
+ * stamp matches, 1 on a different-world-version stamp and 2 on the
+ * never-camped case (a stored 0) - the two wordings the original distinguishes. */
+int  hero_world_crc_check(int avoid, int *mismatch);
 
 /* --- the personal BIO (FUN_00452107 / FUN_00438C05) -----------------------
  * Two files per soul, both under the port's save root in a "bio" directory, the

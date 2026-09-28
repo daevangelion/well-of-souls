@@ -1,0 +1,1447 @@
+;
+; Copyright 1999-2000 (c) Synthetic Reality Co.
+; http://www.synthetic-reality.com
+; All Rights Reserved
+;
+; This is an example Well of Souls Script File
+;
+; The format is not very forgiving, and the documentation is what you see here, so my
+; very best of luck to you getting it to work!
+;
+; For a more detailed bit of documentation, please visit the web site at http://www.synthetic-reality.com/wosDev0.htm
+; and check out the QUEST DICTIONARY.
+;
+; Comment lines must BEGIN with a semi-colon
+; Most non-comment lines start with a KEYWORD, which might have some ARGUMENTS
+; Some keywords announce the beginning of a new section.  A plus sign marks
+; the beginning of a section, a minus sign marks the end, as in:
+;
+; +SECTIONNAME
+; <obj#1>
+; <obj#2>
+; -SECTIONNAME
+;
+; Sections can appear in any order, but here are the current section names:
+;
+;  CREDITS			// documentation of the world's authors
+;  STORY			// Background story which scrolls by at start
+;  TERRAINS			// your names for the terrain possibilities (water, lava, etc)
+;  MAPS				// descriptions (file names) of the available maps
+;  TOKENS			// tokens which keep track of player achievements
+;  ELEMENTS			// your definitions of the 8 elements
+;  HANDS			// your definition of the 'right-hand-weapons' classes
+;  ITEMS			// stuff (equipment, potions, bonus items, etc.)
+;  SPELLS			// spells that can be cast, and their effects and appearance
+;  MONSTERS			// Monsters you can encounter, their skills and appearance
+;  GROUPS			// monster groupings (which are found together in which combo)
+;  LEVELS			// Hero experience level switch points and names
+;  SCENES			// scripted dialog to advance plot
+;  EQUIP			// Names of the non-hand Equipment items, in case your world needs them
+;  THEMES			// Ambient background sound themes for your world
+;
+; The #include "filename" command lets you break everything up into pieces, so you will
+; see that many of the above sections are actually presented in separate files, such
+; as "items.txt", "spells.txt", "levels.txt" etc.  This file ("quest.txt") then uses
+; "#include" to make it appear as it the other file's contents were actually part of
+; quest.txt itself.
+;
+; Note to players:  Don't read this until you have finished playing the world, as this
+; cannot possibly enhance your experience and will no doubt rob you of small pleasures.
+;
+;
+;
+;
+;----------------
+; CREDITS section
+; This is the script file for the world 'Evergreen'
+; Here is where you should make an effort to compliment anyone who
+; contributed to your world.  These credits are not yet automatically
+; shown, but will be someday...
+
++CREDITS
+Evergreen
+
+Story by Dan Samuel
+Skins by Josh Worts
+Other Art by Dan Samuel
+Most music by Dan Samuel, with the help of JAMMER(r)
+	
+Programming by Synthetic Reality
+Contact us on the web at:
+http://www.synthetic-reality.com
+-CREDITS
+
+
+;
+;--------------
+; STORY Section
+; This has the 'back story' which scrolls by at the very beginning.  Most people will
+; skip over this.  
+; a line of text beginning with | will be centered, otherwise text is left-justified.
+; Each line of text will be its own paragraph, which will word-wrap nicely (we hope)
+; within paragraphs.
+; don't be TOO long-winded here or people will get irritated.
+; note that leading spaces in a paragraph are significant and would cause the first line
+; to be indented.
+;
+; Special commands, one per line, control text which follows
+;
+; :C red,green,blue			set text color (as in ":C 255,0,0" for bright red)
+; :S size					set text size  (200 is 'normal')
+; :F fontName				set text font name  (use ":F  " to restore default font
+;
+; Note: There is a long pause just after the world is selected and before the scrolling back-story
+; appears.  Normally the screen would just be black at this time.  However, you can add a file to
+; your world's ART folder called "splash.jpg"
+;
+; If "worlds\myworldname\art\splash.jpg" exists, then that image will be displayed statickly during
+; the lengthy map-loading delay.  You can't control how long the splash will be seen, however.  It
+; will be seen longer on slower computers.
+
++STORY
+:S 200
+:C 255,255,0
+|Evergreen
+:S 75
+:C 255,255,255
+|~~~
+|by Dan Samuel
+|Skins by Josh Worts
+|Music by Jammer and ahadikeen@aol.com
+|~~~ 
+:S 100
+:C 204,153,0
+The world of Evergreen was a paradise until the coming of the Black Wrath.  Before anyone suspected its true nature, the Wrath swept across the country, devouring all that was good.
+You are the last hope of Evergreen, and are all that stands between it and the Wrath's demonic minions who consume all they encounter.
+You must incarnate in order to collect all the mythic soul armor of the ancient heroes of Evergreen. Only then do you dare to battle the Wrath.  
+Perhaps over time, other souls will join you in your struggle.
+:F Arial Italic
+:C 255,0,0
+Prepare yourself...
+-STORY
+
+;---------------------
+; TERRAINS Section
+; Up to 10 terrains (0-9) may be defined and then 'painted' onto maps.  Characters must
+; possess the correct equipment to cross certain terrains.  Terrain 0 is always cross-able
+; by all characters.
+;
+;	arg0	the terrain ID  0-9
+;   	arg1	the name of the terrain (keep it short, it shows up on the terrain editor palette)
+;	arg2	the damage inflicted on a character when walking on this terrain (negative heals)
+;			NOTE: terrain damage not yet implemented.
+;	arg3	(optional), a token number (0 not allowed) which allows travel over that terrain
+;
++TERRAINS
+;	arg0	arg1				arg2	arg3
+;
+	0,		"No Hindrance",		0,	0
+	1,		"Lava",			10,	0
+	2,		"Electricity",		10,	0
+	3,		"",			0,	0
+	4,		"Deep Water",		0,	0
+	5,		"Clouds",		0,	0
+	6,		"",			0,	0
+	7,		"",			0,	0
+	8,		"Healing",		-10,	0
+	9,		"Impassable",		0,	0
+-TERRAINS
+
+
+
+;---------------------
+; EQUIP names section
+;
+; This section is completely optional.  You only need it if you want to have different
+; names for the standard equipment classes.
+;
+;  arg 0 	the equip ID (must be one of the following numbers):
+;
+;  				0	// "Helmet"
+;  				1	// "Armor"
+;  				10	// "Boots"
+;  				11	// "Shield"
+;  				12	// "Ring"
+;  				13	// "Amulet
+;
+;  arg1		the name for that class of item.  (Keep it short as it gets used in a lot of cramped places.)
+;
+
++EQUIP
+;	arg0	arg1
+;	ID		Name
+
+  	0,		"Helmet"
+ 	1,		"Armor"
+ 	10,		"Boots"
+ 	11,		"Shield"
+ 	12,		"Ring"
+ 	13,		"Amulet
+-EQUIP
+
+
+
+;--------------------
+; THEMES section
+;
+; This section allows you to extend the sound themes available within your scenes.	A sound theme
+; consists of a single looped sound (played over and over for as long as the theme is in progress)
+; and one or more one-shot sounds (played at random intervals).
+;
+; arg0 ID (1-255)	(note that these override the built-in themes, so avoid using the lowe numbered
+;					themes if you want to keep the built-in themes available
+;
+; arg1 name			this is just your friendly name for the theme
+;
+; arg2 loopSound	The name of the .wav file to be looped.  Do not include the .wav extension here, as
+;					it is assumed.  The sound effect file is expected to be in your world's SFX folder, and
+;					if not found there, the WoS/SFX folder is checked next.  This sound is optional, but
+;					if you leave it out, don't forget to leave the comma where it would have been.
+;
+; argN oneshots		One or more single-shot sounds may be defined.  These are defined with the format
+;					"seconds=sound" as in: "10=splash" meaning: play the splash sound about every 10 seconds
+;					on average, but randomly.  You should adjust the seconds field until you get the sound
+;					you like.  You will need to adjust the timing, volume, and number of single-shots until
+;					you get a sound you like.
+
++THEMES
+;	arg0	arg1		arg2			arg3 - N
+;	ID		name		loopSound		seconds=sound
+;
+;	note: reserve first 20 for the hard-coded themes (also note that 0 means 'silence')
+;
+	20,		cavedrip,	campfire1,		10=drip1,10=bird1,10=splash1
+;
+-THEMES
+
+;--------------------
+; MAPS section
+;
+; Each map in the world (world, city, cave, etc.) needs an entry in this table
+; Map 0 is always the main world map.
+;
+; As of release A77, you may now have 1000 maps (0-999)
+;
+;  Each map needs the following arguments:
+;
+;	arg0	the map ID (0-999)  0 is main world map  Link points are via map numbers
+;
+;	arg1	the image file name of the map (a JPG usually, but RLE BMP is OK)
+;
+;	arg2	the OBL file name for the map (which places link point objects on that map
+;			Note: if a terrain file exists, it must share the same name, so do NOT
+;			put an extension on the file name.  "iceland" would indicate both
+;			"iceland.OBL" and "iceland.TER" (and possibly other files as development
+;			continues.  The OBL and TER files are created when you use the map editor.
+;			You are primarily responsible for generating the image file (JPG).
+;			This is also the root name of the MIDI music file played when wandering
+;			That map. (music files should be in the world or root MIDI folder)
+;
+;	arg3	The map name.  This appears briefly as the user changes maps.
+;
+;   arg4	The Map FLAGS. This is a number, containing several flags, which controls
+;			specific behaviours of players while on a map.  Add together the values
+;			of each flag you want and then set the map flags to that value.  For example,
+;			if you want both flag 2 and flag 4, then set the map flags to "6"
+;
+;		As of release A77, you can use hexadecimal values for the map flags (start the number with 0x)
+;               If you don't know what this means, just add the decimal values together for the combo you want
+;
+;           	The flag values are:
+;
+;		DECIMAL		HEX		MEANING, WHEN INCLUDED
+;
+;		1		0x00000001	// enables pet vs pet battles (but protects players from pets)
+;		2		0x00000002	// enables pets to be used against other players or pets (if pkers or no safehaven)
+;		4		0x00000004	// enables "no protection from PKer"
+;		8		0x00000008	// enables "no PKing allowed here at all"
+;		16		0x00000010	// enables "LADDER" reporting. (PK kills on this map are reported to ladder server)
+;		32		0x00000020	// enables "show all link names." 
+;							// Normally link names are hidden until after first use of link.
+;		64		0x00000040	// disables "Shadows" under heroes (and monsters) on map and in scenes of that map.
+;		128		0x00000080	// disables the use of pets (cannot summon them) on this map.
+;		256		0x00000100	// disables eavesdropping to and from players on this map.  
+;							// (you can still whisper, shout, etc.)
+;		512		0x00000200	// designates the map a GUILD HALL map.  (not sure what this means yet...)
+;		1024	0x00000400	// Prevents Humans from being able to damage monsters or pets
+;		2048	0x00000800	// NO_REWARD.  After a fight, no GP, XP or items are found to reward the survivors
+;							// Pets still get rewarded, coz I am a big softy
+;		4096	0x00001000	// NO_HEAL.  Heal spells and items provide only 1HP of sustenance.
+;		8192	0x00002000	// NO_TICKETS.  Tickets won't work here
+;		16384	0x00004000	// NO_MINI_MAP. upper right minimap is uninformative here
+;		32768	0x00008000	// NO_STUN.  the non-buff disease spells will not work here 
+;							// (stun, sleep, paralyze, etc.)
+;		65536	0x00010000	// NO_BUFF.	the buff/debuff disease spells will not work here.
+;		131072	0x00020000	// NO_PKREZ. PKers cannot use resurrection spells on others
+;		262144	0x00040000	// MAP_FLAG_HIDE_LINKS. don't show white link boxes on minimap until visited
+;		524288  0x00080000	// MAP_FLAG_NO_WAYPOINTS disable automatic waypoint calculations (good for mazes)
+;		1048576	0x00100000	// MAP_FLAG_NO_ITEM - No using of items in scene
+;
+;	arg5	The map Sound Theme 0 (none) - 255 (see THEME table for making your own themes)
+;			If you provide this argument, it picks a sound theme which will be played while the player is walking
+;			on the map (not inside a scene of that map, though you might want a common theme.)  Note that you 
+;			cannot have multiple themes on one map.
+
+;
+; FOR EXAMPLE:
+;
+;	arg0	arg1				arg2				arg3						arg4			arg5
+;	ID		image file			OBL/TER/MID	root	Map Name (seen by player)	Map FLAGS		Map Theme
+;
+;	0,		wormCave.jpg,		wormCave,			"Wyrm Cavern",				0,			0
+;	5,		town2.jpg,			westin,				"Westin",					0,			3
+;	6,		town3.jpg,			stonetree,			"Stonetree",				0,			0
+
++MAPS
+
+;
+; The actual map definitions are in this file, which is created by the New World Wizard:
+;
+#include maps.txt
+
+-MAPS
+
+
+;--------------------
+; Tokens are used by the script engine to keep track of what the player has accomplished.
+; Each token is just a number, in the range 1-4095
+;
+; When you design your quest, assign a token to each major phase of the quest.  For
+; example, at the start of the game, the player has no tokens.  But after you have
+; told them the nature of a puzzle, you would give the player the token which
+; represents that puzzle.  That way, when the player returns to the same scene, the
+; script engine sees that he already has the token and hence doesn't repeat the
+; explanation (but perhaps gives a short recap reminder instead).  Once the player
+; has completed the quest (killed the dragon, etc.) you give him a different token.
+; If the player already has the final token for a quest, then the script engine
+; can simply skip the whole thing, or just deliver a 'thank you' message.
+;
+; This example uses the least significant digit to identify the tokens (up to 10) 
+; which belong to a single quest, and the higher digits as a 'quest #' (for
+; example, token 47 would be token #7 of quest #4).  This is completely arbitrary
+; and you are allowed to use token numbers in any order you like.
+;
+; For example, let's pretend there is a minor quest which requires killing a dragon.
+; The tokens might be:
+;
+;  token 1  - the king has told me to kill the dragon
+;  token 2  - I have killed the dragon
+;  token 3  - I have returned to the king and gotten my reward
+;
+; Then the script file for the king's throne room might look like this:
+;
+;  IF T1  @alreadyToldHim
+;    'Hello young man, please kill the dragon for me
+;    GIVE T1
+;  END
+;
+;@alreadyToldHim
+;  IF T3  @alreadyRewardedHim
+;    'Thank you for killing the dragon, here is some gold
+;    GIVE G100
+;    'And here is my silver ring of dependability
+;    GIVE I43
+;    GIVE T3
+;  END
+;
+;@alreadyRewardedHim
+;  'Hey, I already GAVE you the ring of dependability!  Get out of here!
+;  END
+;
+;------------------------------------------------------------------------------------
+; You don't have to have a token defined in this section to use it in the script,
+; But you will probably find it easier to keep track of things if you do.  Also,
+; I use the decriptions you give here to create a 'log book' the player can read
+; to review what they have done so far.
+;
+; You may find it easiest to write the outline of your quests in this section first,
+; and not flesh out the actual scenes until the entire structure of the world has
+; been defined.
+
++TOKENS
+	1,"You have agreed to obey the golden rule."
+	2,"Lurch The Hand has lectured you in the art of fighting."
+    3,"You informed the Brother of Macguyver Castle about the meeting date."
+; Quest 1, The Fire Boots
+	10,"Felafel begged you to rid his kingdom of the cavern dragon."
+	11,"You conquered the cavern dragon and took a scale from his hide."
+	12,"The bootmaker in MacGuyver Castle says he can make dragon boots from the scale of a dragon."
+	13,"A fine pair of boots were made, but then stolen by Zanf"
+	14,"You traced Zanf to his secret hide-out."
+	15,"You bested Zanf in battle and retrieved the Fire Boots."
+; Quest 2, The Lost Gem
+	20,"Jett told you of her grandmother's enchanted pearl"
+	21,"You confronted the witch Miranda, who told you the true story of the pearl."
+	22,"With Miranda's help, you found the gladstone pearl."
+	23,"Returning to Jett, the Pearl's Light of Truth exposed her true nature."
+; Quest 3, The Scroll of Fidelity
+	30,"Gregor spoke of an ancient library, buried beneath the sands."
+	31,"You crossed the lava desert and found the Mouth of Satan."
+	32,"You bested the demons guarding the entrance to the library."
+	33,"You searched the library and found the Scroll of Fidelity."
+	34,"You told Gregor of the library's location, and he left to protect it."
+; Quest 4, The Troubled Twins
+	40,"Twins Janus and Jonus are insanely jealous of one another."
+	41,"Each accuses the other of stealing money from the treasury."
+	42,"The treasury guard tells you of a strange noise he sometimes hears."
+	43,"You have discovered the secret hole in the back of the treasury."
+	44,"You have captured the goblin thief."
+; Quest 5, The Goblin Army
+    50,"You hear rumours of a Goblin Army amassing in the east."
+	51,"You find a town which has been ravaged by the goblins."
+	52,"The Goblins blame humans for the theft of their holy artifact."
+	53,"You find the artifact in the hands of a band of rebel Goblin Centurions."
+	54,"You expose the centurions to the Goblin Emperor and restore the artifact."
+	55,"The town recovers"
+; Quest 8 of the Book
+	5,"Professor J asked you to retrieve a book from MacGuyver castle."
+	6,"You found the lost copy of Elementia Corpuscula."
+	7,"You helped Professor J finish his doctoral thesis."
+-TOKENS
+
+
+;---------------------
+; ELEMENTS Section
+; 
+; Every world has exactly 8 'elements' which you must define (or terrible things will happen..
+; woe is you!)  The 8 elements form a circle which describes their effectiveness against
+; each other.  The opposing element is most effective against an element.
+;
+; Visualize the IDs like this (many thanks to Janne Jaula for this):
+;
+;         0
+;      7  |  1
+;       \ | /
+;    6 ---+--- 2
+;       / | \
+;      5  |  3
+;         4
+;
+; With ID 0 at the NORTH position.  This must be your 'healing' spell. and will apply healing
+; equally to all characters, independent of their element affinities.
+;
+; The rest of the elements wield pain according to their position on the chart with element 1, 
+; for example, delivering the most damage to element 5, somewhat less to 4 and 6, and a little to 7 and 3
+; while hardly any to 0 1 and 2.
+;
+; It is likely that element 4 (the opposite of 0) will also be singled out for some special
+; effect in the future... the element table is new :-)
+;
+;	arg0	the element ID  0-7
+;   arg1	the name of the Element (keep it short, it shows up on the element affinity chart)
+;									(also if the first letter could be unique, it would help)
+;
+; Note: you can actually use element IDs from 8-255 as well, with Spells and Monsters.  But you cannot
+; name those elements (they all show up as "chaos" elements)(as of A78, you can)
+;
++ELEMENTS
+;	arg0	arg1				
+;
+	0,		"Life"		
+	1,		"Water"			
+	2,		"Nature"			
+	3,		"Earth"			
+	4,		"Death"		
+	5,		"Fire"		
+	6,		"Spirit"		
+	7,		"Air"	
+;
+; As of A78, you may optionally give names to the 'chaos' elements (#8-#255), though it will make no 
+; difference to the behaviour of the element itself.
+;
+; Note that the elements.bmp file has placeholder images for each element in the order shown in this table
+; so if you make up or reorder elements, be sure to provide an updated art/elements.bmp for your world.
+;
+-ELEMENTS
+
+;-----------------------
+; HANDS section
+;
+; Similar to elements, the 'hand' classes represent the different styles of
+; weapons which can be held in the 'right-hand.' The EQUIP screen allows the
+; player to train themselves in these 8 categories.  Only after they reach
+; level 5 in a category are they able to wield weapons of
+; that category.  
+;
+;	arg0	The ID of the 'hand' which strangely enough is numbered 0-7 even though
+;			elsewhere it is referred to as 1-8, so I expect to needlessly confuse
+;			you about this.
+;	arg1	The name of the weapon class.  
+;	arg2	The 'range' of the weapons class.  This should be a number in the range
+;			0-100 which represents the distance at which EQUIP attacks WILL NOT MISS. A
+;			small range circle will be drawn at your feet when you have the EQUIP
+;			list selected and it is your turn to fight.
+;   arg3    The sound effect to be played when this hand attacks, unless the equipped item
+;			has its own sound effect.  If neither the hand nor the weapon has a specified
+;			sound effect, one is selected at random each time you load the world.
+;
+; 	arg0	arg1
+;	ID		Name
+
++HANDS
+;  
+; arg0		arg1		arg2		arg3
+;  ID		Name		Range		SoundFX
+;
+	0,		"Sword",	30,			"sword1.wav"
+	1,		"Staff",	20,			"staff.wav"
+	2,		"Bow",		100,		"sword8.wav"
+	3,		"Music",	50,			"chirp4.wav"
+	4,		"Fist",		20,			"fist.wav"
+	5,		"Dart",		80,			"dart.wav"
+	6,		"Book",		70,			"chant6.wav"
+	7,		"Spirit",	90,			"crow1.wav"
+-HANDS
+
+
++ITEMS
+
+; The actual item definitions, and documentation, are in this file:
+#include items.txt
+
+-ITEMS
+
+
++TROPHIES
+; The actual trophy definitions, and documentation, are in this file:
+#include trophies.txt
+-TROPHIES
+
+
++SPELLS
+
+; actual spell definitions, and documentation, are in this file:
+#include spells.txt
+
+-SPELLS
+
+
++MONSTERS
+
+; actual monster definitions, and documentation, are in this file:
+#include monsters.txt
+
+-MONSTERS
+
+
++GROUPS
+
+; actual groups, and documentation, are in this file
+#include groups.txt
+
+-GROUPS
+
+
++LEVELS
+
+; actual character classes, levels, and documentation are in this file
+#include levels.txt
+
+-LEVELS
+
+
+
+;-------------------
+; Individual Scenes (each needs a unique scene number)
+;
+; Reserved Scene numbers are:
+;
+;   0	Well of Souls (primary well for your main map)
+;   1   General CAMP scene (inherits jpeg, theme from closest link)
+;   2   General FIGHT scene (inherits jpeg, theme, and monster level from closest link)
+
+; For a more detailed bit of documentation, please visit the web site at http://www.synthetic-reality.com/wosDev0.htm
+; and check out the QUEST DICTIONARY.
+
+; Scene Command Overview
+;
+; A scene consists of a series of scene commands.  The first command of a scene must be the
+; "SCENE" command which assigns it a unique id number and some initial settings.  The final
+; command must be an "END" command which terminates the scene (otherwise, the first command
+; of the following scene would be executed and that would probably be a bad thing)
+;
+; For example:
+;
+;	SCENE	<scene number><jpg><type><title>
+;     a command
+;     another command
+;     and the command after that
+;	END		<end of scene, personal magic and item use may begin>
+;
+; While a scene is executing, the player cannot do normal fighting actions, nor use
+; items or spells in general.  Link points on the map can be bound to specific scene
+; (by ID number) and that starts execution of the scene.  After the first "END" command
+; is executed, the scene is over, but the player is left in the scene viewing it in its
+; final state.  At that point the player may use items, magic, and possibly fight other
+; players.
+;
+; Please see example scenes in this file for a more intuitive understanding of how scenes
+; work.
+;
+; The following is a list of available scene commands and their usage
+;
+;-----------
+;	THEME	<sound Theme> (if no number given, or 0,  then use theme from link point)
+;                      -1:                      // stop ambient sounds
+;			0:			// stop ambient sounds, or use closest map link theme
+;			1:			// near a bubbling brook
+;			2:			// rain storm
+;			3:			// windy aerie
+;			4:			// light wind
+;			5:			// waterFall
+;			6:			// campfire
+;			7:			// Raging Fire
+;			8:			// Birds
+;
+; This command turns on and off the background ambient sound effects in the scene. (the initial
+; theme can be started automatically as part of the SCENE command)
+;
+; Use THEME -1 to stop a theme
+; Use THEME 0  to play the theme associated with the closest map link
+;			
+;-----------
+;	MUSIC	<midi file>
+;
+; This command changes the currently-playing background MIDI music file.  The game  looks first
+; in the current world's MIDI folder for a file of the name given.  If not found, it looks in the
+; root WoS\MIDI folder for the file.
+;
+; To turn music off, try to play a file whose name does not exist.
+;
+;-----------
+;	SOUND	<WAV file>
+;			as in:  SOUND "mySound.wav"
+;
+; This command causes the WAV file in the current world's SFX folder to be played (one time)
+;
+;-----------
+;	BKGND	<JPEG file>
+;			as in:  BKGND "myBackground"
+;
+; This command causes the scene's background jpeg to switch. Note that the background
+; specified in the SCENE command will be shown first, so if you need to avoid a flash
+; of the default background before you determine (via tokens) which background is
+; appropriate, be sure to set the default background to something like all black, or 
+; whatever works for your world.
+;
+; New to A76 - WIDE SCENES.  In either the SCENE command or the BKGND command, you can now specify
+; an optional WIDTH and HORIZON setting.  For example, if you said the jpeg name was "cave.300.25" that
+; would mean "use the file cave.jpg for the background, but it is actually 3x normal width, and the horizon is
+; at 25% from the top"  This would limit characters from walking above the bottom 75% of the screen (use 0
+; for unrestricted motion).  Since the background was 300% of normal, it could not all be seen at the same
+; time.. you would have to walk a long time to cross it all.  And you won't be able to see everyone in the
+; scene at the same time.  Hence there is the concept of the CAMERA which attempts to focus the display on
+; the most important thing happening.  These rules are complicated and vary with fighting and chatting.
+;
+;-----------
+;	WEATHER	<Weather ID#>
+;			as in:  WEATHER 9
+;
+; This command causes the scene's weather to change
+;
+;-----------
+;	FX	<FX ID #>
+;			as in:  FX 2
+;
+; This command causes the scene's FX to change
+;
+;-----------
+; @labelName
+;
+; Starting a line of a scene with an @ symbol makes that line a 'label.'  Several commands
+; allow you to jump to a labeled line of a scene in an effort to loop, or perform different
+; actions based upon the player's circumstances.
+;
+; Note: the label must be on a line by itself - do not place other scene commands on the same
+; line
+
+;-----------
+;	GOTO	<labelName>
+;
+; This command immediately jumps to the specified label and then executes the script command
+; on the following line.  Be careful about unintentionally creating infinite loops. Spaces are
+; not allowed in label names.  Just use letters and numbers with a single @ in front
+;
+; For example:
+;
+;     SCENE <arguments not shown>
+;       command1
+;       command2
+;     @thisIsALabel
+;       command3
+;       command4
+;       GOTO @thisIsALabel
+;     END 
+;
+; This scene will execute commands 1 and 2, then repeat infintely executing commands 3 and 4
+;
+;-----------
+;  GOTO EXIT
+;
+; This command causes the players to be booted from the scene and back to the map, as if the
+; scene host pressed their (camp) EXIT button.
+;
+;-----------
+;  GOTO SCENE <scene number>
+;
+; This command lets you jump the player from the current scene into a new scene (which then starts
+; at its beginning.)
+;
+; However, when you exit the scene, you will be at your original location (the place where you
+; dropped into the original scene). This command never changes your current map.
+;
+; Jumping to a non-existent scene number may not fail gracefully.
+;
+;-----------
+;  GOTO LINK <map number>, <link number>, <dropin code>
+;
+; This command actually moves the character to a position just above the specified link on the specified map.
+; For example:
+;
+;     GOTO LINK 0,0
+;
+; On evergreen, this would take you on top of the gateway link on the main map.
+;
+; The third argument (dropin code), if present and non-zero, causes the player to drop 'into' the link
+; after arriving.  What happens after that is a function of the link in question (might do nothing, might
+; go into a scene, might link to a whole different map)
+;
+; So:
+;
+;     GOTO LINK 0,0,1
+;
+; On evergreen, this would move the player to just above the gateway link on the main map, and then drop the
+; player INTO the gateway (scene).  When the player exited that scene, they would be on the main map just
+; above the gateway.
+;
+;-----------
+;	IF		<id list>   <label>
+;			Tnn+Snn-Inn+Gnn+WIN-LOSE+ALIVE-DEAD+YES-NO
+;           Token, Spell, Item, Gold, Won last fight, lost last fight, still alive, dead, answered YES or NO to recent ASK
+;           all tokens measured against scene SERVER only
+;			all specified terms must be TRUE (or FALSE if preceded by minus sign)
+;
+; This command checks to see if the condition given is TRUE and if so, it jumps to the specified
+; label.  Otherwise it just continues with the next scene command.
+;
+; The condition is specified as a list of IDs separated by plus and minus signs.  The IDs each start
+; with a unique letter possibly followed by a number.  For example "I34" means "Item 34" It is TRUE 
+; if the player hosting the scene has item 34 in his or her pocket.  "T12" means "Token 12" and
+; usually you will check the presence of tokens to decide which path to take through your scene.
+;
+; If you need two conditions to both be true in order to jump to the label, then list both IDs and
+; separate them by a plus sign.  If you use a minus sign in front of an ID, then it is true if
+; the player does NOT have that ID.  For example "T12+I15-S22" means: "If the player has Token 12
+; AND item 15, BUT NOT spell 22, then the condition is true and the jump to label will occur"
+;
+; For example:
+;
+;     SCENE <arguments not shown>
+;       command1
+;     @label1
+;       command2
+;       IF  T3-T4+T5, @label2
+;       GOTO label1
+;     @label2
+;       command3
+;     END
+;
+; In this case, the scene starts by executing command1, and then gets stuck in a loop, executing
+; command2 over and over until the condition is true, allowing it to jump to label2 and execute
+; command3 then leave.  
+;
+; The condition we are looking for is "Player has token3 and token 5, but NOT token 4" (and
+; again, only the player who is hosting the scene is checked. tokens and items in the possession
+; of other players in the scene are not important)
+;
+; The condition IDs supported are:
+;
+;     #n		player is on map n
+;     ALIVE		player is alive
+;	  Cn		true if player is of character class 'n'
+;     DEAD		player is dead
+;	  Enn		Player is EQUIPPED with item nn (not just in possession of one)
+;     Fnn		true if player is on a map with this 'map flag' set. (nn = 1, 2, 4, 8, 16, 32, etc.)
+;     Gnn		Player has at least nn gold pieces
+;     GS		True if scene host is a 'golden soul'
+;     Hnn		true if this CHARACTER is nn hours old (or older)
+;     Inn		player has item nn (from ITEMS table)
+;     Jnn		player has completed mission (job) nn
+;     KBn		player has been killed at least once, by monster ID = n
+;     KBn.x     player has been killed at least x times by monster ID = n
+;     KMn		player has killed at least one monster 'n' (monster ID = n)
+;     KMn.x     player has killed at least 'x' monsters of type 'n'
+;     LOSE		player lost last fight in this scene
+;     M0		true if player is a CHEATER character  (m-zero)
+;	  M2		true if player character has played in a modified world before.
+;	  M4		true if player has ever turned off the "avoid modified quest files" option.
+;     NO		player answered NO to last ASK scene comman
+;	  P0    	true if player is a PLAYER KILLER (p-zero)
+;     Pnn     	true if player is a PLAYER KILLER *and* has killed other players at least nn times.
+;     Qword		player answered 'word' to last ASK scene command (use ^ if your word has spaces.. "Qbutter^fly" matches "butter fly")
+;	  Rnn		Random Number (nn = 00-99, represents percent chance of TRUE)
+;     Snn		player has spell nn (from SPELLS table)
+;	  Tnn		player has token nn (from TOKENS table)
+;     Vnn  		true if player's level is greater than or equal to nn
+;     WIN		Player won last fight in this scene (after FIGHT scene command)
+;     XP		true if the COUNTDOWN TIMER has EXPIRED (use the COUNTDOWN opcode to start the timer)
+;     YES		player answered YES to last ASK scene command
+;     Zn		player has at least one of trophy N
+;     Zn.c      	player has at least C of trophy N
+;	  #nn		true if player is currently on map nn (as defined in MAPS table)
+;
+;
+;-----------
+;   ACTOR	<ID #><character name><skin><pose><x,y>
+;
+; This command creates an ACTOR in the scene. Actors can walk around and deliver
+; scripted lines of text.  Each actor in the scene needs a unique ID number (unique
+; to that scene, not to ALL scenes :-)
+;
+; You give the character a name, the name of a skin file with its image in it, and the
+; pose (offset within that file).  These 'villager' skin files are stored in the world's
+; MONSTER folder and are long filmstrips with many different villagers in a single
+; file.  You also give the actor an initial position to be standing on the screen.
+;
+; X and Y vary from zero to 100 which relate to the max size of the window (so x=100 is
+; always the far right edge of the screen, no matter what size the window has been stretched
+; to.)  Using values sufficiently outside the range will start the actor 'off screen' so that
+; a subsequent 'MOVE' command can have them appear to walk in from off stage.
+;
+; You usually define an ACTOR or two right at the start of the scene, but you can use
+; the command at any time, in case you have an actor which is only present if certain
+; conditions have been met.
+;
+; For example:
+;
+;    SCENE <arguments not shown>
+;       ACTOR 1, "Old Carl", "joshVillagers", 3, 20, 80
+;       IF -T12, @noYoungCarl
+;       ACTOR 2, "Young Carl", "joshVillagers", 15, 50, 80
+;    @noYoungCarl
+;    END
+;
+; Here the scene starts by creating "Old Carl" as actor #1 standing at the lower left of
+; the screen.  Then if the player does NOT have token 12 ("-T12") it jumps to the label
+; and skips the creation of "Young Carl" who otherwise would be standing in the lower
+; center of the screen.
+;
+;-----------
+;   MOVE	<ID #>, <x>, <y> {,<optional mode>}
+;
+; This command tells a previously declared ACTOR to move to a new x, y position on the
+; screen.  This is a real time action and it may take them awhile to amble on over.  You
+; might need a WAIT command if you want the next scene command to not take place until after
+; they get there.
+;
+; The optional <mode> value controls the nature of the motion.  If you don't specify it, it will
+; use mode 0 (normal walking).  mode '1' will cause the actor to instantly teleport to the new x,y
+; location (A good way to get a character offscreen in a hurry).  As of version A74, modes 2, 3, 4, and 5
+; will make the actor move varying amounts of more_quickly.
+;
+; For example:
+;
+;    ...
+;    MOVE  1, 50,50              <-- actor '1' walks leisurely to center of screen
+;    MOVE  2, 0,0, 1             <-- actor '2' teleports instantly to upper left of screen
+;
+;-----------
+;   POSE	<pose>	{, pose2, pose3}	(change pose of current actor)
+;
+; When you created the ACTOR, you specified both an image file name, and an offset (pose) to
+; a particular image of that file's filmstrip.  If you have several images of the same
+; character in that file, this command lets you flip between them for whatever reason you
+; like.  For example, I use it to 'morph' the evil witch into her true self.
+;
+; The pose you specify will be held until you specify a different one.  HOWEVER, as of
+; version A30, you can specify two additional poses (3 in all, pose1, pose2, and pose3).
+;
+; If you specify the additional poses then the actor will cycle between pose1 and pose2
+; for approximately equal (but random) amounts of time, with occasional brief displays
+; of pose3.  For example, pose1 and pose2 might be a frog looking in different directions,
+; while pose3 shows his tongue flitting out.  You cannot currently control the timing,
+; so for critical animations, just use a sequence of POSE commands with appropriate WAIT
+; commands.  The advantage of the multi-pose POSE command is that the animation continues
+; even after the script END command, and requires no special scripting.
+;
+;-----------
+;	SELECT	<ID #>		(select actor # as the current speaker)
+;
+; Some commands work on the 'current actor' as opposed to calling one out by name.  This
+; command lets you select the current actor by ID number.
+;
+;-----------
+;	' line of speech by character (additional lines require 'more' click by reader)
+;
+; This was the first way of making an actor speak.  I seldom use it anymore, but let's
+; pretend it is important anyway.  For example:
+;
+;   SCENE ...
+;      ACTOR 1, "Billy", ...
+;      ACTOR 2, "Sally", ...
+;      SELECT 1
+;      ' Hello, my name is Billy
+;      SELECT 2
+;      ' Hello, my name is Sally
+;   END
+;
+; This is pretty clumsy, and if all you are doing is speaking, it is more efficient to use
+; the "N:" form instead, as in:
+;
+;   SCENE ...
+;      ACTOR 1, "Billy", ...
+;      ACTOR 2, "Sally", ...
+;      1: Hello, my name is Billy
+;      2: Hello, my name is Sally
+;   END
+;
+; Each line of text you put in creates a speech bubble over the head of the actor who said it.
+; Only one actor can have a speech bubble up at a time, so the script will automatically pause
+; before executing the next speech line until the previous bubble disappears.  Bubbles disappear
+; after a brief timeout, or can be cleared by right-clicking in them.
+;
+; The percent sign symbol (%) is used as a special character.  The number following it lets you
+; stick in real-time information about the current players.
+;
+;		%0 - speaking character's name
+;		%1 - server player name (player hosting the scene)
+;		%2 - client name (each client sees his or her own name)
+;		%3 - a random insult name "stupid maggoty rat-face"
+;		%4 - name of the last person to type in chat
+;		%5 - name of last person who typed YOUR NAME at start of chat line
+;   	%C  - class name of scene host ("magic-user")
+;       %Cn - class name of class n (starting at 1) from world level tables.
+;		%En - item number of equipped item in slot n (n=10 for HELMET..) use n=0 to get 'equipped right hand' item ID
+;		%In - name of ITEM n
+;		%K0 - Total number of monsters killed by scene host
+;	%Kn - Number of monster ID n killed by scene host
+;       %L  - level name of scene host ("emperor")
+;       %Ln - level name for level n of scene host's class
+;       %L-1 - level number of scene host ("99")
+;		%Mn - name of MONSTER n
+;		%Rn - Random number from 1 to n (n from 1 to 30,000) 
+;		%Sn - name of SPELL n
+;		%Tn - token name n
+;       %% - inserts a single visible percent sign
+;
+; For example:
+;
+;      1: Hello, my name is %0.  Your name is %2. Your host's name is %1
+;      2: I, %0, think you are a %3!
+;      1: I am 99%% sure you are also a %3!
+;
+;-----------
+;   N:  (shorthand SELECT N followed by ' --  N is 0 to 9 only)
+;       as in:
+;       2: Actor 2 said this
+;		1: Actor 1 said this
+;
+; As described more fully above.
+;
+; As of A57, you can now use "actor 'H'" to mean "put words in the mouth of the scene host (an
+; actual player, not an actor!)
+;
+;       1: Hello, foolish human
+;		1: Repeat after me
+;		1: Owa
+;       H: Owa     <-- appears to have been typed by scene host
+;       1: tana
+;       H: tana
+;		1: siam
+;       H: siam
+;       1: Ok, altogether real fast now
+;		H: Ok, Owa tana siam..
+;       H: Owatanasiam...
+;       H: O wat an ass i am
+;       H: Hey!!!!
+;       1: Hee hee hee
+;
+; As of A61, you can now use "Actor 'N'" to mean "add some narration to the scene.
+;
+;       N: And then the sun set on joy.
+;
+; Narration appears in the chat window, and as a scrolling line of large text in the
+; main scene window (but does NOT appear in a chat bubble).
+;
+;-----------
+;  MISSION 1,2,3,4...
+;
+; Adds the MISSION button to the scene.  When pressed, that opens the mission dialog offering
+; all the missions (1,2,3,4) specified, for which the player meets the entry requirements
+;
+; The missions themselves are defined in the world's "missions.ini" file
+; The trophies to be collected are defined in the world's TROPHY table (see evergreen trophy.txt)
+; 
+;-----------
+;   WAIT	<seconds>  (use decimal point for sub-seconds)
+;
+; This command lets you put in a little pause before the next command is executed.  As in:
+;
+;   SCENE ...
+;       ACTOR 1, "Dave", joshVillagers, 1, 20, 80
+;		MOVE 1, 80, 80
+;		WAIT  3.5
+;       1: I should be there about now
+;   END
+;
+; This creates 'Dave" on the lower left of the screen and then starts him walking to the
+; lower right.  3.5 seconds after starting his walk (whether he has finished it or not)
+; his speech bubble pops up.
+;
+;-----------
+;	FIGHT	<fight scene - no arguments means 'standard random fight appropriate to vicinity'>
+;		FIGHT 1,2,2,4  (fight 4 monsters total, two of type 2)
+;
+; This command plays out a monster fight within the scripted scene itself.  The next 
+; scene command is not executed until the results of the fight are known (all heroes dead
+; or all monsters dead).  At that point the WIN and LOSE "IF" conditionals will work.
+;
+; You can call out a particular collection of monsters via their IDs from the MONSTERS table,
+; or you can have monsters selected randomly from the current map area monster group.
+;
+; For example:
+;
+;     SCENE ...
+;         ACTOR 1, "Zor", evilPeople, 1, 50, 50
+;         1: Prepare to die, %2, you %3!
+;         FIGHT 23,12,12
+;         IF WON, @youWon
+;         1: I knew you would lose, you %3!
+;         END
+;     @youWon
+;         1: Big deal, you won, so what, who cares.
+;     END
+;
+; So here we create 'Zor' in the top center of the screen and he insults us.  Then 3 monsters
+; appear as in a regular fight scene (with Zor still standing there watching us).  We get one
+; monster #23, and two monster #12s (as defined in the MONSTERS table)
+;
+; After the fight, if the player wins, we jump to label '@youWon' and graciously concede defeat.
+; Otherwise we execute the line following the IF and brag a little, then END the scene.
+;
+; Note that this scene now has two END commands in it.  That's OK.  The first one we execute ends
+; the scene.
+;
+; Stupid FIGHT tricks:
+;
+;  Use the opcode FIGHT2 for exactly the same effect, except the scene host is also 'stuck in the
+;  fight (similar to a PK Attack) until they stand still without fighting for 20 seconds or so
+;  (this is about as close to a forced fight to the death as the game gets)
+;
+; Mercenaries
+;
+;  If you call out a monster by ID, but add a minus sign, as in:
+;  
+;    FIGHT  1, 2, 3, -4
+;
+;  Then that monster will fight on your side (in this case monster ID 4 is the helper against 3 evil monsters)
+;
+; Mixed Stuff to The Max
+;
+;  If you include a '*' as one of the monster IDs, it means "also use monsters from the map", so:
+;
+;     FIGHT  *, 1, 2, 3
+;
+;  Means you will have a fight with monsters 1, 2, and 3 PLUS whatever a normal fight at this location might
+;  have had.
+;
+; Scene 2 is the FIGHT SCENE
+;
+;   I hope I am not lying when I say that the FIGHT command in SCENE 2 is what controls all standard map
+;   monster fights.  (the kind you get drawn into when hunting or walking the map).  So anything clever you
+;   do in that scene will affect all monster fights.  So, you could check what map you were on, what tokens
+;   the player had, their spiritual alignment (maybe) etc, and then populate the fight accordingly.
+;   This was my intention, in any case, though I never had the courage to try anything radical.
+;
+;-----------
+;	GIVE	<id#> 
+;
+; This command gives the specified object to all current members of the scene (um, even 
+; dead ones I think).  Objects are specified the same as in the "IF" command conditionals
+; with a letter followed by a number.  Unlike the IF command, however, you can only give
+; one thing per line. (no plus and minus signs please)
+;
+; Objects you can give include:
+;
+;		Tn	token N
+;		Gn	N pieces of gold
+;		In	item N
+;       Sn  spell N
+;       Hn  n health points (up to max)
+;       Mn  n magic points (up to max)
+;	Zn  trophy N
+;    
+;       <given to all members of scene> (use HOST_GIVE and PARTY_GIVE to limit who gets it)
+;
+;	GIVE xxx.y can be used to give 'y' of thing xxx all in one step.
+;
+; For example
+;
+;     SCENE ...
+;         ACTOR 1, "King", joshRoyalty, 3, 50, 50
+;         IF T10, @killedDragon
+;         1: I see you have not yet killed the dragon, begone!
+;         END
+;     @killedDragon
+;         1: Hey, you killed the dragon, accept this gold from me, please!
+;         GIVE G100
+;     END
+;
+; So, when we visit this scene, the king checks our pocket for token 10 (which we
+; presumably get after killing the dragon in some other scene) and if we don't have
+; it, the scene ends with a 'hint'
+;
+; Otherwise, we jump to the label and the king rewards us with 100 gold pieces (generous
+; guy, huh?)
+;
+; Note that this is a bad scene since once we kill the dragon the king will give us another
+; 100 GP every time we visit the scene.  Most quests should have another token which means
+; "I already gave you your reward" and the scene would check both tokens so we only got
+; our reward once.
+;
+;-----------
+;	TAKE	<ID>		<this is evil!>
+;		<taken from all members of scene>
+;
+; Same as the GIVE command, but in reverse.  Very evil.
+;
+;-----------
+;   ASK		<seconds> - waits a while for scene server to type something ("yes" or "no" flags set in response)
+;
+; This command is used when you want to ask the player a question and actually read his or
+; her answer and do something based on the response.  The actual question is asked using the
+; normal speech bubble stuff.  You just follow that command with an ASK command as in this
+; example:
+;
+;     SCENE ...
+;        ACTOR 1, "King", ...
+;        1: Say, %1, does this coat make me look fat?
+;		 ASK	20
+;        IF  YES, @saidYes
+;        1: You really think so?  Thanks!
+;        END
+;     @saidYes
+;        1: Off with your head!  Guards, take %1 to the dungeon and relieve HIM of a few pounds!		
+;     END
+;
+; Here the king poses a question.  The "ASK 20" pauses the script for up to 20 seconds (or
+; until the host player types a line of chat).
+;
+; If a line of chat is entered before the timeout, and it starts with something resembling
+; a yes, then the "YES" condition will be true and the "IF" command will jump to the label
+; where the king is unhappy with us.  Otherwise (nothing was typed, or what was typed did
+; not look like a yes) the king is happy enough and the scene ends.
+;
+; The "Qword" conditional lets you scan the host player's response for particular words or
+; letter sequences ("yes" would be found inside of "yesterday" for example), so you could have
+; complicated processing like:
+;
+;     ...
+;     1: What is your favorite color?
+;     ASK  30
+;     IF Qblue, @wasBlue
+;     IF Qred, @wasRed
+;     IF Qorange, @wasOrange
+;     ...
+;
+; Note that "Qwords" cannot include spaces, so you cannot have "QI don't know" which would be cool
+; for the Monty Python fans.
+;
+; Oooooh, if I was a good little  programmer, this might work:
+;
+;      IF QI+Qdon't+@know, @heDontKnow
+;
+; Of course, that would also trigger on the player response: "Don't you know I like red?" since it 
+; checks for the presence of the "Qword" anywhere in the response.  I *think* case is not 
+; important (I'm using standard c library "strstr()" for anyone who is interested)
+;
+;-----------
+;	OFFER	<item>{,<item>} - displays a SHOP button which, when pressed, offers the specified items for sale
+;
+; Normally a scene does not have a SHOP button until you execute an OFFER command.  The OFFER
+; command comes in two flavors, differing in the way you specify the list of items available
+; in the store.
+;
+; The OFFER command takes a simple item list and is best used for specialty stores offering
+; a limited number of items, as in:
+;
+;     SCENE ...
+;        ACTOR 1, "Shopkeeper", ...
+;        1: I have only these items. Buy them or leave!
+;        OFFER  4, 12, 103, 11, 22, 7, 15
+;     END
+;
+; Only those seven items will appear when the player presses the SHOP button.  Item numbers
+; match to entries in the ITEMS table
+;
+;-----------
+;	OFFER2	<minLevel>,<maxLevel>{,itemClass} - displays a SHOP which offers all defined items between the two levels (with non-zero prices)
+;			note: only the first 50 or so qualifying items will make it, so don't try for one store to sell EVERYTHING
+;			the optional third argument limits it to items of the specified class.
+;
+; This newer form of the OFFER command is good for shops which provide a large number of items
+; of a particular class.  For example, all boots between level 5 and 10 would be:
+;
+;      OFFER2 5, 10, 20
+;
+; Where the class number (20 for boots) is set in the ITEMS table 'class' column.
+;
+; You can have your store sell several classes  of items at the same time, by including the correct
+; three numbers for each class: <minLevel>,<maxLevel>,<itemClass>
+;
+; As in:
+;
+;      OFFER2 5,10,20,  5,10,21,  1,10,22
+;
+; This would offer all class 20 items between levels 5 and 10, all class 21 items between levels
+; 5 and 10, and all class 22 items between levels 1 and 10.  (the level limits are inclusive)
+;
+;-----------
+;   GAME  <game number>
+;
+; Similar to the OFFER button (and you cannot use both OFFER and GAME in the same scene), this
+; results in a GAME button appearing for the player.
+;
+; Pressing that button brings up a mini-game for the  player to enjoy while in the scene.
+;
+;   GAME 1	- The slobber slots machine.
+;	GAME 2	- The Monster Racer
+;	GAME 3	- The Search for Pi at Home
+;	GAME 4	- Blackjack 
+;   GAME 5  - Pokegatchi Training Center (same as 'train pet' on Equip Screen)
+;   GAME 6  - Asteroids
+;   GAME 7  - Stock Market Game
+;   GAME 8  - Tetris
+;
+; These are all, so far, solo games (since WoS itself is the multiplayer game), but you can
+; enjoy them in the presence of other players.
+;
+;-----------
+;   COUNTDOWN <seconds>
+;
+; This command starts a COUNTDOWN timer (displayed on the main screen) which counts down to zero.
+; When it hits zero, it disappears.  Cool huh?
+;
+; To make it useful, you need a scene which tests it with the 'X' conditional, as in:
+;
+;	IF  XP, @youAreTooLate
+;  	1: You made it before the countdown finished!
+;	END
+
+; @youAreTooLate
+;  	1: Could you possibly have walked any more slowly?
+;
+; You can turn the counter off prematurely by setting it to zero ("COUNTDOWN 0")
+; The countdown automatically terminates if you leave the game, or change characters.
+;
+;----------------------------------------------
+; The SCENE opcode has the following arguments:
+;
+;	SCENE		arg1		arg2		arg3		arg4		arg5		arg6
+;				scnNum		scn.jpg		Style		Name		Effects		Weather
+;
+;	scnNum - every scene must have a unique scene number.  Link points on maps can
+;			call out specific scene numbers.  In addition to that several scene numbers
+;			are special:
+;				0	Is always the intial well of souls (where you incarnate)
+;				1	The standard 'camp' scene (links can override details)
+;				2	The standard 'fight' scene (links can override details)
+;				it is advised that you treat scene numbers 0 through 9 as 'reserved' to 
+;				avoid conflicts with later developments
+;
+;	scn.jpg	- The background JPG file (from the SCENES folder of the world) to be used
+;			as the background image of the scene.  Do not include the .JPG extension
+;
+;	Style	-	To Be Defined
+;				WELL, FIGHT, SCENE, CUT
+;				Just go with the flow on this one for now.  I might make it more important
+;				later.  For now, here is the special meaning:
+;					WELL - it is the primary Well scene.
+;					FIGHT - it is the standard fight scene
+;					SCENE - it is a scripted quest scene <-- use this normally
+;					CUT	- it is a normal scene, but "heroes" are invisible (only actors appear).
+;
+;	Name	- The name of the scene (seen on title bar while in the scene)
+;
+;	Effects	-	Special effects applied to the background JPG.  These effects last for the
+;				duration of the scene (except when temporarily modified by a spell during
+;				a particular magical attack)
+;				0	No effects
+;				1	Underwater ripple (as though viewer is under water)
+;				2	Lake ripple (as though the bottom 30% of the scene is a lake reflecting)
+;				3	Video (every other line is black, giving a 'coarse video' quality
+;				4	Jitter (random vertical jitter)
+;				5	EarthQuake
+;
+;	Weather	-	Special effect (on top of all players) showin weather
+;				0	no weather
+;				1	rain
+;				2   medium rain
+;				3   heavy rain
+;				7   light snow
+;				8   medium snow
+;				9   heavy snow
+;
+;-----------------
+; PARTY <conditions>
+;
+; The PARTY command causes each client in the scene to evaluate the conditions (same as IF command conditions)
+; and to leave the party if their conditions do not evaluate to TRUE.  Hence it defines what a legal party
+; member should look like, and boots non-compliant clients from the party (but not from the scene)
+;
+; Generally this is intended to sever party members who do not deserve to follow the scene host to a new link, as
+; in:
+;
+;    PARTY T23+T12
+;    GOTO LINK 3, 4
+;
+; In this case, only clients who have tokens 23 and 12 will be allowed to stay in the party, and so when the 
+; the party leader/scene host leaps to link (3,4) only those remaining party members go along.  The rest would,
+; after the GOTO, be left sitting on the map when the scene expired.  I think.  I hope.  We'll see.
+;
+; Please note that unlike the IF command, these conditions are evaluated BY THE CLIENT (not by the scene server). 
+;
+; Another form of this command is EJECT
+;
+; The EJECT command is identical to PARTY only the people are also removed from the scene.  Remember
+; the condion specifies the people who get to STAY in the scene and party.
+;
+;-----------------------
+;  SET <cookieName>, <string>
+;
+; This command lets you store the string value into a 'cookie' of the specified name.  The cookie in question is
+; only set for the scene host and is saved in their character's file.
+;
+; Later on, you can recover a cookie value by enclosing its name, like this:  #<cookieName>
+;
+; cookie names must not include spaces or punctuation marks.  Just letters and numbers.
+;
+; For example
+;
+;  SET favoriteColor, "blue"
+;  1: Hello, %1, I see your favorite color is #<favoriteColor>
+;
+; The player will see:
+;
+;  "Hello, Bill, I see your favorite color is blue"
+;
+; The expansion of cookies is done BEFORE the evaluation of arguments, hence cookies called out inside of quoted
+; strings will work... for example:
+;
+;  SET itemID, "15"
+;  GIVE I#<itemID>
+;
+; In this case, the GIVE command will first be translated by substituting for the cookie, resulting in:
+;
+; GIVE I15
+;
+; Do not 'nest' cookies.  If you need to do something really weird, break it up into several steps.
+;
+; For more information about cookies, and a list of the current "Stock Cookies", please see the Quest Dictionary
+; at http://www.synthetic-reality.com/wosquest.htm
+;
+;---------------------------
+;
+; ADD cookieName, <string>
+;
+; The string is evaluated as a number, the named cookie's contents are evaluated as a number, and the
+; results are added together numerically and the sum is stored as the new value of the cookie.
+;
+; Math is performed as 'signed 32 bit integers' so watch out for underflow and overflow situations.  
+;
+; SET A, "15"
+; ADD A, "22"
+; 1: Jeepers, the sum is #<A>
+;
+; Should print: "Jeepers, the sum is 37"
+;
+; See SUB, MUL, and DIV commands for similar mathematical operations.
+;
+;-------------
+; SUB cookieName, <string>
+;
+;  subtracts <string> value from cookie
+;
+;-------------
+; MUL cookieName, <string>
+;
+; multiplies <string> value times cookie
+;
+;------------
+; DIV cookieName, <string>
+;
+; Divides cookie by <string> (unless <string> evaluates to zero, then nothing happens)
+; Note that 2/3 is 0, not 0.66666 since these are integer math operations.
+;
+;------------
+; MODULUS cookieName, <string>
+; MOD cookieName, <string>     <-- short form also accepted.
+;
+; Performs a modulus operation on the cookie.  (If you prefer, you can think of this as a
+; 'remainder' function.
+;
+; You may not get the result you expect if cookie has a negative value to begin with.
+; If <string> evaluates to 0, nothing happens.
+;
+;-----------------------------
+; COMPARE  A,B  (with associated IFx commands)
+;
+;Fairly simple and brain damaged, I document by example:
+;
+;       COMPARE  A,B
+;       IF=  @theyAreEqual
+;       IF>  @AbiggerThanB
+;       IF<  @AlessThanB
+;
+; The COMPARE command subtracts B from A and saves the result in a special place which doesn't get munged 
+; until the next time you use the COMPARE command.
+;
+; The three IFx commands test that special result and jump to the label if the result was as indicated. 
+; So your IFx command doesn't HAVE to immediately follow the COMPARE command, though I suspect it generally will.
+;
+; Arguments A and B are interpreted as signed decimal numbers.  For now you are stuck with constants and cookies.  
+; So, you can do:
+;
+;        COMPARE  #<cookie>, "2"
+;        COMPARE  #<cookie1>, #<cookie2>
+;
+
+
+;---- probe scenes (MissionsHtml) ------------------------------------------
+; Scene 3 is the "Gateway of Dreams" link 0 of map 0, so the Well spawn walks straight into it.
++SCENES
+SCENE 3 evergreen, SCENE, "Mission Probe", 0, 0
+	THEME	0
+	ACTOR	1,	"Quest Giver", josh1, 1, 50, 90
+	SEL	1
+	MISSIONS	1,2,3
+	' I have three jobs for you.
+	HTML probe.htm
+	' Now go and earn them.
+	END
+
+SCENE 0 evergreen, SCENE, "Singular Alias", 0, 0
+	THEME	0
+	MISSION	1,2,3,4
+	' The singular MISSION spelling arms the same button.
+	END
+
+SCENE 1 evergreen, SCENE, "Mission Check", 0, 0
+	THEME	0
+	IF J1, @done1
+	GOTO @end
+@done1
+	' Mission 1 is complete.
+@end
+	IF JA2, @acc2
+	GOTO @ja2
+@acc2
+	' Mission 2 is accepted.
+@ja2
+	IF JQ3, @q3
+	GOTO @jq3
+@q3
+	' Mission 3 qualifies.
+@jq3
+	END
+-SCENES

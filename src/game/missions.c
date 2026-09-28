@@ -93,15 +93,7 @@ int missions_load(void)
 {
     char path[MIS_PATH_MAX];
     size_t i;
-    MissionCondFn cond = missions.cond;
-    void *cond_user = missions.cond_user;
-    MissionGiveFn give = missions.give;
-    void *give_user = missions.give_user;
     missions_free();
-    missions.cond = cond;
-    missions.cond_user = cond_user;
-    missions.give = give;
-    missions.give_user = give_user;
     if (!world_path(path, sizeof path, "missions.ini")) return -1;
     missions.ini_text = text_read_file(path, 0);
     if (!missions.ini_text) { missions.loaded = 1; return 0; }
@@ -128,11 +120,28 @@ int missions_load(void)
     return 0;
 }
 
+/* Releases the missions.ini table and the hero's mission log. The offered-job list and the open
+ * picker are runtime UI state, not table state, so they survive a reload (missions_load() calls
+ * this, and a scene that runs MISSIONS before anything has read missions.ini must not lose the
+ * offer). Use missions_clear_offer()/missions_panel_close() to drop those. */
 void missions_free(void)
 {
+    int offer[MISSIONS_MAX], offer_count = missions.offer_count, offer_armed = missions.offer_armed;
+    MissionCondFn cond = missions.cond;
+    void *cond_user = missions.cond_user;
+    MissionGiveFn give = missions.give;
+    void *give_user = missions.give_user;
+    memcpy(offer, missions.offer, sizeof offer);
     free(missions.ini_text);
     free(missions.log);
     memset(&missions, 0, sizeof missions);
+    memcpy(missions.offer, offer, sizeof missions.offer);
+    missions.offer_count = offer_count;
+    missions.offer_armed = offer_armed;
+    missions.cond = cond;
+    missions.cond_user = cond_user;
+    missions.give = give;
+    missions.give_user = give_user;
     missions.picker.confirm = -1;
 }
 
@@ -500,7 +509,7 @@ static void reward(int job)
     gold = number(missions_field(job, "RewardGold"));
     if (gold > 0) {
         (void)hero_add_gold(&g_hero, gold);
-        say("You receive %d gold", gold);
+        say("You receive %d %s", gold, world_gold_name());
     }
     text = missions_field(job, "RewardGive");
     if (*text) {
@@ -583,9 +592,9 @@ static const char *const tab_titles[3] = { "Available Missions", "Open Missions"
 static void picker_rebuild(void)
 {
     Picker *p = &missions.picker;
-    int i;
+    int i, defs = missions_count();   /* lazy loads worlds/<W>/missions.ini */
     p->count = 0;
-    for (i = 0; i < missions.def_count; ++i) {
+    for (i = 0; i < defs; ++i) {
         int job = missions.defs[i].job;
         int status = mission_status(job);
         int wanted;
@@ -616,6 +625,7 @@ static void picker_rebuild(void)
 void missions_open_picker(void)
 {
     Picker *p = &missions.picker;
+    (void)missions_count();   /* the table must be in before the tab choice */
     p->tab = missions.offer_count ? 0 : 1;
     p->selected = p->first = 0;
     p->message[0] = 0;
@@ -742,8 +752,7 @@ void missions_panel_render(Framebuffer *fb)
     fb_fill(fb, (Rect){0, 0, PLAT_SCREEN_W, PLAT_SCREEN_H}, 0x00080808u);
     fb_fill(fb, panel_rect, 0x00f0e6d0u);
     fb_rect(fb, panel_rect, 0x00604020u);
-    font_draw(fb, panel_rect.x + 8, panel_rect.y + 6, "Book of Missions", 0x00202020u);
-    font_draw(fb, panel_rect.x + 8, panel_rect.y + 18, tab_titles[p->tab], 0x00404040u);
+    font_draw(fb, panel_rect.x + 8, panel_rect.y + 3, "Book of Missions", 0x00202020u);
     fb_fill(fb, x_rect, 0x00a03020u);
     font_draw(fb, x_rect.x + 12, x_rect.y + 6, "X", 0x00ffffffu);
     for (i = 0; i < 3; ++i) label(fb, tab_buttons[i], tab_titles[i], p->tab == i);
@@ -811,9 +820,10 @@ void missions_panel_render(Framebuffer *fb)
         label(fb, no_rect, "No", 0);
         label(fb, yes_rect, "Yes", 1);
     }
-    fb_clip(fb, (Rect){panel_rect.x, panel_rect.y + 352, panel_rect.w, 24});
+    fb_clip(fb, (Rect){panel_rect.x, panel_rect.y + 340, panel_rect.w, 24});
     if (p->message[0] && p->confirm < 0)
-        font_draw(fb, panel_rect.x + 8, panel_rect.y + 358, p->message, 0x00202020u);
+        font_draw(fb, panel_rect.x + 8, panel_rect.y + 346, p->message, 0x00202020u);
+    fb_reset_clip(fb);
     label(fb, cancel_rect, "Cancel", 0);
     label(fb, ok_rect, p->detail >= 0 ? action_label(p->detail) : "Close", 1);
     fb->clip = clip;

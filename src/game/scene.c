@@ -239,6 +239,38 @@ static void cookie_set(const char *key,const char *value)
     if(eq(key,"item.id")) { vm.item_id=number(value); return; }
     if(eq(key,"spell.id")) { vm.spell_id=number(value); return; }
     if(eq(key,"monster.id")) { vm.monster_id=number(value); return; }
+    /* trophies.txt lines 54-60 document the bag-geometry and slot cookies as READ/WRITE, and
+     * the write side is items.c's bag, not the INI: a SET of num.TrophyBagWidth/Height resizes
+     * it (FUN_0046FED9), which is the only way any scene can reach trophy_bag_resize(). */
+    if(eq(key,"num.trophybagwidth")||eq(key,"num.trophybagheight")) {
+        int w=0,h=0,v=number(value);
+        trophy_bag_size(&w,&h);
+        if(eq(key,"num.trophybagwidth")) w=v; else h=v;
+        trophy_bag_resize(w,h);
+        return;
+    }
+    if(eq(key,"num.trophybagopen")) return;              /* read-only state, written nowhere */
+    if(eq(key,"num.trophybagslotsinuse")) { trophy_bag_clear(); return; }
+    { /* "write REPLACEs slot with a SINGLE trophy" / "REPLACEs count, cannot set count if
+       * id=0, cannot set count above stackHeight for id" */
+        int set_id=prefix(key,"num.trophyidinSlot",18);
+        int set_count=prefix(key,"num.trophycountinslot",21);
+        if(set_id||set_count) {
+            size_t n=set_id?18u:21u;
+            int slot=number(key+n),id=0,count=0;
+            if(!key[n]) return;                 /* no slot index: not this family */
+            trophy_bag_get(slot,&id,&count);
+            if(set_id) id=number(value);
+            else {
+                int stack=trophy_bag_count(id);
+                count=number(value);
+                if(!id) return;                 /* "cannot set count if id=0" */
+                if(stack>0&&count>stack) count=stack;
+            }
+            trophy_bag_set(slot,id,count);
+            return;
+        }
+    }
     cookie_remember(key);
     hero_cookie_set(key,value);
     /* FUN_0047AB07's common tail, 0x47AE85-0x47AEA1: the derived-stat recomputation ends by
@@ -270,8 +302,14 @@ static const char *stock_cookie(const char *key,char *buf,size_t cap,int *handle
 {
     int n=0;
     *handled=1;
-    if(!prefix(key,"num.timerLength",14)) { snprintf(buf,cap,"%u",vm.timers[number(key+14)].length); return buf; }
-    if(!prefix(key,"num.timerLeft",13))   { snprintf(buf,cap,"%u",timer_left(number(key+13))); return buf; }
+    /* prefix() returns 1 ON MATCH. These were inverted, which made the timer branch swallow
+     * every non-timer key and read past the end of short ones. */
+    if(prefix(key,"num.timerLength",14)) {
+        int id=key[14]?number(key+14):-1;
+        snprintf(buf,cap,"%u",(id>=0&&id<SCENE_TIMERS)?vm.timers[id].length:0u); return buf; }
+    if(prefix(key,"num.timerLeft",13)) {
+        int id=key[13]?number(key+13):-1;
+        snprintf(buf,cap,"%u",(id>=0&&id<SCENE_TIMERS)?timer_left(id):0u); return buf; }
     if(eq(key,"num.peopleInScene")) { snprintf(buf,cap,"%d",1); return buf; }
     if(eq(key,"num.peopleInParty")) { snprintf(buf,cap,"%d",1); return buf; }
     if(eq(key,"num.countDown")) {
@@ -320,10 +358,38 @@ static const char *cookie_get(const char *key,char *buf,size_t cap)
 {
     int handled=0;
     const char *v;
-    if(!prefix(key,"num.trophy",10)) {
-        int id=number(key+10);
-        snprintf(buf,cap,"%d",trophy_bag_count(id));
-        return buf;
+    if(prefix(key,"num.trophy",10)) {
+        /* trophies.txt lines 54-60 document these as live read/write cookies, and they are
+         * backed by items.c's real bag, not by the INI. The geometry and slot families must
+         * be matched BEFORE the plain <n> count, or they would be eaten by it. */
+        static const struct { const char *name; int op; } bag[] = {
+            {"num.TrophyBagWidth",0},{"num.TrophyBagHeight",1},{"num.TrophyBagOpen",2},
+            {"num.TrophyBagSlots",3},{"num.TrophyBagSlotsInUse",4},{"num.TrophyBagEmptySlots",5},
+            {"num.TrophyBagRoom",6},{"num.TrophyIdInSlot",7},{"num.TrophyCountInSlot",8},
+            {"num.Trophy",9}
+        };
+        int b;
+        for(b=0;b<10;b++) {
+            size_t n=strlen(bag[b].name);
+            if(!prefix(key,bag[b].name,n)) continue;
+            if(key[n]=='\0' || (b==9 && !isdigit((unsigned char)key[n]))) break; /* not this family */
+            if(b==9) { snprintf(buf,cap,"%d",trophy_bag_count(number(key+n))); return buf; }
+            { int w=0,h=0,slot,tid,count;
+              trophy_bag_size(&w,&h);
+              if(b==0){snprintf(buf,cap,"%d",w);return buf;}
+              if(b==1){snprintf(buf,cap,"%d",h);return buf;}
+              if(b==2){snprintf(buf,cap,"%d",trophy_bag_used());return buf;}
+              if(b==3){snprintf(buf,cap,"%d",w*h);return buf;}
+              if(b==4){snprintf(buf,cap,"%d",trophy_bag_used());return buf;}
+              if(b==5){snprintf(buf,cap,"%d",trophy_bag_free());return buf;}
+              if(b==6){snprintf(buf,cap,"%d",trophy_bag_room(number(key+n)));return buf;}
+              if(b==7){int s2=number(key+n);
+                       if(trophy_bag_get(s2,&tid,&count)){snprintf(buf,cap,"%d",tid);return buf;}
+                       snprintf(buf,cap,"0");return buf;}
+              slot=number(key+n);
+              if(trophy_bag_get(slot,&tid,&count)){snprintf(buf,cap,"%d",count);return buf;}
+              snprintf(buf,cap,"0");return buf; }
+        }
     }
     v=stock_cookie(key,buf,cap,&handled);
     return handled ? v : cookie_raw(key);
@@ -965,7 +1031,12 @@ static void give_all(char toks[][256],int n,int take,int host_only)
         char letter;
         if(!spec || !spec[0]) continue;
         letter=(char)toupper((unsigned char)spec[0]);
-        if(!give_object(spec,take?-1:1)) { unknown_op(spec); continue; }
+        /* FUN_00484E72 guards on strlen(spec) > 1 and then switches on the leading letter with
+         * NO default case, so an argument it does not recognise is dropped in silence. Lines
+         * with a mid-line ";" comment hand it trailing words constantly (quest.txt:1629, 2012),
+         * and the original emits nothing for them. Logging here would be a port-only difference
+         * in the very output the differential comparison reads, so it stays suppressed. */
+        if(!give_object(spec,take?-1:1)) continue;
         if(spec[1]=='\0') continue;   /* a bare letter has no id to record */
         if(letter=='I') cookie_set("item.id",spec+1);
         else if(letter=='S') cookie_set("spell.id",spec+1);
@@ -1019,10 +1090,17 @@ static void step(void)
     case OP_THEME: theme(n>1?number(t[1]):0); return;
     case OP_MUSIC: game_music(n>1?t[1]:NULL); return;
     case OP_SOUND: if(n>1) sound(t[1]); return;
-    case OP_IF: { /* the label is the last token, the condition list is the rest */
+    case OP_IF: { /* the label is the last argument; the condition list is everything before it.
+        * Every IF label in every world starts with '@', so when a line carries a trailing
+        * ";" comment that the loader did not strip, the first '@' token is the label and the
+        * trailing words are neither label nor condition. Taking "last token starting with '@'"
+        * is correct whether or not the comment survived, and it degrades to the plain last
+        * token when a script ever omits the '@'. */
         char cond[DIALOG];size_t used=0;cond[0]=0;
-        for(i=1;i<n-1;i++) append(cond,sizeof cond,&used,t[i]);
-        if(condition_evaluate(cond)) jump_to(t[n-1]);
+        int label=n-1;
+        for(i=1;i<n;i++) if(t[i][0]=='@') { label=i; break; }
+        for(i=1;i<label;i++) append(cond,sizeof cond,&used,t[i]);
+        if(condition_evaluate(cond)) jump_to(t[label]);
         return; }
     case OP_GOTO:
         if(n<2) return;
@@ -1128,6 +1206,7 @@ static void step(void)
         if(n>2) { double d=atof(t[2])-atof(t[1]);
                   vm.condition_code=(d<=-1.0e9||d>=1.0e9)?0:-1; }
         return;
+    /* The IF= family is a single keyword + a label, so the label is token 1. */
     case OP_IF_EQ: if(vm.condition_code==0) jump_to(t[n-1]); return;
     case OP_IF_GT: if(vm.condition_code>=1) jump_to(t[n-1]); return;
     case OP_IF_LT: if(vm.condition_code<=-1) jump_to(t[n-1]); return;

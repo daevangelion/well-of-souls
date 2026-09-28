@@ -157,6 +157,11 @@ enum {
     R_MAXMP      = 0x007C, /*                                             0x42B7F8  */
     R_ATTACK     = 0x0084, /* sum of worn +0xa0, mirror -0xA60            0x40C694  */
     R_DEFENCE    = 0x0080, /* sum of worn +0xa4, mirror -0xA64            0x40C694  */
+    R_FACING     = 0x0088, /* fy*4 + fx with a 5 -> 9 remap, 0x46230E       */
+    R_FIXED_X    = 0x0094, /* the walk target's x, 16.16 fixed               */
+    R_FIXED_Y    = 0x0098, /* the walk target's y, 16.16 fixed               */
+    R_SPEED      = 0x00AC, /* walk speed                                      */
+    R_WALK_DUR   = 0x00B4, /* walk duration                                   */
     R_MAP        = 0x0090, /* sent in msg 0x46A as the map number        0x420240  */
     R_EQUIP      = 0x01D8, /* 14 ints, slot 8 is the right hand           0x40C694  */
     R_HANDITEM   = 0x01F8, /* equip[8], the right-hand item id           0x490712  */
@@ -170,7 +175,6 @@ enum {
     R_HAND       = 0x06A0, /* preferred hand 0..7                       0x490712  */
     R_HANDITEMID = 0x06A4,
     R_HP_MIRROR  = 0x06A8,
-    R_WORLDCRC   = 0x06C4, /* DAT_004FA95C                               0x420240  */
     R_XP_MIRROR  = 0x06C8, /* -XP                                        0x4181A2  */
     R_ELEM_PP    = 0x06CC, /* 8 ints, cap class+0x1AA64                  0x4258B8  */
     R_HAND_PP    = 0x06FC, /* 8 ints, cap class+0x1AAA4                  0x419306  */
@@ -190,6 +194,10 @@ enum {
     R_HALO       = 0x0A34,
     R_SAVES      = 0x0A4C, /* save counter, ++ per save                 0x417F1B  */
     R_MAXPP      = 0x0EF0, /* lifetime PP earned                        0x425854  */
+    R_CAMPED_CRC = 0x06C4, /* the ONE world CRC field (int index 0x1B1). Written from
+                              * the live world CRC-1 whenever the soul camps or
+                              * incarnates (0x24018, 0x24392, 0x24470, 0x24523, 0x87880)
+                              * and compared against it by FUN_0044B196 at 0x53935. */
     R_ENERGY     = 0x0EFC, /* FUN_004142D8(seconds)                     0x417F00  */
     R_GENDER     = 0x0AA0, /* 0..3                                        0x38130  */
     R_TROPHY     = 0x0CE0, /* 128 raw words (FUN_0046F726)               */
@@ -307,6 +315,16 @@ void hero_record_encode(uint8_t out[HERO_RECORD_SIZE])
     put32(out+R_DEFENCE,(uint32_t)hero_defense(h));
     put32(out+0x0A64,(uint32_t)(0u-(uint32_t)hero_defense(h)));
     put32(out+R_MAP,(uint32_t)h->map);
+    /* The hero's walk state IS in the record after all, which closes the gap
+     * I had reported as "x and y are not in the hero record": Oracle4's
+     * map.* audit found the 44-entry actor array's record 0 -- base pointer
+     * DAT_0067FBF8, the hero table -- carries the walk target at +0x94/+0x98
+     * in 16.16 fixed point, with the facing at +0x88, the speed at +0xAC and
+     * the walk duration at +0xB4. The port models only a position, so it
+     * persists that and leaves the rest zero, which is what a hero that has
+     * never walked records. */
+    put32(out+R_FIXED_X,(uint32_t)(h->x << 16));
+    put32(out+R_FIXED_Y,(uint32_t)(h->y << 16));
     for (i=0;i<8;++i) put32(out+R_EQUIP+4*i,(uint32_t)h->equip[i]);
     put32(out+R_HANDITEM,(uint32_t)h->right_hand);
     for (i=0;i<768;++i) bit_set(out+R_SPELLS,i,h->learned_spells[i]?1:0);
@@ -325,7 +343,11 @@ void hero_record_encode(uint8_t out[HERO_RECORD_SIZE])
     put32(out+R_DEATHS,(uint32_t)h->deaths);
     put32(out+R_KILLS,(uint32_t)h->kills);
     put32(out+R_INCARN,(uint32_t)h->incarnations);
-    put32(out+R_WORLDCRC,0);
+    /* Both CRC fields come from the loaded world. FUN_00420240 stamps 0x6C4 from
+     * DAT_004FA95C (the world CRC-1) on incarnate, and FUN_0044B196 compares the
+     * stored stamp against the current g_world.crc1 when a soul is switched; a
+     * stored 0 is the "has not made camp in your world" case. */
+    put32(out+R_CAMPED_CRC,(uint32_t)g_world.crc1);
     for (i=0;i<8;++i) put32(out+R_ELEM_PP+4*i,(uint32_t)h->element_pp[i]);
     for (i=0;i<8;++i) put32(out+R_HAND_PP+4*i,(uint32_t)h->hand_pp[i]);
     put32(out+R_SECONDS,(uint32_t)h->seconds_played);
@@ -367,6 +389,8 @@ int hero_record_decode(const uint8_t in[HERO_RECORD_SIZE], Hero *out)
     v.hp = get32s(in+R_HP); v.max_hp = get32s(in+R_MAXHP);
     v.mp = get32s(in+R_MP); v.max_mp = get32s(in+R_MAXMP);
     v.map  = get32s(in+R_MAP);
+    v.x = get32s(in+R_FIXED_X) >> 16;
+    v.y = get32s(in+R_FIXED_Y) >> 16;
     v.link = get32s(in+R_LINK);
     v.pp   = get32s(in+R_PP);
     v.kills  = get32s(in+R_KILLS);
@@ -374,6 +398,7 @@ int hero_record_decode(const uint8_t in[HERO_RECORD_SIZE], Hero *out)
     v.incarnations = get32s(in+R_INCARN);
     v.saves = get32s(in+R_SAVES);
     v.hunting = get32s(in+R_HUNTING);
+    v.world_crc = get32s(in+R_CAMPED_CRC);
     v.seconds_played = get32s(in+R_SECONDS);
     for (i=0;i<8;++i) {
         v.equip[i]=get32s(in+R_EQUIP+4*i);
@@ -1150,4 +1175,29 @@ char *hero_bio_text(size_t *size)
     buf[n]=0;
     if (size) *size = n;
     return buf;
+}
+
+/* FUN_0044B196, the soul-switch world check, at all.c:0x53935:
+ *     if ((DAT_004fa95c != hero[0x1B1]) && (DAT_004e70c8 != 0)) {
+ *         if (hero[0x1B1] == 0)  "You are Cautious" / "This soul has not made camp in your world"
+ *         else                   "Modified Quest File Detected" / "This soul marches to ..."
+ *         FUN_00458343(...); return 0; }
+ * It is a HARD BLOCK in both worded cases - the return value of FUN_00458343 is
+ * discarded and the next instruction returns 0 - so there is no override. Only
+ * the MESSAGE differs between "never camped here" (a stored 0) and "camped in a
+ * different world version". `*mismatch` is 0 for a match, 1 for a genuine
+ * mismatch and 2 for the never-camped case, so the caller picks the wording
+ * without re-deriving it.
+ *
+ * `avoid` is DAT_004E70C8, the WIN.INI Preferences\avoidModifiedQuestFiles int,
+ * default 1. The port has no profile store, so callers pass 1, which is the
+ * default install. */
+int hero_world_crc_check(int avoid, int *mismatch)
+{
+    uint32_t stored = (uint32_t)g_hero.world_crc;
+    if (mismatch) *mismatch = 0;
+    if (!g_hero.valid) return 0;
+    if (stored == g_world.crc1) return 1;
+    if (mismatch) *mismatch = stored ? 1 : 2;
+    return !avoid;
 }

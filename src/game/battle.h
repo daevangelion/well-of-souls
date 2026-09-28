@@ -61,6 +61,13 @@ void battle_set_scene_event(BattleSceneEvent fn);
  * those sites. It is a no-op when no fight is running, which is what the original does offline:
  * FUN_0048AE32 returns NULL unless FUN_0041bd7b() is set. */
 void battle_hero_reseal_level(void);
+/* FUN_00414059's `param_1 == 1` arm, the RECALL (0x0041409F..0x00414156): every live
+ * combatant that is a monster (rec[+4] == -1) and whose allegiance rec[0x114] is `allegiance`
+ * prints "battle_recalled" and is dropped by FUN_0048E16E. It draws nothing. Emits
+ * `battle_recalled slot=<n> monster=<id> owner=<id>` per combatant, then re-picks the target
+ * and resolves the fight if nothing hostile is left. */
+void battle_recall(int allegiance);
+
 /* Draw the fight (combatants, effects, damage numbers) into the scene view rect, which maps the
  * 360x256 logical scene space. */
 void battle_render(Framebuffer *fb, Rect view);

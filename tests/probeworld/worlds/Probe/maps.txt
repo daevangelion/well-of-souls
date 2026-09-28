@@ -1,0 +1,24 @@
+
+	0,		evergreen.jpg,		evergreen,			"Evergreen",				131072
+	1,		stonehenge.jpg,		stonehenge,			"The Rune Ruins",		131072
+	2,		castle1.jpg,		castle1,			"Macgyver Castle",		8
+	3,		floodedMaze.jpg,	floodedMaze,		"Maze of Eternity",		131072
+	4,		wormCave.jpg,		wormCave,			"Wyrm Cavern",			131072
+	5,		town2.jpg,			westin,				"Westin",				8
+	6,		town3.jpg,			stonetree,			"Stonetree",				8
+	7,		town5.jpg,			shrimpee,			"Port Shrimpee",			8
+	8,		grotto.jpg,			grotto,				"Sea Grotto",			131072
+	9,		rustRock.jpg,		rustRock,			"Goblin Rock",			131072
+	10,		fireAndIce.jpg,		inferno,			"Inferno",				131072
+	11,		dungDesert.jpg,		roundtree,			"Fort Roundtree",		131072
+	12,		town1.jpg,			NorthUmbrage,		"North Umbrage",			8
+	13,		town7.jpg,			springwell,			"Springwell",			131072
+	14,		island1.jpg,		animalKingdom,		"Animal Kingdom",		131072
+	15,		town6.jpg,			isleLight,			"Isle of Light",			131072
+	16,		arenaTown.jpg,		pkarena,			"Field of Honor",		22
+	17,		arenaTown.jpg,		petarena,			"Pokegatchi Arena",		9
+
+;
+; Please leave some blank lines at the end to avoid running into a nasty bug
+;
+

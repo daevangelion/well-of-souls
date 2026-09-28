@@ -265,7 +265,7 @@ typedef struct {
     char gold_name[100];                   /* [GP] */
     int pk_hand_percent;                   /* [100] */
     int pk_magic_percent;                  /* [100] */
-    int spell_success_percent;             /* [0] */
+    int spell_success_percent;             /* [100] FUN_004A7456 0x4A750C: != 100 scales */
     int karma_points_are_also_war_points;  /* [0] */
     int pk_trophy;                         /* [0] */
     int monster_xp_are_also_war_points;    /* [0] */

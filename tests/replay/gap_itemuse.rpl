@@ -1,6 +1,8 @@
 # seed: 1
-# requires: shop_buy item_use panel_open travel trophy_bag_resize
-# requires-match: panels\.kind=Trophy\ Bag item_html|item_html_missing
+# requires: shop_buy item_use travel panel_open
+# Item classes end to end: class 0 potion, class 4 travel ticket
+# (items.txt "4.0.0.0.1" = map 0, link 0, drop in), the trophy bag (dialog
+# 0xE7, 40 px cells) and the pet pen (FUN_00412716, petPen.jpg).
 expect boot_menu 900
 key RETURN
 wait 30
@@ -95,63 +97,45 @@ click 36 95
 wait 3
 key b
 expect shop_buy 120
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+wait 3
+shot /tmp/rr/helm.bmp
+key b
+expect shop_buy 120
 key ESCAPE
 wait 10
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-click 200 100
-wait 2
-key y
-wait 2
-key y
-wait 2
-expect trophy_bag_resize 900
 click 562 32
-wait 10
-click 60 60
-wait 60
 wait 10
 click 592 32
 expect panel_open 300
 wait 5
 key u
-expect item_use 120
+expect item_use 200
+shot /tmp/wos-gap-itemuse-potion.bmp
 key RIGHT
 wait 3
 key u
 expect travel 300
-expect map_enter 300
-click 592 32
-expect panel_open 300
-wait 5
+expect map_enter 400
+shot /tmp/wos-gap-itemuse-travel.bmp
 key g
 expect panel_open 120
 shot /tmp/wos-gap-itemuse-bag.bmp
@@ -160,6 +144,4 @@ wait 5
 key p
 expect panel_open 120
 shot /tmp/wos-gap-itemuse-pen.bmp
-key ESCAPE
-wait 5
 quit

@@ -1,0 +1,570 @@
+;
+; MONSTERS
+;
+;-------------------
+; Monsters
+
+;	//	arg 0	ID# (1-4095)
+;
+;				* ID:
+;
+;				This is the numeric ID number of the monster.  Each monster must have a
+;				unique ID number.
+;
+;				A monster ID of 0 (zero) is special and is actually a set of percentage multipliers
+;				used to tune the "algorithm values"
+;
+;	//	arg 1	name (16 char)
+;
+;				* Name:
+;
+;				This is the name of the monster, seen over its head while you are fighting
+;				it.  Like "Slobber" or "Slime Weasel"
+;
+;	//	arg 2	skinName
+;
+;				* skinName:
+;
+;				This is the name of the skin file to use for this monster.  It is a .BMP file
+;				stored in the world's MONSTERS folder.  Do NOT include the .BMP extension here,
+;				as it will be added automatically later on when the file is loaded.
+;
+;				Set the skinName to "mirror" to make the monster look just like YOU! 
+;
+;				Note: It is a good idea to put the skin name inside of double-quotes, 
+;				especially if you have a space in the name.
+;
+;	//	arg 3   scaleFactor.monsterFlags.colorTable.xparent 	<-- up to four arguments, separated by dots
+;
+;				* scaleFactor:
+;				
+;				Enlarges skin. legal values are -8 to +8
+;
+;					0 - normal size
+;					1 - 125% normal
+;					2 - 150% normal
+;					3 - 175% normal
+;					4 - 200% normal
+;					5 - 225% normal
+;					6 - 250% normal
+;					7 - 275% normal
+;					8 - 300% normal
+;					-1 - 90% of normal
+;					-2 - 80% of normal
+;					...
+;					-8 - 20% of normal (or some minimum size)
+;					// note: resizing skins makes them ugly and pixellated and makes baby Josh cry.
+;
+;				* monsterFlags: (optional)
+;
+;				Several monster flag numbers can be added together to form the monsterFlags, which
+;				control obscure bits of monster functionality.
+; 
+;				For example: 0.1  = normal size with monsterFag = 1
+;
+;				AVAILABLE MONSTER FLAGS: (add together to combine: 3 = 1+2)
+;					1 - monster cannot be tamed (cannot capture as a pet)
+;					2 - monster can only cast spells in his or her own element (no matter how wise)
+;					4 - monster CAN use 'summon' spells, if within element and level restrictions
+;                                       8 - monster can use magic only (has no physical attack to fall back on)
+;				       16 - when picking spells, can ONLY use those from the Arg20 AI command
+;                                      32 - monster will never flee from battle
+;
+;				* colorTable: (optional)
+;
+;				Add yet another period after the flag if you want this
+;				For example: 0.0.3 = normal size, no flags, color table 3
+;
+;				Color tables dynamically recolor the monster's skin without having to come up with
+;				new art files (saves download size, at the expense of less artistry)
+;				Here are the conversions as of A57, unimplemented color tables will have no effect 
+;
+;					0: no change. (standard palette order) 
+;					These next ones swap two pigments of the RGB triplet. 
+;					1: R-G swap
+;					2: R-B Swap
+;					3: G-B swap 
+;					The following overright one pigment with another (so that 2 of the 3 are then the same) My color description is 'what happens to a pinkish human skin tone' 
+;					4: G<-R 'yellow-greens' 
+;					5: B<-R 'purples'
+;					6: R<-G 'khakis'
+;					7: B<-G 'reddens'
+;					8: R<-B 'green-hulks'
+;					9: G<-B 'pinkens' 
+;					In the following, I reduce the intensity of one of the pigments. 
+;					10: cut red slightly
+;					11: cut green slightly
+;					12: cut blue slightly 
+;					In the following, I dim all three pigments the same amount, the image gets darker, but is 
+;					still colored. 
+;					13: dim little <-- good for 'low light'
+;					14: dim medium
+;						15: dim high 
+;						Same deal here, only I brighten, pretty much to incandescence :-) 
+;						16: brighten little
+;						17: brighten medium
+;						18: brighten lots
+;						19: brighten even more
+;						20: brighten super much 
+;						The following remove all color and turn image to grayscale, then dim or brighten it. 
+;						21: gray out colors and dim it lots
+;						22: gray out colors and dim it a litte
+;						23: gray out colors but keep intensity
+;						24: gray out colors and brighten
+;						25: gray out colors and brighten more 
+;						The next ones are the psychedelic ones and definitely mess up the purity of the artistic vision. But they have a sort of x-ray look which might be useful somewhere 
+;						26: invert red
+;						27: invert green
+;						28: invert blue
+;						29: invert red and green
+;						30: invert red and blue
+;						31: invert blue and green
+;						32: invert all
+;
+;				* xparent (optional)
+;
+;				If you set this to '1' then the monster will be ghostly transparent, sort of.
+;				For example:
+;
+;					0.0.0.1  <-- make skin transparent
+
+;
+;
+;	//	arg 4	element.alignment
+;
+;				* element:
+;
+;				This defines the monster's ELEMENT (as defined by the +ELEMENTS table)
+;				
+;					0 to 7		- one of the base elements
+;					8 to 255	- one of the CHAOS elements
+;
+;				* alignment: (optional)
+;			
+;				Optionally you can provide an 'alignment' to further categorize your monsters.
+;				an alignment is a short (15 character max) word, using no punctuation or spaces
+;				For example:  "4.evil"  <-- element 4, alignment 'evil'
+;				The actual use of the alignment is hidden in the intricacies of the #<cookie> system.
+;				Please see http://www.synthetic-reality.com/wosquest.htm for more info
+;
+;	//	arg 5	hp (also maxHP)	
+;
+;				* hp:
+;
+;				This sets how many hit points the monster has when it is born.  When it
+;				runs out of hp, it dies.
+;
+;					1 - N		Start with N hit points
+;					0			Let the hit points be set by algorithm (based on level)
+;
+;	//	arg 6	mp (also maxMP)	
+;
+;				* mp:
+;
+;				This sets the monsters starting magic points.  It uses up magic points as
+;				it casts spells.
+;
+;					1 - N		Start with N magic points
+;					0			Let the magic points be set by algorithm (based on level)
+;
+;
+;	//	arg 7	defense
+;
+;				* defense:
+;
+;				This sets the monsters basic defense level (the higher the value, the
+;				stronger the monster is).  Monsters get additional defense from their
+;				element setting (which gives them additional protection from magical
+;				attacks)
+;
+;					1 - N		Set monster Defense Points to N
+;					0			Let an algorithm choose Defense Points (based on level)
+;
+;				This is the equivalent of equipped armor, for a monster.
+;
+;
+;	//	arg 8	offense
+;
+;				* offense:
+;
+;				This sets the monster's basic attack level (the higher the value, the 
+;				harder it hits).
+;
+;					1 - N		Set the monsters Attack Points to N
+;					0			Let an algorithm choose Attack Points (based on level)
+;
+;				This is the equivalent of equipped weapons, for a monster.
+;
+;
+;	//	arg 9	expPts (that you win by killing it)
+;
+;				* expPts:
+;
+;				This determines how many Experience Points are earned for killing this monster.
+;				Experience points are shared by all survivors of the scene, according
+;				to their participation.
+;
+;					1 - N		Earn N experience points
+;					0			XP is computed by an algorithm
+;					-2			Earn no experience points at all
+;
+;				NOTE: a value of 0 is HIGHLY recommended (to set automatically from LEVEL]
+;
+;	//	arg 10	gold (that you win by killing it)
+;
+;				* gold:
+;
+;				This determines how many Gold Pieces are earned for killing this monster.
+;				
+;					1 - N		Earn N gold pieces (shared by surviving players)
+;					0			Let number of GP be set automatically by an algorithm
+;					-2			This monster provides no gold.
+;
+;				NOTE: a value of 0 is HIGHLY recommended (to set automatically from LEVEL]
+;
+;	//  arg 11  level 			
+;
+;				* level:
+;
+;				This is really the core value for a monster.  A higher level monster should
+;				generally make a more challenging opponent.  If you use the algorithm options
+; 				for other values, they will balance the monster correctly for its level.
+;				If you set things manually, your monster may not be balanced.
+;
+;					1 - N		Set monster level to N
+;
+;	//
+;	// the following fields are optional (default values will be used if you don't assign them)
+;	//
+;
+;	//  arg 12	strength
+;
+;				* strength:
+;
+;				A monsters strength enables it to hit harder (physical attacks).
+;
+;					1 - 255		Set monsters strength to 1-255 (max)
+;					0			Set monster's strength via algorithm (based on level)
+;
+;
+;	//  arg 13	stamina			[Set to 0 (zero) and it will be set automatically from LEVEL]
+;
+;				* stamina:
+;
+;				A monsters stamina enables it lose less HP per hit.
+;
+;					1 - 255		Set monsters stamina to 1-255 (max)
+;					0			Set monster's stamina via algorithm (based on level)
+;
+;	//  arg 14	agility			[Set to 0 (zero) and it will be set automatically from LEVEL]
+;
+;				* agility:
+;
+;				A monsters agility enables it to avoid attack (you miss it more).
+;
+;					1 - 255		Set monsters agility to 1-255 (max)
+;					0			Set monster's agility via algorithm (based on level)
+;
+;	//  arg 15	dexterity		[Set to 0 (zero) and it will be set automatically from LEVEL]
+;
+;				* dexterity:
+;
+;				A monsters dexterity enables it to miss less.
+;
+;					1 - 255		Set monsters dexterity to 1-255 (max)
+;					0			Set monster's dexterity via algorithm (based on level)
+;
+;	//  arg 16	wisdom		
+;
+;				* wisdom:
+;
+;				Wisdom is required by the monster in order to cast spells.  The higher
+;				the monster's wisdom, the more powerful the spells are that it can cast.
+;				Stupid monsters can only cast spells of their own element.  The wiser a
+;				monster is, it will be able to cast spells from elements "further away"
+;				than its natural element.
+;
+;					1 - 255		Set monster wisdom to 1-255 (255 is max)
+;					0			Monster has NO wisdom and casts NO spells.. EVER.
+;					-1			Set monster wisdom by algorithm (based on level)
+;
+;
+; Monsters can have a couple custom sound effects.  If none is specified, they 
+; will choose randomly from the 'standard' sounds.
+;
+;	//  arg 17  growl wave file		"snarl.wav" for example
+;
+;	//	arg 18	pain wave file		"ouch.wav" for example
+;
+;	//  arg 19	optional attack path  (see ITEMS table, argument 16 for details)
+;				this controls additional animation during a monster's physical (not magical) attack.
+;				-1			select one at random at world load
+;				0			no attack path (default)
+;				N.x.x...	path N, arguments x.x.. (see ITEMS table documentation)
+;
+;   //  arg 20  optional ai command
+;               this argument lets you customize the attack strategy of the monster, using the
+;				same command language as used to talk to pets.  I should document that here, but
+;				since I haven't written it yet, that would be pointless.
+
+
+;------------
+;
+; Monster 0 is VERY SPECIAL.. it is not a REAL monster, but it is a line of percentages (1-100) which is used to
+; de-rate the algorithm values.  By that, I mean that if arg 9 (experience) of monster 0 is set to 50 (50%) then
+; all monsters which are using the algorithms to calculate the experience they pay, will only pay 50% of the XP
+; the algorithm would normally calculate.
+;
+; This affects ALL monsters (except those for which you have manually assigned the experience)
+;
+; This is an 'easy' way to make all the monsters in your world 'harder' (well, make them pay less.  You make them
+; actually harder by making your heroes weaker.)
+;
+; Not all columns are affected by these percentages... more might be added in the future...  A missing value, or
+; a value of 0 means "no percentage provided" (i.e. use the full 100%)  There may be additional messing around
+; with the numbers (for example, a minimum XP earned of 1 XP).
+;
+; Args which can be multiplied are: 
+;
+;	hp, mp, offense, defense, strength, stamina, wisdom, dexterity, agility, XP, and GP.
+;   
+;
+; OK, here is MONSTER ZERO... the MULTIPLIER MONSTER :-)
+;
+;							skin		scale		el	hp		mp	def	off	exp	gld	lev	str	sta	agi	dex	wis		growl.wav				pain.wav		attack path
+;	0	1................	2			3		4	5		6	7	8	9	10	11	12	13	14	15	16		17						18			19
+;
+	0,	"Algorithm Scale %",0,			0,		0,	100,	100,100,100,100,100, 0,	100,100,100,100,100
+;
+; --------------
+;
+; OK, now here are the REAL monsters:
+;
+;							skin		scale		el	hp		mp	def	off	exp	gld	lev	str	sta	agi	dex	wis		growl.wav				pain.wav		attack path
+;	0	1................	2			3		4	5		6	7	8	9	10	11	12	13	14	15	16		17						18			19
+; Easy Monsters 1 - 49
+;
+	1,	"Green Jelly",		josh2,		0,		1,	0,		0,	0,	0,	0,	0,	1,	0,	0,	0,	0,	0,		"growl5.wav",			"pain4.wav",	-1
+	2,	"Archer Fish",		josh11,		0,		1,	0,		0,	0,	0,	0,	0,	2,	0,	0,	0,	0,	0,		"growl17.wav",			"pain7.wav",	-1
+	3,	"Archer Fish",		josh54,		0,		1,	0,		0,	0,	0,	0,	0,	3,	0,	0,	0,	0,	0,		"growl17.wav",			"pain7.wav",	-1
+	4,	"Flesh Crab",		josh15,		0,		1,	0,		0,	0,	0,	0,	0,	4,	0,	0,	0,	0,	0,		"growl6.wav",			"pain7.wav",	-1
+	5,	"Slobber",			josh20,		0,		3,	0,		0,	0,	0,	0,	0,	4,	0,	0,	0,	0,	-1,		"growl3.wav",			"pain10.wav",	-1
+	6,	"Poison Newt",		josh24,		0,		1,	0,		0,	0,	0,	0,	0,	5,	0,	0,	0,	0,	-1,		"growl17.wav",			"pain8.wav",	-1
+	7,	"Flame Weed",		josh31,		0,		5,	0,		0,	0,	0,	0,	0,	6,	0,	0,	0,	0,	-1,		"growl10.wav",			"pain8.wav",	-1
+	8,	"Carnivorous Hat",	ben2,		0,		6,	0,		0,	0,	0,	0,	0,	7,	0,	0,	0,	0,	-1,		"growl8.wav",			"pain8.wav",	-1
+	9,	"Gray Widow",		josh74,		0,		3,	0,		0,	0,	0,	0,	0,	8,	0,	0,	0,	0,	-1,		"growl6.wav",			"pain2.wav",	-1
+	10,	"Giant Flea",		josh87,		0,		7,	0,		0,	0,	0,	0,	0,	3,	0,	0,	0,	0,	-1,		"growl17.wav",			"pain8.wav",	-1
+;
+; And here I cram in some new monsters for A58, thus proving that any attempt to ORGANIZE your monster list is doomed to failure unless
+; you are either willing to renumber existing monsters (thus messing up people's pets) or simply work it all out in advance and never change it.
+; Had I to do it over again, I might organize by element instead.
+;
+;							skin		scale		el	hp		mp	def	off	exp	gld	lev	str	sta	agi	dex	wis		growl.wav				pain.wav		attack path
+;	0	1................	2			3		4	5		6	7	8	9	10	11	12	13	14	15	16		17						18			19
+
+	11,	"Devil Crab",		josh15,		0.0.9,	2,		0,	0,	0,	0,	0,	0,	9,	0,	0,	0,	0,	-1,		GROWL24.WAV,			pain17.WAV,		-1,				
+	12,	"Pit Viper",		josh38,		0.0.9,	5,		0,	0,	0,	0,	0,	0,	17,	0,	0,	0,	0,	-1,		growl17.wav,			pain8.wav,		-1,				
+	13,	"Blood Widow",		josh74,		0.0.9,	4,		0,	0,	0,	0,	0,	0,	19,	0,	0,	0,	0,	-1,		growl12.wav,			pain15.WAV,		-1,				
+	14,	"Queen Wasp",		josh34,		0.0.11,	7,		0,	0,	0,	0,	0,	0,	21,	0,	0,	0,	0,	-1,		growl22.wav,			pain8.wav,		-1,				
+	15,	Wrathling,			josh8,		0.0.5,	7,		0,	0,	0,	0,	0,	0,	23,	0,	0,	0,	0,	-1,		growl12.wav,			pain17.WAV,		-1,				
+	16,	Rodan,				josh91,		0.0.8,	7,		0,	0,	0,	0,	0,	0,	25,	0,	0,	0,	0,	-1,		growl12.wav,			pain3.wav,		-1,				
+	17,	"Dark Fairy",		josh52,		-5.0.0,	7,		0,	0,	0,	0,	0,	0,	27,	0,	0,	0,	0,	-1,		growl17.wav,			pain8.wav,		-1,				
+	18,	"Ice Flame",		josh31,		0.0.2,	6,		0,	0,	0,	0,	0,	0,	29,	0,	0,	0,	0,	-1,		growl17.wav,			pain7.wav,		-1,				
+	19,	"Banana Trickster",	josh77,		0.0.28,	2,		0,	0,	0,	0,	0,	0,	31,	0,	0,	0,	0,	-1,		growl11.wav,			pain15.WAV,		-1,				
+	20,	"Ice Cobra",		josh78,		0.0.25,	1,		0,	0,	0,	0,	0,	0,	33,	0,	0,	0,	0,	-1,		growl5.WAV,				pain3.wav,		-1,				
+	21,	"Bone Clops",		josh40,		0.0.32,	7,		0,	0,	0,	0,	0,	0,	35,	0,	0,	0,	0,	-1,		growl12.wav,			pain17.WAV,		-1,				
+	22,	"Ghost Slobber",	josh20,		0.0.0.1,4,		0,	0,	0,	0,	0,	0,	37,	0,	0,	0,	0,	-1,		growl17.wav,			pain15.WAV,		-1,				
+	23,	Kiwi,				josh45,		0.0.5.0,6,		0,	0,	0,	0,	0,	0,	39,	0,	0,	0,	0,	-1,		growl12.wav,			pain5.wav,		-1,				
+	24,	"Blood Wolf",		josh36,		0.0.31,	7,		0,	0,	0,	0,	0,	0,	41,	0,	0,	0,	0,	-1,		growl2.WAV,				pain14.wav,		-1,				
+	25,	Coelocanth,			josh54,		0.0.28,	1,		0,	0,	0,	0,	0,	0,	77,	0,	0,	0,	0,	-1,		growl12.wav,			pain3.wav,		-1,				
+;
+; Now some high end scary monsters
+
+	26,	Groper,				josh54,		0.0.1,	1,		0,	0,	0,	0,	0,	0,	70,	0,	0,	0,	0,	-1,		growl13.wav,			pain3.wav,		-1,				
+	27,	"Clown Shark",		josh54,		0.0.29,	1,		0,	0,	0,	0,	0,	0,	75,	0,	0,	0,	0,	-1,		growl12.wav,			pain4.wav,		-1,				
+	28,	"Teensy Devil",		josh51,		-5.0.0,	4,		0,	0,	0,	0,	0,	0,	80,	0,	0,	0,	0,	-1,		growl7.WAV,				pain18.WAV,		-1,				
+	29,	"Ghost Widow",		josh74,		0.0.27.1,6,		0,	0,	0,	0,	0,	0,	85,	0,	0,	0,	0,	-1,		growl13.wav,			pain15.WAV,		-1,				
+	30,	"Flame Toad",		josh69,		0.0.1,	5,		0,	0,	0,	0,	0,	0,	90,	0,	0,	0,	0,	-1,		growl11.wav,			pain7.wav,		-1,				
+	31,	"Blister Crab",		josh81,		0.0.9,	5,		0,	0,	0,	0,	0,	0,	93,	0,	0,	0,	0,	-1,		growl12.wav,			pain13.WAV,		-1,				
+	32,	"Mad Genie",		josh58,		0.0.27,	5,		0,	0,	0,	0,	0,	0,	96,	0,	0,	0,	0,	-1,		growl12.wav,			pain17.WAV,		-1,				
+	33,	"Ghost Dwarf",		josh97,		1.0.20.1,4,		0,	0,	0,	0,	0,	0,	98,	0,	0,	0,	0,	-1,		growl12.wav,			pain15.WAV,		-1,				
+	34,	"Ice Horn",			josh75,		2.0.26,	2,		0,	0,	0,	0,	0,	0,	99,	0,	0,	0,	0,	-1,		growl1.WAV,				pain3.wav,		-1,				
+	35,	"Ember Jaw",		josh73,		0.0.2,	5,		0,	0,	0,	0,	0,	0,	100,0,	0,	0,	0,	-1,		growl12.wav,			pain13.WAV,		-1,				
+	36,	"Ghost Vampire",	josh65,		0.0.25.1,4,		0,	0,	0,	0,	0,	0,	101,0,	0,	0,	0,	-1,		growl12.wav,			pain15.WAV,		-1,				
+	37,	"Earth Spirit",		josh70,		0.0.8,	6,		0,	0,	0,	0,	0,	0,	102,0,	0,	0,	0,	-1,		growl12.wav,			pain17.WAV,		-1,				
+	38,	"Ghost Creeper",	josh71,		0.0.25.1,6,		0,	0,	0,	0,	0,	0,	103,0,	0,	0,	0,	-1,		growl13.wav,			pain14.wav,		-1,				
+	39,	Megalith,			josh76,		0.0.29,	3,		0,	0,	0,	0,	0,	0,	105,0,	0,	0,	0,	-1,		growl11.wav,			pain4.wav,		-1,				
+	40,	"Giant Ogre",		josh82,		4,		3,		0,	0,	0,	0,	0,	0,	107,0,	0,	0,	0,	-1,		growl11.wav,			pain3.wav,		-1,				
+	41,	"Ghost Bone",		josh7,		0.0.25.1,4,		0,	0,	0,	0,	0,	0,	109,0,	0,	0,	0,	-1,		growl1.WAV,				pain15.WAV,		-1,				
+	42,	"Blood Wyrm",		josh66,		0.0.2,	5,		0,	0,	0,	0,	0,	0,	111,0,	0,	0,	0,	-1,		growl12.wav,			pain5.wav,		-1,				
+	43,	"Ghost Wyrm",		josh80,		0.0.23.1,4,		0,	0,	0,	0,	0,	0,	112,0,	0,	0,	0,	-1,		growl11.wav,			pain15.WAV,		-1,				
+	44,	"Ghost Thrasher",	josh62,		0.0.24.1,4,		0,	0,	0,	0,	0,	0,	114,0,	0,	0,	0,	-1,		growl12.wav,			pain15.WAV,		-1,				
+	45,	"Ghost Lord",		josh60,		0.0.24.1,4,		0,	0,	0,	0,	0,	0,	116,0,	0,	0,	0,	-1,		growl13.wav,			pain15.WAV,		-1,				
+	46,	"Giant Parasite",	josh83,		4.0.9,	5,		0,	0,	0,	0,	0,	0,	118,0,	0,	0,	0,	-1,		growl12.wav,			pain5.wav,		-1,				
+	47,	"Blaze Wyrm",		josh41,		0.0.31.1,4,		0,	0,	0,	0,	0,	0,	120,0,	0,	0,	0,	-1,		growl11.wav,			pain15.WAV,		-1,				
+	48,	Cerberasaurus,		josh43,		0.0.9,	5,		0,	0,	0,	0,	0,	0,	122,0,	0,	0,	0,	-1,		growl17.wav,			pain8.wav,		-1,				
+	49,	Revenge,			pet05,		8,		7,		0,	0,	0,	0,	0,	0,	125,0,	0,	0,	0,	-1,		growl11.wav,			pain4.wav,		-1,				
+
+;							skin		scale		el	hp		mp	def	off	exp	gld	lev	str	sta	agi	dex	wis		growl.wav				pain.wav
+;	0	1................	2			3		4	5		6	7	8	9	10	11	12	13	14	15	16		17						18
+;
+; 50 - 99
+;
+	50,	"Bog Shark",		josh12,		0,		1,	0,		0,	0,	0,	0,	0,	9,	0,	0,	0,	0,	0,		"growl3.wav",			"pain3.wav",	-1
+	51, "Bog Shark",		josh48,		0,		1,	0,		0,	0,	0,	0,	0,	9,	0,	0,	0,	0,	0,		"growl3.wav",			"pain3.wav",	-1
+	52,	"Ice Jelly",		josh4,		0,		1,	0,		0,	0,	0,	0,	0,	10,	0,	0,	0,	0,	-1,		"growl6.wav",			"pain4.wav",	-1
+	53,	"Ghoul",			josh1,		0,		4,	0,		0,	0,	0,	0,	0,	11,	0,	0,	0,	0,	-1,		"growl14.wav",			"pain10.wav",	-1
+	54,	"Canker",			monster1,	0,		6,	0,		0,	0,	0,	0,	0,	12,	0,	0,	0,	0,	-1,		"growl1.wav",			"pain12.wav",	-1
+	55,	"Disco Freak",		ben1,		0,		2,	0,		0,	0,	0,	0,	0,	13,	0,	0,	0,	0,	-1,		"growl10.wav",			"pain11.wav",	-1
+	56,	"Devil Shell",		josh21,		0,		6,	0,		0,	0,	0,	0,	0,	14,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain10.wav",	-1
+	57,	"Stingtail",		josh28,		0,		3,	0,		0,	0,	0,	0,	0,	15,	0,	0,	0,	0,	0,		"growl20.wav",			"pain8.wav",	-1
+	58,	"Goblin",			josh26,		0,		6,	0,		0,	0,	0,	0,	0,	16,	0,	0,	0,	0,	-1,		"growl6.wav",			"pain11.wav",	-1
+	59,	"Giant Wasp",		josh34,		0,		7,	0,		0,	0,	0,	0,	0,	18,	0,	0,	0,	0,	0,		"growl8.wav",			"pain8.wav",	-1
+	60,	"Grey Wolf",		josh35,		0,		3,	0,		0,	0,	0,	0,	0,	20,	0,	0,	0,	0,	0,		"growl1.wav",			"pain14.wav",	-1
+	61,	"Viper",			josh38,		0,		5,	0,		0,	0,	0,	0,	0,	22,	0,	0,	0,	0,	0,		"growl12.wav",			"pain12.wav",	-1
+	62,	"Snow Imp",			josh39,		0,		6,	0,		0,	0,	0,	0,	0,	24,	0,	0,	0,	0,	-1,		"growl24.wav",			"pain11.wav",	-1
+	63,	"Ice Scream",		josh72,		0,		6,	0,		0,	0,	0,	0,	0,	26,	0,	0,	0,	0,	0,		"growl13.wav",			"pain11.wav",	-1
+	64,	"Banana Slobber",	josh68,		0,		3,	0,		0,	0,	0,	0,	0,	28,	0,	0,	0,	0,	-1,		"growl13.wav",			"pain10.wav",	-1
+	65,	"Tooth Worm",		josh67,		0,		6,	0,		0,	0,	0,	0,	0,	30,	0,	0,	0,	0,	0,		"growl7.wav",			"pain13.wav",	-1
+	66,	"Trickster",		josh77,		0,		7,	0,		0,	0,	0,	0,	0,	32,	0,	0,	0,	0,	-1,		"growl15.wav",			"pain11.wav",	-1
+	67,	"Terabull",			josh75,		0,		5,	0,		0,	0,	0,	0,	0,	34,	0,	0,	0,	0,	0,		"growl18.wav",			"pain5.wav",	-1
+	68,	"Mad Box",			josh79,		0,		2,	0,		0,	0,	0,	0,	0,	36,	0,	0,	0,	0,	-1,		"growl14.wav",			"pain9.wav",	-1
+	69,	"Kelp Crab",		josh81,		0,		1,	0,		0,	0,	0,	0,	0,	38,	0,	0,	0,	0,	0,		"growl12.wav",			"pain3.wav",	-1
+	70,	"Bone Ghoul",		josh84,		0,		4,	0,		0,	0,	0,	0,	0,	40,	0,	0,	0,	0,	-1,		"growl4.wav",			"pain2.wav",	-1
+;
+;							skin		scale		el	hp		mp	def	off	exp	gld	lev	str	sta	agi	dex	wis		growl.wav				pain.wav
+;	0	1................	2			3		4	5		6	7	8	9	10	11	12	13	14	15	16		17						18
+;
+; 100 - 149
+;
+	100,"Brain Jelly",		josh3,		0,		6,	0,		0,	0,	0,	0,	0,	42,	0,	0,	0,	0,	-1,		"growl21.wav",			"pain4.wav",	-1
+	101,"Devil Ghoul",		josh7,		0,		4,	0,		0,	0,	0,	0,	0,	43,	0,	0,	0,	0,	-1,		"growl20.wav",			"pain2.wav",	-1
+	103,"Devil Imp",		josh6,		0,		5,	0,		0,	0,	0,	0,	0,	44,	0,	0,	0,	0,	-1,		"growl4.wav",			"pain11.wav",	-1
+	104,"Crocosaur",		josh18,		0,		1,	0,		0,	0,	0,	0,	0,	45,	0,	0,	0,	0,	0,		"growl11.wav",			"pain3.wav",	-1
+	105,"Crocosaur",		josh46,		0,		1,	0,		0,	0,	0,	0,	0,	46,	0,	0,	0,	0,	0,		"growl11.wav",			"pain3.wav",	-1
+	106,"Devilsaur",		josh27,		0,		5,	0,		0,	0,	0,	0,	0,	47,	0,	0,	0,	0,	0,		"growl1.wav",			"pain5.wav",	-1
+	107,"Goblin Warrior",	josh32,		0,		6,	0,		0,	0,	0,	0,	0,	48,	0,	0,	0,	0,	-1,		"growl19.wav",			"pain11.wav",	-1
+	108,"Snow Wolf",		josh36,		0,		6,	0,		0,	0,	0,	0,	0,	49,	0,	0,	0,	0,	0,		"growl1.wav",			"pain14.wav",	-1
+	109,"Man o' War",		josh45,		0,		1,	0,		0,	0,	0,	0,	0,	50,	0,	0,	0,	0,	-1,		"growl21.wav",			"pain2.wav",	-1
+	110,"The Man",			josh55,		0,		2,	0,		0,	0,	0,	0,	0,	51,	0,	0,	0,	0,	-1,		"growl12.wav",			"pain18.wav",	-1
+	111,"Highwayman",		josh56,		0,		2,	0,		0,	0,	0,	0,	0,	52,	0,	0,	0,	0,	-1,		"growl22.wav",			"pain16.wav",	-1
+	112,"Scurvy Pirate",	josh58,		0,		2,	0,		0,	0,	0,	0,	0,	53,	0,	0,	0,	0,	-1,		"growl22.wav",			"pain10.wav",	-1
+	113,"Cutthroat",		josh57,		0,		2,	0,		0,	0,	0,	0,	0,	54,	0,	0,	0,	0,	-1,		"growl12.wav",			"pain17.wav",	-1
+	114,"Piker",			josh64,		0,		2,	0,		0,	0,	0,	0,	0,	55,	0,	0,	0,	0,	-1,		"growl7.wav",			"pain15.wav",	-1
+	115,"Leechacuda",		josh61,		0,		1,	0,		0,	0,	0,	0,	0,	56,	0,	0,	0,	0,	0,		"growl8.wav",			"pain3.wav",	-1
+	116,"Pluto's Flytrap",	josh71,		0,		2,	0,		0,	0,	0,	0,	0,	57,	0,	0,	0,	0,	-1,		"growl15.wav",			"pain4.wav",	-1
+	117,"Fire Cobra",		josh78,		0,		5,	0,		0,	0,	0,	0,	0,	58,	0,	0,	0,	0,	-1,		"growl9.wav",			"pain12.wav",	-1
+	118,"Creeper",			josh86,		0,		2,	0,		0,	0,	0,	0,	0,	59,	0,	0,	0,	0,	-1,		"growl4.wav",			"pain5.wav",	-1
+	119,"Ogre",				josh82,		0,		3,	0,		0,	0,	0,	0,	0,	60,	0,	0,	0,	0,	-1,		"growl19.wav",			"pain10.wav",	-1
+	120,"Parasite",			josh83,		0,		7,	0,		0,	0,	0,	0,	0,	61,	0,	0,	0,	0,	0,		"growl5.wav",			"pain13.wav",	-1
+	121,"Devil Bone",		josh85,		0,		4,	0,		0,	0,	0,	0,	0,	62,	0,	0,	0,	0,	-1,		"growl4.wav",			"pain2.wav",	-1
+	122,"Elven Amazon",		josh93,		0,		2,	0,		0,	0,	0,	0,	0,	63,	0,	0,	0,	0,	-1,		"growl22.wav",			"pain10.wav",	-1
+	123,"Elven Hunter",		josh92,		0,		2,	0,		0,	0,	0,	0,	0,	64,	0,	0,	0,	0,	-1,		"growl22.wav",			"pain19.wav",	-1
+	124,"Shriek",			josh91,		0,		7,	0,		0,	0,	0,	0,	0,	65,	0,	0,	0,	0,	-1,		"growl16.wav",			"pain8.wav",	-1
+	125,"Mace Windi",		josh90,		0,		6,	0,		0,	0,	0,	0,	0,	66,	0,	0,	0,	0,	-1,		"growl7.wav",			"pain1.wav",	-1
+	126,"Ogre Warrior",		josh88,		0,		6,	0,		0,	0,	0,	0,	0,	67,	0,	0,	0,	0,	-1,		"growl19.wav",			"pain1.wav",	-1
+	127,"Pangolin",			josh89,		0,		4,	0,		0,	0,	0,	0,	0,	68,	0,	0,	0,	0,	-1,		"growl1.wav",			"pain5.wav",	-1
+	128,"Wolf Boy",			josh94,		0,		2,	0,		0,	0,	0,	0,	0,	69,	0,	0,	0,	0,	-1,		"growl21.wav",			"pain6.wav",	-1
+	129,"Battle Dwarf",		josh95,		0,		2,	0,		0,	0,	0,	0,	0,	70,	0,	0,	0,	0,	-1,		"growl12.wav",			"pain1.wav",	-1
+	130,"Dwarf Opa",		josh96,		0,		2,	0,		0,	0,	0,	0,	0,	71,	0,	0,	0,	0,	-1,		"growl12.wav",			"pain6.wav",	-1
+	131,"ShapeShifter",		mirror,		0.1,	6,	0,		0,	0,	0,	0,	0,	71,	0,	0,	0,	0,	-1,		"growl12.wav",			"pain6.wav",	-1
+	132,"Midget Eyebrawl",	josh23,		-5.0,	6,		0,	0,	0,	0,	0,	0,	71,	0,	0,	0,	0,	-1,		growl12.wav,			pain6.wav,		-1,				
+
+
+;
+;							skin		scale		el	hp		mp	def	off	exp	gld	lev	str	sta	agi	dex	wis		growl.wav				pain.wav
+;	0	1................	2			3		4	5		6	7	8	9	10	11
+;
+; 150 - 199
+;
+	150,"Water Mangler",	josh13,		0,		1,	0,		0,	0,	0,	0,	0, 72,	0,	0,	0,	0,	-1,		"growl21.wav",			"pain3.wav",	-1
+	151,"Water Mangler",	josh47,		0,		1,	0,		0,	0,	0,	0,	0, 73,	0,	0,	0,	0,	-1,		"growl21.wav",			"pain3.wav",	-1
+	153,"Flying Rage",		josh8,		0,		7,	0,		0,	0,	0,	0,	0, 74,  0,	0,	0,	0,	-1,		"growl8.wav",			"pain8.wav",	-1
+	154,"Death Dancer",		josh9,		0,		4,	0,		0,	0,	0,	0,	0, 75,	0,	0,	0,	0,	-1,		"growl16.wav",			"pain11.wav",	-1
+	155,"Iron Jelly",		josh22,		0,		2,	0,		0,	0,	0,	0,	0, 76,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain4.wav",	-1
+	156,Eyebrawl,			josh23,		0.6,	254,	1000,500,0,	0,	0,	0,	78,	0,	0,	0,	0,	-1,		growl4.wav,				pain10.wav,		-1,				,				
+	157,"Tiger Viper",		josh25,		0,		3,	0,		0,	0,	0,	0,	0, 79,	0,	0,	0,	0,	-1,		"growl1.wav",			"pain5.wav",	-1
+	158,"Goblin Centurion",	josh33,		0,		3,	0,		0,	0,	0,	0,	0, 80,	0,	0,	0,	0,	-1,		"growl4.wav",			"pain11.wav",	-1
+	159,"Carrion Maw",		josh29,		0,		7,	0,		0,	0,	0,	0,	0, 81,	0,	0,	0,	0,	-1,		"growl9.wav",			"pain8.wav",	-1
+	160,"Lava Jelly",		josh30,		0,		5,	0,		0,	0,	0,	0,	0, 82,	0,	0,	0,	0,	-1,		"growl11.wav",			"pain4.wav",	-1
+	161,"Goblin Knight",	josh37,		0,		3,	0,		0,	0,	0,	0,	0, 83,	0,	0,	0,	0,	-1,		"growl21.wav",			"pain11.wav",	-1
+	162,"Bat Clops",		josh40,		0,		7,	0,		0,	0,	0,	0,	0, 84,	0,	0,	0,	0,	-1,		"growl9.wav",			"pain8.wav",	-1
+	163,"Little Devil",		josh51,		0,		5,	0,		0,	0,	0,	0,	0, 85,	0,	0,	0,	0,	-1,		"growl22.wav",			"pain6.wav",	-1
+	164,"Dark Angel",		josh52,		0,		7,	0,		0,	0,	0,	0,	0, 86,	0,	0,	0,	0,	-1,		"growl11.wav",			"pain10.wav",	-1
+	165,"Yellowbelly",		josh5,		0,		5,	0,		0,	0,	0,	0,	0, 87,	0,	0,	0,	0,	-1,		"growl3.wav",			"pain9.wav",	-1
+	166,"Greenbelly",		josh16,		0,		3,	0,		0,	0,	0,	0,	0, 88,	0,	0,	0,	0,	-1,		"growl2.wav",			"pain9.wav",	-1
+	167,"Gnomix",			josh63,		0,		6,	0,		0,	0,	0,	0,	0, 89,	0,	0,	0,	0,	-1,		"growl15.wav",			"pain11.wav",	-1
+	168,"Vampire",			josh65,		0,		4,	0,		0,	0,	0,	0,	0, 90,	0,	0,	0,	0,	-1,		"growl4.wav",			"pain9.wav",	-1
+	169,"Thrasher",			josh62,		0,		3,	0,		0,	0,	0,	0,	0, 91,	0,	0,	0,	0,	-1,		"growl2.wav",			"pain3.wav",	-1
+	170,"Thorn Wyrm",		josh66,		0,		5,	0,		0,	0,	0,	0,	0, 92,	0, 	0,	0,	0,	-1,		"growl23.wav",			"pain3.wav",	-1
+	171,"Toad Raptor",		josh69,		0,		3,	0,		0,	0,	0,	0,	0, 93,	0,	0,	0,	0,	-1,		"petBurp.wav",			"pain5.wav",	-1
+	172,"Etherion",			josh70,		0,		5,	0,		0,	0,	0,	0,	0, 94,	0,	0,	0,	0,	-1,		"growl11.wav",			"pain3.wav",	-1
+	173,"Scissor Jaw",		josh73,		0,		3,	0,		0,	0,	0,	0,	0, 95,	0,	0,	0,	0,	-1,		"growl1.wav",			"pain3.wav",	-1
+	174,"Goblin Cavalry",	josh53,		0,		3,	0,		0,	0,	0,	0,	0, 96,	0,	0,	0,	0,	-1,		"growl4.wav",			"pain11.wav",	-1
+	175,"Warpath",			josh100,		0,		3,	0,		0,	0,	0,	0,	0, 97,	0,	0,	0,	0,	-1,		"growl23.wav",			"pain9.wav",	-1
+	176,"Forest Dwarf",		josh97,		0,		2,	0,		0,	0,	0,	0,	0, 98,	0,	0,	0,	0,	-1,		"growl21.wav",			"pain6.wav",	-1
+	177,"Goblin Catapault",	josh99,		0,		3,	0,		0,	0,	0,	0,	0, 99,	0,	0,	0,	0,	0,		"growl22.wav",			"boom2.wav",	32.89.3.0.5
+	178,"Troll",			josh98,		0,		3,	0,		0,	0,	0,	0,	0, 100,	0,	0,	0,	0,	-1,		"growl19.wav",			"pain11.wav",	-1
+;
+;							skin		scale		el	hp		mp	def	off	exp	gld	lev	str	sta	agi	dex	wis		growl.wav				pain.wav
+;	0	1................	2			3		4	5		6	7	8	9	10	11	12	13	14	15	16		17						18
+;
+; Big Bosses 200 - 255
+;
+	201,"Jelly Lord",		josh59,		0.1,	3,	0,		0,	0,	0,	0,	0,	50,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain9.wav",	-1
+	202,"Lord Web",			josh60,		0.1,	4,	0,		0,	0,	0,	0,	0,	55,	0,	0,	0,	0,	-1,		"growl11.wav",			"pain9.wav",	-1
+	203,"Harleking",		josh10,		0.1,	6,	0,		0,	0,	0,	0,	0,	60,	0,	0,	0,	0,	-1,		"growl7.wav",			"pain3.wav",	-1
+	204,"Moraysaur",		josh14,		0.1,	1,	0,		0,	0,	0,	0,	0,	65,	0,	0,	0,	0,	-1,		"growl3.wav",			"pain9.wav",	-1
+	205,"Moraysaur",		josh49,		0.1,	1,	0,		0,	0,	0,	0,	0,	70,	0,	0,	0,	0,	-1,		"growl3.wav",			"pain9.wav",	-1
+	206,"Manglord",			josh17,		0.1,	2,	0,		0,	0,	0,	0,	0,	75,	0,	0,	0,	0,	-1,		"growl21.wav",			"pain1.wav",	-1
+	207,"Lord Fist",		josh19,		0.1,	3,	0,		0,	0,	0,	0,	0,	80,	0,	0,	0,	0,	-1,		"growl4.wav",			"pain1.wav",	-1
+	208,"Gully Wyrm",		josh44,		0.1,	2,	0,		0,	0,	0,	0,	0,	85,	0,	0,	0,	0,	-1,		"growl1.wav",			"pain5.wav",	-1
+	209,"Ice Wyrm",			josh41,		0.1,	1,	0,		0,	0,	0,	0,	0,	90,	0,	0,	0,	0,	-1,		"growl7.wav",			"pain9.wav",	-1
+	210,"Fire Wyrm",		josh42,		0.1,	5,	0,		0,	0,	0,	0,	0,	50,	0,	0,	0,	0,	-1,		"growl11.wav",			"pain9.wav",	-1
+	211,"Tri Wyrm",			josh43,		0.1,	2,	0,		0,	0,	0,	0,	0,	100	0,	0,	0,	0,	-1,		"growl2.wav",			"pain3.wav",	-1
+	212,"Chameloraptor",	josh76,		0.1,	5,	0,		0,	0,	0,	0,	0,	105,0,	0,	0,	0,	-1,		"growl2.wav",			"pain3.wav",	-1
+	213,"Sand Wyrm",		josh80,		0.1,	5,	0,		0,	0,	0,	0,	0,	110,0,	0,	0,	0,	-1,		"growl11.wav",			"pain3.wav",	-1
+	240,"Giant Slobber",	josh20,		4.1,	1,	0,		0,	0,	0,	0,	0,	115,0,	0,	0,	0,	-1,		"growl19.wav",			"pain11.wav",	-1
+	241,"Giant Dwarf",		josh95,		6.1,	2,	0,		0,	0,	0,	0,	0,	120,0,	0,	0,	0,	-1,		"growl19.wav",			"pain1.wav",	-1
+	242,"Giant Goblin",		josh37,		6.1,	3,	0,		0,	0,	0,	0,	0, 	125,0,	0,	0,	0,	-1,		"growl19.wav",			"pain1.wav",	-1
+	243,"Giant Troll",		josh98,		6.1,	6,	0,		0,	0,	0,	0,	0, 	130,0,	0,	0,	0,	-1,		"growl19.wav",			"pain1.wav",	-1
+	255,"Black Wrath",		josh50,		0.1,	4,	0,		0,	0,	0,	0,	0,	200,0,	0,	0,	0,	-1,		"growl2.wav",			"pain9.wav",	-1
+
+;
+;							skin		scale		el	hp		mp	def	off	exp	gld	lev	str	sta	agi	dex	wis		growl.wav				pain.wav
+;	0	1................	2			3		4	5		6	7	8	9	10	11	12	13	14	15	16		17						18
+;
+; Pets, starting at 1000 to make my life easier with the ITEMS table.
+; To make a pet that you can buy at the store, you first need to have a MONSTER entry which describes
+; the creature itself, then add an ITEM table entry of class 200 which gives the MONSTER ID as the 'image #"
+; (argument 3 of the ITEM table).  Then have a scripted shopkeeper somewhere with an OFFER command (do
+; NOT use the OFFER2 command) which offers the ITEM NUMBERS which refer to the MONSTER IDs in question.
+; Yeah, I expect a lot of confusion over this.  Buying pets is also unusual in that they should never appear
+; in your inventory. When you buy them, they should go straight to your pen.
+;
+; The stats you give here are the ones your pet will start out with.  (you might duplicate a regular
+; monster entry here and mod it if you want a purchased pet of the same type to start with different
+; stats.
+;
+;							skin		scale	el	hp		mp	def	off	exp	gld	lev	str	sta	agi	dex	wis		growl.wav				pain.wav
+;	0	1................	2			3	4	5		6	7	8	9	10	11	12	13	14	15	16		17						18
+
+	1000,"Stinger",			pet04,		0,	1,	0,		0,	0,	0,	0,	0,	10,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain9.wav",	-1
+	1001,"Grubber",			pet02,		0,	6,	0,		0,	0,	0,	0,	0,	20,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain9.wav",	-1
+	1002,"Life Leech",		pet01,		0,	0,	0,		0,	0,	0,	0,	0,	30,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain9.wav",	-1
+	1003,"Dragon",			pet03,		0,	5,	0,		0,	0,	0,	0,	0,	40,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain9.wav",	-1
+	1004,"Leghorn",			petKDH,		0,	7,	0,		0,	0,	0,	0,	0,	20,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain9.wav",	-1
+	1005,"Bantam",			petKDH2,		0,	7,	0,		0,	0,	0,	0,	0,	25,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain9.wav",	-1
+	1006,"Bad Andy",		petKDrH,		0,	7,	0,		0,	0,	0,	0,	0,	30,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain9.wav",	-1
+	1007,"Mean Comb",		petKDrH2,	0,	7,	0,		0,	0,	0,	0,	0,	35,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain9.wav",	-1
+	1008,"Forest Wyrm",		pet05,		0.2,100,0,		0,	0,	0,	0,	0,	50,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain9.wav",	-1
+	1009,"Needler",			pet06,		0  ,2,	0,		0,	0,	0,	0,	0,	40,	0,	0,	0,	0,	-1,		"growl5.wav",			"pain9.wav",	-1
+
+; these are quest-prize pets, unavailable elsewhere
+	2000,"Earth Master",		josh60,		0.0.0.1,3,		0,	0,	0,	0,	0,	0,	80,	0,	0,	0,	0,	255,	growl5.wav,				pain9.wav,		-1,				
+	2001,"Air Master",		josh59,		0,		7,		0,	0,	0,	0,	0,	0,	80,	0,	0,	0,	0,	255,	growl5.wav,				pain9.wav,		-1,				
+	2002,"Fire Master",		josh42,		0,		5,		0,	0,	0,	0,	0,	0,	80,	0,	0,	0,	0,	255,	growl5.wav,				pain9.wav,		-1,				
+	2003,"Water Master",		josh41,		0,		1,		0,	0,	0,	0,	0,	0,	80,	0,	0,	0,	0,	255,	growl5.wav,				pain9.wav,		-1,				
+
+; Be sure to leave a blank line at the end of this file
+

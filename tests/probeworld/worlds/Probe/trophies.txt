@@ -1,0 +1,154 @@
+;
+; TROPHIES
+;
+; TROPHIES are carried in the Trophy Bag
+;
+; They are basically only used for quests.  You can, for example, define specific trophies
+; to be dropped by individual monsters.  "Wolf Ear"  "Bear Fang" etc. and then use
+; cookies to check if the user has collected what you asked for.
+;
+; At any given time, the player has exactly one trophy bag, and it has a width and a height (measured in 'slots')
+; Players start out with no bag at all, and you must script a scene to give them a bag when you feel they deserve
+; one (probably an NPC bag-maker will give or sell them a bag, and possibly upgrade it over time.
+;
+; Bags look like this, for example:  (width=4, height=3, 12 slots total)
+;
+;   +----+----+----+----+
+;   |    |    |    |    |
+;   +----+----+----+----+
+;   |    |    |    |    |
+;   +----+----+----+----+
+;   |    |    |    |    |
+;   +----+----+----+----+
+;
+; Each slot can hold only one sort of trophy at a time, for example a fang in one slot, and a claw 
+; in another.
+;
+; But most trophies (per following table)  'stack' in the sense that you can hold up to.. say.. 10 fangs
+; in the same slot, and only when you get your 11th fang do you need another slot.
+;
+; The user can drag the contents of slots around, or right-click on them to sell or discard a slot's
+; contents.  They can only sell when in a shop scene.  The game will automatically pick the 'best slot'
+; to use when a new trophy is given to the player (unless you use a slot-specific cookie commands).
+;
+; But, should the player end up with two slots holding less than a full stack of the same trophy, they
+; can 'drag one into the other' to merge them.
+;
+; If you want to completely remove the bag from the player, set both its width and height to 0.  Note
+; that if you make the total number of slots smaller than it was, items will be lost if they cannot all
+; fit in the remaining number of slots.  You might want to think about which dimension you want to 
+; change first, if that will make a difference.
+;
+; It is the user's responsibility to keep some empty slots available, or they might not be able
+; to get an important trophy.  The world developer can measure how much room is in the bag and
+; warn the player if they have not got room for a mission-critical trophy.
+;
+; Trophies can NOT be shared between players.  Trophies are not ITEMs and fulfill no purpose
+; other than as named-quest maguffins.
+;
+; The world developer has the following commands and cookie controls over the player's Trophy Bag
+;
+;// COMMANDS  (running out of letters, so 'Z' means trophy only because.. um.. I have no idea :-)
+;//  %Znn					- name of trophy nn  (e.g. "Hello, %1, that's a nice %Z23 you have there!")
+;//  GIVE Znn.cc				- give cc of trophy nn  (e.g.  HOST_GIVE Z23.11)
+;//  TAKE Znn.cc				- take cc of trophy nn
+;//  Conditional  Znn.cc		- go to label if host has cc or more of trophy NN  (e.g.  IF Z23.10 @hasTenOrMore)
+;//
+;// COOKIES
+;//  num.TrophyBagOpen			- (r/w) 0 if bag closed, 1 if open  (cannot open 0 - slot bag)
+;//  num.TrophyBagWidth			- (r/w) width of bag
+;//  num.TrophyBagHeight			- (r/w) height of bag
+;//  num.TrophyBagSlots			- (r) total slots in bag
+;//  num.TrophyBagSlotsInUse		- (r/w) non-empty slots in bag (WRITING any value, empties bag completely)
+;//  num.TrophyBagEmptySlots		- (r) empty slots in bag
+;//  num.TrophyNNN				- (r) how many trophyId=NNN hero has, in total, in bag
+;//  num.TrophyBagRoomNNN		- (r) how many MORE trophyId=NNN hero could take (filling all stacks and slots)
+;//  num.TrophyIdInSlotNNN      - (r/w)  id (or 0) of trophy in slot NNN.  (write REPLACEs slot with a SINGLE trophy)
+;//  num.TrophyCountInSlotNNN   - (r/w)  qty (or 0) of trophy in slot NNN.  (write REPLACEs count, without changing id)
+;//								  (cannot set count if id=0, cannot set count above 'stackHeight' for id)
+;
+; TABLE ARGUMENTS:
+;
+; Each Possible Trophy is defined by one line in this table, with the following 8 arguments per trophy.  Note that
+; Trophy images are 32x32 'icons' stored in "filmstrip" files in the ART folder of your world.  These must be
+; prepared like any other WoS BMP file, and use the official WoS 256 color palette.  There are assumed to be
+; guidelines in the file, so only 31x31 pixels are available for art.  The upper left pixel of the file defines
+; the 'transparent' color for the icon.
+;
+;	//	arg 0	ID# 			(1-4095)
+;	//	arg 1	trophy name 	(31 char max)
+;	//	arg 2	ImageFileName,  (in ART folder, assumed to have .bmp extension)
+;	//	arg 3	ImageIndex, 	(0 for first frame of 'filmstrip' in ImageFile)
+;	//	arg 4	stack size 		(how many of these fit in a single Trophy Bag Slot) (0-99)
+;	//	arg 5	gpForStack		(How much a shop will pay for a FULL STACK of these)
+;	//	arg 6	demonId			(Which monster 'drops' these when killed) (use 0 if not to be found on monsters)
+;								(this can be a 'dotted list' of up to 10 monsterIDs, as in "12.34.99")
+;								(Each dotted value can be a single number or a range, as in "12.34-45.16-19.23"
+;	//	arg 7	probability, 	(percentage chance 0-100 you will get one for killing that monster)
+;	//  arg 8   tokenNeeded		(if this is non-zero, the player must have that token or will never find this trophy)
+;	//	arg 9	flags			a collection of individual flag bits (add up the following to make the combination you need
+;								1  - Cannot be GIVEN
+;								2  - Cannot be SOLD
+;								4  - Cannot be DISCARDED (use sparingly or bag will fill with crap)
+;								8  - Mission Only (only dropped if it is required by some open mission)
+;
+;	Arg0	Arg1								Arg2					Arg3	Arg4		Arg5	Arg6	Arg7	Arg8		Arg9
+;   ID		Name								ImageFileName		ImgIndx	StackSz StackGP	DemonID	findProb token	Flags
+;   1234     1234567890123456789012345678901     123456789012345
+	1,		"Green Jelly Pigment",				"trophy",			0,		20,		5,		1,		80,		0,	0
+	5,		"Slobber Eye",				        "trophy",			17,		10,		50,		5,		10,		0,	0
+	10,		"Giant Flea Carcass",				trophy4,			17,		15,		150,	10,		20,		0,		8,		
+	14,		"Queen Wasp Wing",					"trophy2",			10,		20,		500,	14,		25,		0,	0
+	22,		"Slobber Ectoplasm",				trophy,				27,		10,		500,	22,		25,		0,		0,		
+	49,		"Revenge Talon",						"trophy",			10,		10,		5000,	49,		25,		0,	0
+	51,		"Bog Gill",							"trophy",			8,		20,		50,		51,		25,		0,	0
+	53,		"Ghoul Skull",						"trophy",			1,		5,		5,		53,		5,		0,	0
+	119,	"Ogre Thong",						"trophy4",			8,		1,		1000,	119,	12,		0,	0
+	164,	"Dark Angel Hair",					"trophy2",			29,		1,		1000,	164,	12,		0,	0
+	165,	"Yellowbelly Foot",					"trophy",			1,		2,		5000,	165,	2,		0,	0
+	167,	"Gnomix Hood",						"trophy3",			12,		1,		1000,	167,	5,		0,	0
+	168,	"Vampire Head",						"trophy3",			14,		1,		2000,	168,	5,		0,	0
+	201,	"Jelly Lord Horn",					"trophy3",			6,		10,		3000,	201,	10,		0,	0
+	205,	"Moraysaur Claw",					"trophy",			10,		1,		1000,	205,	100,	0,	0
+	210,	"Fire Wyrm Scale",			    	"trophy2",			22,		2,		2000,	210,	20,		0,	0
+	212,	"Chameloraptor Snout",			    "trophy3",			31,		3,		5000,	212,	10,		0,	0
+	240,	"Giant Slobber Dentures",			"trophy",			18,		3,		5000,	240,	10,		0,	0
+	243,	"Giant Troll Ear",					"trophy4",			23,		5,		1000,	243,	25,		0,	0
+	255,	"Black Wrath Blood",					"trophy2",			26,		1,		10000,	255,	10,		0,	0
+	1000,	"PK Heart",							"trophy4",			29,		100,	100,	0,		 0,		0,	0
+
+; Mission Trophies (should all have flag 8 set)
+	1014,	"Queen Wasp Wings",					trophy2,			10,		5,		100,	14,		25,		0,		8,		
+	1016,	"Rodan Wing",						trophy4,			21,		5,		100,	16,		25,		0,		8,		
+	1018,	"Ice Flame Heart",					trophy3,			24,		5,		100,	18,		25,		0,		8,		
+	1019,	"Essence of Banana",					trophy3,			27,		5,		100,	19,		25,		0,		8,		
+	1020,	"Cobra Heat",						trophy4,			2,		5,		100,	20,		25,		0,		8,		
+	1023,	"Kiwi Gum",							trophy3,			7,		5,		100,	23,		25,		0,		8,		
+	1024,	"Blood Wolf Tail",					trophy2,			12,		5,		100,	24,		25,		0,		8,		
+	1040,	"Giant Ogre Thong",					trophy4,			8,		5,		100,	40,		25,		0,		8,		
+	1049,	"Revenge Jawbone",					trophy3,			21,		5,		100,	49,		25,		0,		8,		
+	1059,	"Giant Wasp Stinger",				trophy2,			8,		5,		100,	59,		25,		0,		8,		
+	1100,	"Brain Jelly Cortex",				trophy4,			3,		5,		100,	100,	25,		0,		8,		
+	1122,	"Elven Leather",					trophy,				27,		5,		100,	122,	25,		0,		8,		
+	1123,	"Elven Silk",						trophy3,			3,		5,		100,	123,	25,		0,		8,		
+	1127,	"Pangolin Scales",					trophy4,			19,		5,		100,	127,	25,		0,		8,		
+	1128,	"Wolf Boy Cloak",					trophy4,			22,		5,		100,	128,	25,		0,		8,		
+	1151,	"Mangler Tentacle",					trophy,				4,		5,		100,	151,	25,		0,		8,		
+	1156,	"EyeBrawl Pupil",					trophy2,			16,		5,		100,	156,	75,		0,		8,		
+	1160,	"Lava Jelly Cinder",					trophy2,			13,		5,		100,	160,	25,		0,		8,		
+	1163,	"Devil Fork",						trophy4,			4,		5,		100,	163,	25,		0,		8,		
+	1167,	"Gnomix Hood",						trophy3,			12,		5,		100,	167,	25,		0,		8,		
+	1169,	"Thrasher Spikes",					trophy3,			10,		5,		100,	169,	25,		0,		8,		
+	1172,	"Etherion Char",						trophy2,			11,		5,		100,	172,	25,		0,		8,		
+	1178,	"Troll Ear",							trophy4,			23,		5,		100,	178,	25,		0,		8,		
+	1201,	"Jelly Tentacle",					trophy3,			6,		5,		100,	201,	25,		0,		8,		
+	1241,	"Giant Dwarf Heart",				   	trophy4,			29,		5,		100,	241,	25,		0,		8,		
+	1243,	"Giant Troll Mask",					trophy4,			24,		5,		100,	243,	25,		0,		8,		
+	1255,	"Wrath Ichor",						trophy2,			24,		5,		100,	255,	25,		0,		8,		
+
+
+
+
+
+
+

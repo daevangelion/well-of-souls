@@ -122,17 +122,28 @@ static int run_dumps(const char *path)
     return failed;
 }
 
-static void dump_one(const char *label)
+/* `dump <module>` or the tagged `dump <module>@<tag>` (dscript.c validates the tag).
+ * The split is at the LAST '@'. The label emitted is exactly "<module>@<tag>" -- one
+ * string, because diff_oracle.sh matches labels by file name and the tag is what names
+ * the file. The tag does NOT namespace the keys inside: those stay <module>.*. A plain
+ * `dump <module>` still emits label=<module>, so this is one convention, not two. */
+static void dump_one(const char *spec)
 {
+    char label[64];
+    const char *at = spec ? strrchr(spec, '@') : NULL;
+    size_t n = at ? (size_t)(at - spec) : (spec ? strlen(spec) : 0);
     int i;
-    wos_log_event("dump", "label=%s", label);
+    if (!spec || !n || n >= sizeof(label)) { wos_log_event("dump_unknown", "label=%s", spec ? spec : ""); return; }
+    memcpy(label, spec, n);
+    label[n] = 0;
     for (i = 0; i < DUMP_ENTRIES; ++i) {
         if (strcmp(dump_table[i].label, label)) continue;
+        wos_log_event("dump", "label=%s", spec);
         if (!strcmp(label, "clock") || !strcmp(label, "rng")) dump_builtin(log_emit, NULL);
         else if (dump_table[i].fn) dump_table[i].fn(log_emit, NULL);
         return;
     }
-    wos_log_event("dump_unknown", "label=%s", label);
+    wos_log_event("dump_unknown", "label=%s", spec);
 }
 
 static int unsigned_arg(const char *s, uint32_t *out)
@@ -207,6 +218,32 @@ static void seed_crt(uint32_t pin, int have_pin)
  * FUN_00401F8D and the Lag-O-Meter accumulate FUN_0047397B. None is a solo-play
  * rule, and FUN_0042895C's discarded rand() is SRNet-only (docs/re/rng_calls.md
  * section 2.1), so solo play consumes no RNG on the 20 Hz path. */
+/* The main frame's id-0x16 100 ms WM_TIMER, FUN_00428360 at 0x00428803 (slot this+0x114),
+ * whose handler is FUN_00428C8F at 0x00428C8F:
+ *
+ *     void __fastcall FUN_00428c8f(CWnd *self) {
+ *         if ((DAT_004e48a0 == 0) && (DAT_004e709c == 0)) {
+ *             DAT_004e48a0 = 1;          // re-entrancy guard
+ *             FUN_0040a7c7();            // the 20 ms gate
+ *             DAT_004e48a0 = 0;
+ *         }
+ *         CWnd::Default(self);
+ *     }
+ *
+ * So the world tick is driven by THIS TIMER, not by the message queue emptying. That
+ * matters: the queue is rarely empty on a repainting screen, yet the original still
+ * ticks, because 0x00428CAF calls the gate directly. FUN_0040A7C7 has exactly two
+ * callers in the whole binary: 0x0040A90F in the Run loop's idle path, and this one.
+ * Inside the gate, 0x0040A810 writes _DAT_004dd510 and 0x0040A815 calls FUN_0042895C,
+ * the 25 ms sub-gate that draws one rand and runs the world via FUN_0041BDB4.
+ *
+ * FUN_0042895C has exactly ONE caller, 0x0040A815, so the 13 observed draws prove the
+ * gate ran 13 times and therefore that _DAT_004dd510 was written 13 times. A hook
+ * reading it as 0 throughout is seeing its own virtualised GetTickCount return 0, not
+ * a missing tick. */
+#define MAIN_FRAME_TIMER_ID 0x16   /* 22 */
+static int frame_timer_owner;
+static int world_tick_pending;
 /* The 20 Hz tick and the 25 ms world tick, i.e. the real shape of
  * FUN_0040A7C7 (0x0040A7C7) -> FUN_0042895C (0x0042895C) -> FUN_0041BDB4
  * (0x0041BDB4). FUN_0042895C burns ONE discarded rand() on every call, before
@@ -219,12 +256,25 @@ static void seed_crt(uint32_t pin, int have_pin)
 #define WORLD_GATE_OWNER ((void *)&idle_ticks)
 static unsigned idle_ticks;
 
+static int world_tick_due(void);
+
+/* FUN_00428C8F: the 100 ms WM_TIMER is what enters the gate, so the handler is where
+ * the world's rand and 25 ms step live. It only DECIDES -- the loop performs the step,
+ * so update/render/present stay in one place. */
+static void main_frame_timer(void *owner, void *user)
+{
+    (void)owner; (void)user;
+    (void)crt_rand();                       /* FUN_0042895C's discarded draw */
+    (void)world_tick_due();
+}
+
 static int world_tick_due(void)
 {
     if (!clock_gate(WORLD_GATE_OWNER, 0, 25u)) return 0;
     if (++idle_ticks % 40u == 0u)      /* one log line per virtual second */
         wos_log_event("world_tick", "ms=%lu count=%u",
                       (unsigned long)clock_ms(), idle_ticks);
+    world_tick_pending = 1;
     return 1;
 }
 
@@ -233,27 +283,47 @@ static int world_tick_due(void)
  * as strings because one of its controls is a text field; Panels-2 owns the item
  * and shop dialogs and takes them as ints. Both are offered every op, and each
  * returns 0 for ids it does not own, so the dispatch order is not significant. */
+/* A dialog op whose window is not up yet must NOT be dropped: the original's
+ * WM_COMMAND has no "not ready" state, and the oracle's pump keeps such an event
+ * pending and retries. The port does the same -- unaccepted ops stay queued and are
+ * retried every iteration until something takes them. */
+#define DIALOG_PENDING_MAX 32
+static DscriptOp g_pending[DIALOG_PENDING_MAX];
+static int g_pending_count;
+
 static void apply_dialog_op(const DscriptOp *op)
 {
-    char keys[DSCRIPT_KV_MAX][32], values[DSCRIPT_KV_MAX][32];
-    const char *kp[DSCRIPT_KV_MAX];
-    DialogOp d;
-    int k, n = op->control_count;
-    for (k = 0; k < n; ++k) {
-        snprintf(keys[k], sizeof(keys[k]), "%d", op->control[k]);
-        snprintf(values[k], sizeof(values[k]), "%d", op->value[k]);
-        kp[k] = keys[k];
+    /* Queue it: dialog_retry_pending() offers it until something takes it, so an op
+     * whose window is not up yet is retried rather than dropped. */
+    if (g_pending_count < DIALOG_PENDING_MAX) g_pending[g_pending_count++] = *op;
+}
+
+/* Returns 1 when at least one pending dialog op was accepted this pass. */
+static int dialog_retry_pending(void)
+{
+    int i = 0, accepted = 0;
+    while (i < g_pending_count) {
+        const DscriptOp *op = &g_pending[i];
+        char keys[DSCRIPT_KV_MAX][32], values[DSCRIPT_KV_MAX][32];
+        const char *kp[DSCRIPT_KV_MAX];
+        DialogOp d;
+        int k, n = op->control_count, took = 0;
+        for (k = 0; k < n; ++k) {
+            snprintf(keys[k], sizeof(keys[k]), "%d", op->control[k]);
+            snprintf(values[k], sizeof(values[k]), "%d", op->value[k]);
+            kp[k] = keys[k];
+        }
+        snprintf(keys[n], sizeof(keys[n]), "ok");
+        kp[n] = keys[n];
+        ++n;
+        d.id = op->id; d.ctrl = -1; d.value = op->ok; d.ok = op->ok;
+        if (panel_dialog_op(&d)) took = 1;
+        if (front_dialog_op(op->id, kp, n, op->ok)) took = 1;
+        if (options_dialog_op(op->id, kp, n, op->ok)) took = 1;
+        if (took) { accepted = 1; g_pending[i] = g_pending[--g_pending_count]; }
+        else ++i;
     }
-    /* "the terminating ok|cancel" as the last pair, so a panel sees the same
-     * call shape whether or not the script listed any control first. */
-    snprintf(keys[n], sizeof(keys[n]), "ok");
-    snprintf(values[n], sizeof(values[n]), "%d", op->ok);
-    kp[n] = keys[n];
-    ++n;
-    d.id = op->id; d.ctrl = -1; d.value = op->ok; d.ok = op->ok;
-    panel_dialog_op(&d);
-    if (front_dialog_op) front_dialog_op(op->id, kp, n, op->ok);
-    options_dialog_op(op->id, kp, n, op->ok);
+    return accepted;
 }
 
 /* FUN_00409722 (0x00409722): the game's date-validity gate, and the ONLY MessageBoxA
@@ -428,6 +498,10 @@ int game_main(int argc, char **argv)
          * same init path, so the port shows the same box and does the same. */
         clock_box_modal(&fb);
     }
+    /* FUN_00428360, the main frame's id-0x16 100 ms timer, armed at the original's
+     * point. It is what actually drives FUN_0040A7C7's gate. */
+    frame_timer_owner = 0;
+    clock_set_timer(&frame_timer_owner, MAIN_FRAME_TIMER_ID, 100u, main_frame_timer, NULL);
     if(game_boot()) { result=1; goto cleanup; }
     if(!replay && !script) clock_attach_realtime();
 
@@ -477,9 +551,13 @@ int game_main(int argc, char **argv)
          * FUN_0041BDB4). The world step runs once per 25 ms of virtual time in
          * --script mode, which is the original's rate; the legacy --replay mode
          * keeps its per-frame step so the .rpl acceptance tests are unchanged. */
-        if (clock_idle_due()) (void)crt_rand();
+        dialog_retry_pending();
         if (capped && frame >= max_frames) { result = 3; break; }
-        if (script && !world_tick_due()) continue;
+        if (script) {
+            /* The 100 ms timer enters the gate; a step happens only when it fired. */
+            if (!world_tick_pending) continue;
+            world_tick_pending = 0;
+        }
         scene_tick_if_any();
         screen=screen_current(); if(screen && screen->update) screen->update(&input);
         fb_reset_clip(&fb); fb_clear(&fb,0);

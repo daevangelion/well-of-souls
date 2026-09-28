@@ -931,32 +931,95 @@ static void ensure_main(void)
                      SWP_NOZORDER | SWP_FRAMECHANGED);
     }
 }
+/* Log the whole window tree under the main window, with each child's client rect
+ * expressed in the MAIN's client coordinates -- which are the coordinates a .dsc
+ * `click <x> <y>` uses.  A click is delivered to the deepest visible window whose
+ * client rect contains the point, so this is what says which window a coordinate
+ * actually reaches.  `depth` is only a label for the log. */
+static uint32_t wintree_at;
+static void wintree_walk(HWND w, int depth)
+{
+    HWND ch = (HWND)GetWindow(w, GW_CHILD);
+    while (ch) {
+        char cls[80], txt[80];
+        RECT rc, mc, pc;
+        int k, vis;
+        GetClassNameA(ch, cls, sizeof cls);
+        GetWindowTextA(ch, txt, sizeof txt);
+        GetClientRect(ch, &rc);
+        GetClientRect(g_main, &mc);
+        POINT o; o.x = 0; o.y = 0;
+        ClientToScreen(ch, &o);
+        ScreenToClient(g_main, &o);
+        pc.left = o.x; pc.top = o.y; pc.right = o.x + rc.right; pc.bottom = o.y + rc.bottom;
+        vis = IsWindowVisible(ch);
+        tr("wintree d=%d hwnd=%p class=%s text=%s vis=%d mainclient=(%ld,%ld)-(%ld,%ld)",
+           depth, (void *)ch, cls, txt, vis,
+           (long)(pc.left - mc.left), (long)(pc.top - mc.top),
+           (long)(pc.right - mc.left), (long)(pc.bottom - mc.top));
+        for (k = 0; k < (int)sizeof txt - 1 && txt[k]; k++) if (txt[k] < 32) txt[k] = '.';
+        wintree_walk(ch, depth + 1);
+        ch = (HWND)GetWindow(ch, GW_HWNDNEXT);
+    }
+}
+static void wintree_dump(int once)
+{
+    char cls[80], txt[80];
+    RECT mc;
+    static LONG done;
+    if (once && InterlockedCompareExchange(&done, 1, 0) != 0) return;
+    if (!find_main()) return;
+    GetClassNameA(g_main, cls, sizeof cls);
+    GetWindowTextA(g_main, txt, sizeof txt);
+    GetClientRect(g_main, &mc);
+    tr("wintree MAIN hwnd=%p class=%s text=%s client=%ldx%ld",
+       (void *)g_main, cls, txt, (long)(mc.right - mc.left), (long)(mc.bottom - mc.top));
+    wintree_walk(g_main, 0);
+}
 
 /* ------------------------------------------------------------------- the input */
 
+/* The window a real click at a screen point reaches.
+ *
+ * `WindowFromPoint` ignores WS_VISIBLE and WS_CHILD: it returns the window whose
+ * WINDOW rectangle contains the point, hidden or not.  Real input dispatch does
+ * not -- an invisible window is skipped and the point falls through to whatever
+ * is visible underneath.  That difference is not academic here: the MFC MDI tree
+ * under the main frame is a stack of panes that the front end shows and hides
+ * (FUN_0041B891 calls ShowWindow on five of them per state change), and a hidden
+ * MDI pane still owns the whole client rect.  Measured with WOS_WINTREE=1 at the
+ * title: `00010082 AfxWnd42` is INVISIBLE and covers mainclient (21,2)-(458,315),
+ * and the first version of this function sent a click at (320,240) straight to
+ * it -- so the front end never saw the click and DAT_004DF8A4 stayed 0.  The
+ * fix is to make the traversal match input dispatch: only visible, enabled
+ * windows are candidates, and the deepest visible one wins. */
 static HWND deepest_at(POINT screen)
 {
-    HWND h = (HWND)WindowFromPoint(screen);
+    HWND pick = NULL, h;
+    POINT root = screen;
+    RECT rc;
+    h = (HWND)WindowFromPoint(screen);
     while (h) {
-        POINT p = screen;
-        RECT c;
-        ScreenToClient(h, &p);
-        GetClientRect(h, &c);
-        if (PtInRect(&c, p)) {
-            HWND pick = h, ch = (HWND)GetWindow(h, GW_CHILD);
-            while (ch) {
-                POINT q = screen;
-                RECT rc;
-                ScreenToClient(ch, &q);
-                GetClientRect(ch, &rc);
-                if (PtInRect(&rc, q)) { pick = ch; ch = (HWND)GetWindow(ch, GW_CHILD); }
-                else                  ch = (HWND)GetWindow(ch, GW_HWNDNEXT);
-            }
-            return pick;
-        }
+        GetWindowRect(h, &rc);
+        if (PtInRect(&rc, screen)) { pick = h; break; }
         h = (HWND)GetParent(h);
     }
-    return NULL;
+    if (!pick) return NULL;
+    /* descend to the deepest visible descendant that still contains the point */
+    for (;;) {
+        HWND ch = (HWND)GetWindow(pick, GW_CHILD), next = NULL;
+        while (ch) {
+            if (IsWindowVisible(ch) && IsWindowEnabled(ch)) {
+                GetWindowRect(ch, &rc);
+                if (PtInRect(&rc, screen)) { next = ch; break; }
+            }
+            ch = (HWND)GetWindow(ch, GW_HWNDNEXT);
+        }
+        if (!next) break;
+        pick = next;
+    }
+    (void)root;
+    return pick;
 }
 
 static void post_mouse(HWND w, UINT msg, int cx, int cy)
@@ -1166,11 +1229,28 @@ static void dump_bmp(const char *label)
  * `oracle.` and is excluded from the diff by tools/oracle/cmp_dump.py.  A key
  * the PORT emits that the oracle has no source for is reported as
  * `no-source`, never silently dropped: that is the list of work still owed. */
+/* `dump <module>@<tag>` -- the tagged form, agreed with Core.  A script may
+ * checkpoint the SAME module several times in one run; without a tag the file
+ * names collide and the diff silently compares the last occurrence.  The split
+ * is at the LAST '@', the module is the prefix, and the emitted `label` key is
+ * the whole token, so one string names the file and the event.  `dump <module>`
+ * with no '@' still works and still emits label=<module>. */
+static const char *label_module_of(const char *label, char *buf, size_t cap)
+{
+    const char *at = strrchr(label, '@');
+    size_t n;
+    if (!at) return label;
+    n = (size_t)(at - label);
+    if (n == 0 || n >= cap) return label;
+    memcpy(buf, label, n);
+    buf[n] = 0;
+    return buf;
+}
 static int label_is(const char *l, const char *want) { return strcmp(l, want) == 0; }
 static int label_module(const char *l)
 {
     static const char *names[] = { "clock","rng","hero","map","scene","battle",
-                                   "panels","items","minigame","options", NULL };
+                                   "panels","items","minigame","options","world", NULL };
     int i;
     for (i = 0; names[i]; i++) if (label_is(l, names[i])) return 1;
     return 0;
@@ -1178,22 +1258,32 @@ static int label_module(const char *l)
 static void do_dump(const char *label)
 {
     char path[700];
+    char modbuf[64];
+    const char *mod = label_module_of(label, modbuf, sizeof modbuf);
     FILE *f;
     unsigned char *hero;
     uintptr_t b = g_base;
-    int i, live, is_hero = label_is(label, "hero");
+    int i, live, is_hero = label_is(mod, "hero");
     wsprintfA(path, "%s\\%s.txt", g_outdir, label);
     f = fopen(path, "wb");
     if (!f) { tr("oracle: cannot write %s", path); return; }
-    hero = (unsigned char *)(b + (0x0067FBF8u - IMAGE_BASE));
+    /* DAT_0067FBF8 is a POINTER to the hero record, not the record: FUN_004269AF
+     * at 0x426B8F does `DAT_0067fbf8 = DAT_004e4870 + 0x1560a5c`, where
+     * DAT_004e4870 is the 0x15C0170-byte block FUN_00426149 malloc'd plus
+     * `(rand() & 0x3fff & ~0xf)`.  So the record base is the VALUE read through
+     * the pointer, and hero.base_offset is that per-run offset, which is the
+     * only part of the address the two sides can share. */
+    hero = *(unsigned char **)(b + (0x0067FBF8u - IMAGE_BASE));
+    if (!hero) hero = (unsigned char *)(b + (0x0067FBF8u - IMAGE_BASE));
     fprintf(f, "label=%s\n", label);
+    if (mod != label) fprintf(f, "oracle.tag=%s\n", label + strlen(mod) + 1);
 
     /* --- the harness keys, in the port's spelling -------------------------
      * Only for the labels the port answers with them: `dump <label>` maps to
      * exactly one module on both sides, and putting clock.* in a `dump hero`
      * would make every hero label a mismatch over a key that is not the
      * hero's. */
-    if (label_is(label, "clock") || label_is(label, "rng")) {
+    if (label_is(mod, "clock") || label_is(mod, "rng")) {
         fprintf(f, "clock.ms=%u\n", vnow());
         fprintf(f, "clock.time_s=%u\n", vtime_s());
         fprintf(f, "rng.state=%u\n", g_holdrand);
@@ -1236,6 +1326,14 @@ static void do_dump(const char *label)
         fprintf(f, "hero.abil.agi=%d\n", *(int *)(hero + 0x1A0 + 8));
         fprintf(f, "hero.abil.dex=%d\n", *(int *)(hero + 0x1A0 + 12));
         fprintf(f, "hero.checksum=%08x\n", (unsigned)*(unsigned *)(hero + 0x16C8));
+        /* hero.base_offset is the hero record's offset inside the 0x15C0170 block
+         * FUN_00426149 malloc'd: 0x1560A5C + (rand() & 0x3FFF & ~0xF).  It is the one
+         * part of the record's address both sides can agree on, and because it is
+         * that rand() draw it pins WHERE in the boot LCG stream the record landed --
+         * a mismatch here means the boot rand order diverged even when rng.calls
+         * happens to match.  Core is asked to emit it from the same expression. */
+        fprintf(f, "hero.base_offset=%u\n",
+                (unsigned)(intptr_t)(hero - *(unsigned char **)(b + (0x004E486Cu - IMAGE_BASE))));
 hero_done: ;
     }
 
@@ -1251,6 +1349,17 @@ hero_done: ;
     fprintf(f, "oracle.front_serial=%d\n", *(int *)(b + (0x004DD20Cu - IMAGE_BASE)));
     fprintf(f, "oracle.front_network=%d\n", *(int *)(b + (0x004E6910u - IMAGE_BASE)));
     fprintf(f, "oracle.front_map=%d\n", *(int *)(b + (0x004E0DDCu - IMAGE_BASE)));
+    /* `battle.spell_success_percent` is emitted UNPREFIXED, because it is a key the
+     * port's battle_dump() has to emit too (Battle3) or there is nothing to compare.
+     * The source is _DAT_004E0FF8 in the running original, read at 0x4A7507 by
+     * FUN_004A7456 and compared against 100 at 0x4A750C -- 100 means "no scaling".
+     * It is on the battle label rather than an oracle.* key on purpose: the value does
+     * not move during a fight in the original, so a divergence here is the port's
+     * cast_success() applying a global where the original applies per-spell flags at
+     * spell[0x124]/0x128, and it has to be visible in the diff at the moment it
+     * happens rather than showing up later as an unexplained roll difference. */
+    fprintf(f, "battle.spell_success_percent=%d\n",
+            *(int *)(b + (0x004E0FF8u - IMAGE_BASE)));
     {
         const char *w = (const char *)(b + (0x004E0BD0u - IMAGE_BASE));
         char wbuf[64]; int k;
@@ -1261,7 +1370,7 @@ hero_done: ;
     fprintf(f, "oracle.hero_inuse=%d\n", *(int *)(hero + 0x000));
     fprintf(f, "oracle.hero_seconds=%d\n", *(int *)(hero + 0x01CD));
     fprintf(f, "oracle.hero_invocations=%d\n", *(int *)(hero + 0x01CC));
-    if (!label_module(label)) fprintf(f, "oracle.unknown_label=1\n");
+    if (!label_module(mod)) fprintf(f, "oracle.unknown_label=1\n");
     for (i = 0; i < (int)0x16CC; i += 64) {            /* debug form, 64 bytes a line */
         int j, n = (int)0x16CC - i; if (n > 64) n = 64;
         fprintf(f, "oracle.hero_hex.%04X=", i);
@@ -1378,7 +1487,13 @@ static int pump_step_inner(void)
             do_mouse(e->x, e->y, e->kind); break;
         case EV_KEY:  do_key(e->vkey); break;
         case EV_TEXT: do_text(e->text); break;
-        case EV_DUMP: do_dump(e->text ? e->text : "dump"); break;
+        case EV_DUMP:
+            /* WOS_WINTREE_MS=<ms> logs the tree at every dump at or past that clock
+             * value, so a click coordinate can be traced to the window that owns the
+             * message map instead of guessed from the art. */
+            if (wintree_at && vnow() >= wintree_at) wintree_dump(0);
+            do_dump(e->text ? e->text : "dump");
+            break;
         case EV_DIALOG:
             /* A dialog op waits for its window: if it is not up yet the event stays
              * pending and the clock only moves to the next 20 Hz boundary. */
@@ -1525,6 +1640,18 @@ static void script_init(void)
         n = GetEnvironmentVariableA("WOS_MSGLOG_MS", g_scratch, sizeof g_scratch);
         g_msglog_until = (n && n < sizeof g_scratch) ? (uint32_t)atol(g_scratch) : 0u;
         tr("script_init: msglog=%d until=%u", (int)g_msglog, g_msglog_until);
+    }
+    /* WOS_WINTREE=1 logs every descendant of the main window with its class, caption,
+     * client rect in client-of-main coordinates and visibility.  A .dsc click has to
+     * land on the window that owns the message map, and the only way to know which
+     * window that is at a given point is to read the tree rather than guess from the
+     * art -- the title screen alone has a frame, a view, a splitter pane and a
+     * Book of Tactics dialog stacked over each other. */
+    n = GetEnvironmentVariableA("WOS_WINTREE", g_scratch, sizeof g_scratch);
+    if (n && n < sizeof g_scratch) {
+        wintree_dump(1);
+        n = GetEnvironmentVariableA("WOS_WINTREE_MS", g_scratch, sizeof g_scratch);
+        wintree_at = (n && n < sizeof g_scratch) ? (uint32_t)atol(g_scratch) : 0u;
     }
     if (!parse_script(v)) { tr("script_init: FATAL parse failed"); return; }
     tr("script_init: parsed %d events, end=%u", g_nev, g_end_ms);

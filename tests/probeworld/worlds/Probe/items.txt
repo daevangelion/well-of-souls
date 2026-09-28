@@ -1,0 +1,1277 @@
+;
+; ITEMS
+;
+;-------------------
+; Items used in the game.  Each line describes one item
+; (some of these are objects with which you can be EQUIPPED and which 
+; modify your attack and defense values, others are things like potions that
+; you consume)
+;
+; NOTE: the bmp files should be in the world directory (your world's ART directory)
+; and should be windows RLE bmp files with a 256 color palette (use soul.pal in
+; the well of souls ART folder)  (otherwise you will experience horrible color
+; matching.. a hint to the wise is to draw the images using the right palette
+; in the first place)
+;
+; Each item gets one line of text in the table with multiple arguments separated
+; by commas.  The arguments are in the following order:
+;
+;	// arg 0	Equipment ID Number  (1-1023) and (1024-5119)
+;
+;				* ID: (1-1023)
+;					These first group of items are 'multiple' in that a character can carry
+;					up to 100 of each (based on current wallet size).  Use these for 'potions'
+;					or anything else the user needs more than one of at a time.
+;
+;				* ID: (1024-5119)
+;					This second group of items are 'single' in that a character can carry no
+;					more than one of each (no matter what their wallet size is).  Use these for
+;					things which the user only needs one of... say.. shields.  Please note that
+;					they can have one of EACH of these, all at once.  So that's 4096 things in
+;					their pocket if they have ALL of them.  That's a lot.
+;
+;				Each item must have a unique ID number.  So you cannot define more than 5119 items
+;				in the world.
+;
+;	// arg 1	Name of Item
+;				
+;				* Name:
+;
+;				Each item has a name, which appears in the Item list and the shops.  
+;
+;					For example: "Fire of Agony" 
+;
+;				You should put the name in double-quotes, especially if it contains spaces.
+;
+;	// arg 2	Class (one of the following, note the image file name for each class)
+;				An item's class controls how it can be used.  
+;				Here are the defined classes:
+;
+;	//			0	POTION			"items.bmp"		// affect hp and mp
+;
+;	//			1   ANTIDOTE		"items.bmp"		// cures disease.  The disease in question is 
+;													// set by arg 12 (ability)  Each antidote item
+;													// can cure only a single disease, and acts like
+;													// a single cast of the related 'cure spell' for
+;													// that disease.
+;
+;	//	<<DO NOT USE YET>>		2	SPECIAL			items.bmp		// QUest Item
+;	//	<<DO NOT USE YET>>		3	EXIT			items.bmp		// Get out of current trouble.
+;
+;	//			4	TRAVEL			items.bmp		// take you somewhere
+;													// full ticket looks like:  4.mode.num.link.dropin.sceneNum
+;													// operation is similar to the scene opcode GOTO
+;													// mode = 1 means "drop into scene 'num'" (you don't really travel, just see scene)
+;													// mode = 0 means "go to link on map 'num'"
+;													// if 'dropin' is '1' then you go INSIDE that link, otherwise you just land on top of it
+;													// Examples:
+;													//	4.1.15		start scene 15, when you exit the scene you are still where you were
+;													//	4.0.0.0.0	go to link 0 of map 0 and do not drop in (sets you on top of evegreen gateway)
+;													//	4.0.0.0.1	go to link 0 of map 0 and DO drop in (puts you inside gateway scene - when you exit you are near gateway)
+;													//  4.0.1.2.0	go to link 2 of map 1 and do NOT drop in.
+;													//
+;													// Adding the FIFTH dotted argument restricts use of the ticket to
+;													// a particular scene number, so:
+;													//  4.0.1.2.0.45  takes you to the destination ONLY if you are inside scene 45 at the time
+;
+;	//	<<DO NOT USE YET>>		5	THROWABLE		darts.bmp		// ninja stars, arrows, etc.
+;	//			10	EQUIP_HELMET	"helmets.bmp"	// my helmet ID (0 for none)
+;	//			11	EQUIP_ARMOR		"armor.bmp"		// my armor ID
+;	//			12	EQUIP_RIGHT_1	"swords.bmp"	// right-hand weapons 1 (evergreen swords)
+;	//			13	EQUIP_RIGHT_2	"staffs.bmp"	// right-hand weapons 2 (evergreen staffs)
+;	//			14	EQUIP_RIGHT_3	"bows.bmp"		// right-hand weapons 3 (evergreen bows)
+;	//			15	EQUIP_RIGHT_4	"music.bmp"		// right-hand weapons 4 (evergreen music)
+;	//			16	EQUIP_RIGHT_5	"right5.bmp"	// right-hand weapons 5 (evergreen fist)
+;	//			17	EQUIP_RIGHT_6	"right6.bmp"	// right-hand weapons 6 (evergreen dart)
+;	//			18	EQUIP_RIGHT_7	"right7.bmp"	// right-hand weapons 7 (evergreen Book)
+;	//			19	EQUIP_RIGHT_8	"right8.bmp"	// right-hand weapons 8 (evergreen Spirit)
+;	//			20	EQUIP_BOOTS		"boots.bmp"		// my boots
+;	//			21	EQUIP_SHIELD		"shields.bmp"	// my shield
+;	//			22	EQUIP_RING		"rings.bmp"		// my ring
+;	//			23	EQUIP_AMULET		"amulets.bmp"	// my amulet
+;
+;
+;				100	ATTR_STRENGTH	affects strength (by amount in arg12 - ability points)
+;				101	ATTR_WISDOM		affects wisdom	
+;				102	ATTR_STAMINA		affects stamina	
+;				103	ATTR_AGILITY		affects agility	
+;				104	ATTR_DEXTERITY	affects dexterity
+;				105	ATTR_ALL		brings up ability point dialog and lets you assign at will
+;
+;				200	ITEM_CLASS_PET	It's a "pokegatchi" for sale - very special rules.  Only by OFFER command, not OFFER2
+;									Pets do not have an item 'image #' so arg3 is used instead to point to
+;									their MONSTER number (each pet must be described as a monster in the MONSTER table,
+;									though you are not obliged to place them on a map)
+;
+;				201 ITEM_CLASS_HTML	When this object is "used" it causes a web page to be displayed.
+;									The URL for the page is found in the SOUNDEFFECT argument (arg15)
+;									If the URL begins with "http://" then it is a full URL and the
+;									real Internet will be used.  Otherwise, it is assumed to be a local
+;									file in the WoS\Worlds\YourWorldName\HTML folder.
+;
+;	// arg 3	imageNumber.extensionNumber
+;
+;				* imageNumber: 0 - 63  (depending on number of images in filmstrip)
+; 
+;				(offset from left in appropriate class's image BMP file)
+;				Class Image files consist of a 'film strip' of images with #0 being the
+;				far left image.  Which is a bad example, since 0 is not a legal image index number.
+;				(because the stock image list uses that frame for the 'empty-handed' image)
+;
+;				* extensionNumber: (optional)
+; 
+;				You can now have an additional 'extension' bitmap for each item class.  For example
+;				you might wish to re-use all the stock sword images in your world, but then add some more as well.
+;				You would then make a filmstrip file of the normal name, but add "_1" to it.  (as in "items_1.bmp, 
+;				helmets_1.bmp, etc.).  Then in arg3, instead of simply putting an offset, add a second dotted argument
+; 				with the extension number, hence "3" would mean image 3 in the stock bitmap, while "2.1" would mean 
+;				image 2 in the extension_1 bitmap.  Your extension bitmaps should be placed in your world's ART folder. 
+;				At present, only a single extension is supported, so if an extension # is given, it must be "1"
+;				// News: As of WoS version A77, you may now have 9 extensions per item class.
+;					(.1 to .9, loading from files named: xxx_1.bmp to xxx_9.bmp)
+;
+;				Note: it is recommended that you do not exceed 4096 pixels width in any given WoS .bmp file,
+;				(this is a practical limit of 64 'cells' in an item filmstrip (since each item is 64 pixels wide)
+;
+;	// arg 4	GP
+;
+;				* GP:
+;
+;				Standard purchase price of item, in store (in Gold Pieces)
+;
+;					1 - N		Price of item is N gold pieces
+;					0			means it is a special item which cannot be sold in stores, 
+;								nor	given to others and you probably want to keep it. 
+;
+;				For example, quest items will often have a GP of 0, making it impossible
+;				to accidentally get rid of the hard-won item.
+;
+;	// arg 5	Level.EquipToken.flags.maxCount.trophyNeeded.trophyMade.trophyCountNeeded.trophyCountMade
+;
+;				* Level:
+;
+;				This is the minimum character level the player must be at, in order to use or equip the
+;				item.
+;
+;				* EquipToken: (optional)
+;
+;				This optional 'token' means the item still cannot be equipped until the player has that token
+;				(note, you cannot use token zero for this)
+;
+;				Examples:
+;
+;					"4"			// requires character to be level 4 or higher
+;					"23.14"		// requires character to be at least level 23 AND be in possession of token 14.
+;
+;				One reason you might like to use the token is to characterize an item to be equippable only
+;				by certain character classes. In this case the token might mean "elf-only"  Alternatively you
+;				might use the token to describe the nature of the object, like "wooden" and then only allow certain
+;				clases to equip wooden objects.  You would then hand out the appropriate tokens to your character
+;				classes (either right away, or as quest rewards).
+;
+;				* Flags
+;
+;				Note that if you want to use Flags, but no equipToken, you will have to insert a 0 for
+;				the equiptoken.
+;
+;				Example:
+;					"4"			// requires level 4
+;					"4.0.1"		// requires level 4 and has flag setting of 1 (and no EquipToken)
+;					"4.23.1"	// requires level 4, EquipToken 23, and has a flag setting of 1
+;
+;				Flags are the sum of these values (add together all the effects you want)
+;
+;					1			// private use only (item cannot be given to another player)
+;					2			// reserved
+;
+;				* MaxCount
+;
+;				This lets you set the most a person can carry of this item at a time.  This is a lower
+;				limit only.  You cannot use this to increase the limit above 100, or the player's current
+;				wallet size.  You can only use this to reduce the amount even further.
+;
+;				* trophyNeeded
+;
+;				This specifies the 'ammunition' for an equipped hand weapon.  It consumes one of these
+;				trophies each time you use the weapon.  The weapon will not work without them.  This only
+;				works for the hand-equipped weapon.
+;
+;				* trophyMade
+;	
+;				This specifies a trophy which is 'given to' the hero (scene host only?) upon completion of the use
+;				of this item... This may not be fully functional, use at your own risk.  Actually this is NOT
+;                               available at this time (only spells can create trophies)
+;  
+;                               * trophyCountNeeded
+; 
+;                               If you specify trophyNeeded, you can additionally specify how many.  Default is '1'
+;
+;                               * trophyCountMade
+;
+;                               If you specify trophyMade, you can additionally specify how many.  Default is '1'
+;
+;
+;				Example:
+;					"5.13.0.25" // requires level 5, token 13, no flags, and can only carry 25 at a time tops.
+;					
+;				
+;
+;	// arg 6	spellBinding.bootEffect
+;
+;				* spellBinding:
+;
+;	          	Some equipment (staffs, mainly) are bound to a specific spell.  If a character is holding
+;				this item in their right-hand and selects ATTACK in battle, then this spell is used (costs
+;				no MP to cast this spell) 
+;
+;				NOTE: 'ALL' spells can not be used as spell bindings.  Only single-target spells.
+;   			
+;					0 	- no binding
+;				     (1 - N)	- (ID# of a spell from the +SPELLS table)
+;	
+;				* bootEfect:
+;	
+;				You may optionally include a "bootEffect" code as a "dotted argument". Traditionally boot
+;				effects only worked on boots, but nowadays you can apply a boot effect to any equippable item.
+;				So the character could have as many as seven boot effects in effect at the
+;				same time. 
+;
+;					0  	- has no special effect. 
+;					1-9 - enables you to cross terrains 1-9 (see +TERRAINS table)
+;					10 	- lets you 'fly over' all but impassable terrain.
+;					11 	- means 'monster repellent' and fewer monsters will attack while wearing them.
+;					12 	- means 'ride the invisible beasts' (lets you cross map at double speed)
+;
+;				Having more than one of the same effect on at once, does NOT make the effect any
+;				better, faster, etc.
+;
+;	//
+;	// arg 7	Element		(actual names in ELEMENTS table)
+;	//			0 LIFE  	(Healing magic)
+;	//			1 WATER
+;	//			2 NATURE
+;	//			3 EARTH 
+;	//			4 DEATH		(also, training in DEATH is how you handle training for 'chaos' elements)
+;	//			5 FIRE
+;	//			6 SPIRIT
+;	//			7 AIR
+;   //			Items currently cannot be set to any but the basic 8 elements.
+;	//			Also, the "All" modifier for items is not implemented
+;	//			As late as version A52, this field is ignored, but world-designers are advised to use a
+;	//			value of 0 if they don't plan to use this feature (assuming it is ever supported)
+;   //
+;	//			Starting with A56, you can bind weapons to elements and they will then be more (or less)
+;	//			effective when hitting monsters.  
+;   //			For example, an element water sword would hurt element fire monsters the most.
+;	//
+;	// arg 8	Defense points		(cursed items are negative!)
+;
+;	// arg 9	Attack points		(cursed items are negative!)
+;
+;	// arg 10	HP points			(amount added, when used)
+;									Note that the HP is also added to any monster you toss the item too, so
+;									this can be used as a cure, or a weapon for monsters (or pets).  Heroes
+;									(humans) will simply catch anything you toss them, so this wouldn't be
+;									a way to make a ninja-star which hurt humans.
+;
+;	// arg 11	MP Points			(amount added, when used)
+;
+;	// arg 12   Ability Points      For SEED items, this is the # of points you get to apply to your abilities
+;									For ANTIDOTE items, this field is the disease number that it
+;									cures (note that some diseases prevent you from using items, so an item
+;									antidote is useless in that case).
+;										-2			DISEASE_POISON		(prevents HP restores from working)		
+;										-3			DISEASE_SAP			(makes spells cost more MP to be cast)		
+;										-4			DISEASE_STUN			(cannot move, or attack)
+;										-5			DISEASE_GAG			(cannot case spells)(* wears off)		
+;										-6			DISEASE_NUMB			(cannot use right-hand)(* wears off)
+;										-7			DISEASE_SLEEP		(cannot move, or attack)(* wears off)	
+;										-8			DISEASE_CONFUSE		(attacks may hit friends)(* wears off)	
+;										-11			DISEASE_FREEZE		(cannot move)
+;										-20			DISEASE_STRENGTH		(lowers strenth til end of scene) (cure raises it)
+;										-21			DISEASE_WISDOM		(lowers wisdom til end of scene) (cure raises it)	
+;										-22			DISEASE_STAMINA		(lowers stamina til end of scene) (cure raises it)	
+;										-23			DISEASE_AGILITY		(lowers agility til end of scene) (cure raises it)
+;										-24			DISEASE_DEXTERITY	(lowers dexterity til end of scene) (cure raises it)	
+
+;
+;   // arg 13   <find Probility>.<monster ID>
+;				
+;				This argument determines whether or not you can find an item after killing a monster.
+;				The optional <monster ID> allows you to limit the item to only having a chance of being
+;				found if a monster of that type was killed in the scene.
+;									
+;				'Find' Probability  (chance in 2000 of finding one after battle 0(never) - 2000(always))
+;									(0 also means cannot be bought in stores, but you CAN get rid of it)
+;									(i.e. for a quest item you can get rid of)
+;								    (-1 means you cannot FIND it, but you CAN buy it with offer2 command)
+;
+;				Here is an attempt to describe the inter-relationship between FP and GP
+;
+;				GP			FP			Item Attributes
+; 				--			--			---------------
+;				>0          >0			This is an item you can buy at a store, find after a fight, and sell later
+;				>0			0			This is an item you can't buy at a store, won't find after a fight, but can sell later
+;										(a sellable quest item)
+;				>0			-1			This is an item you can buy at a store, won't find after a fight, but can sell later
+;				0			0			This is an item you cannot buy, cannot find after a fight, and cannot sell
+;										(a permanent quest item)
+;				0			>0			This is an item you cannot buy, can find after a fight, but cannot sell
+;										(a permanent, monster gift - probably not a good idea)
+;				0			-1			This is an item you cannot buy, cannot find, and cannot sell
+;										(same as permanent quest item, I guess)
+;			
+;	// arg 14	Long description of item or effect (250 characters maximum, though for esthetic reasons you will want
+;				to keep it shorter, or it may not all fit on the screen nicely.)
+;
+;	// arg 15   (optional) wave file to play when used ("sword.wav")
+;				Note: For ITEM_CLASS_HTML, this field actually holds a URL and not a sound effect
+;
+;	// arg 16	attackPath.imageID.flags.weather.effect
+;
+;				Arg16 defines an optional "attack path" which determines what animation
+;				occurs when you use the item (generally only for equipped right-hand
+;				items).
+;				
+;				* attackPath:  (0-63)
+;				
+;				This controls the movement of the attacker or weapon, according to
+;				this table:
+;
+;					-1	Pick random path for this item when world is loaded
+;					0	No attack path (this is the default)
+;					1	LUNGE	Attacker runs up to target then runs back
+;					2	JUMP	Attacker jumps straight onto target, then runs back
+;					3	LEAP	Attacker HIGH jumps straight onto target, then runs back
+;					4	STAB	Attacker runs straight to target, then does attack frame, then runs back
+;					5	DBL-STAB	Attacker runs straight to target, does attack frame twice, then runs back
+;					6	TRAMPLE	Attacker does one Big hop to target, then hops again on top of it
+;					7	HOP		Attacker reaches target in several hops, each getting higher.
+;
+;					30  ARROW	Image follows straight line from attacker to target
+;					31	STONE	Image follows short arc from attacker to target
+;					32	LOB		Image follows high arc from attacker to target
+;					33	Swoop   Image goes all the way from one side of the screen to the other
+;
+;				* image: (0-199)
+;
+;				"Image" is used with attacks which hurl objects. Each image is an eight-frame animation
+;				stored in a file named attackNN.bmp  Each file contains 10 such filmstrips where the
+;				topmost filmstrip is the '0' index of that file.  SO, image 143 would be index '3' in
+;				the file attack14.bmp  I hope that's not too confusing.  The first one hundred images
+;				(files 00-09) are reserved for ME to use, while the rest (attack10.bmp to attack19.bmp)
+;				are reserved for world designers (and go in your world's ART folder)
+;
+;				* flags: (0-63)
+;
+;				Flags are the sum of any combination of these values:
+;
+;					0-3	- duration of attack (0 is quick, 3 is slow)
+;					4	- if this flag is set, each of the 8 frames of animation consumes one eigth
+;						  the entire attack (instead of rolling through the frames over and over)
+;					8	- If this is set, the images is not 'flipped' when attacking from left to right.
+;					16	- reserved
+;					32	- reserved
+
+;				* weather: (0-63)
+;
+;				Values are the same as for SPELLs.  Basically this weather happens in 
+;				the scene for the duration of the attack.  So you can have it snow or
+;				rain while the ice arrow finds its target, for example.
+;
+;				* effects: (0-63)
+;
+;				Values are the same as for SPELLs.  Effects include things like wobbly
+;				image, dimmed image, lake reflection in lower part of screen, etc.
+;
+;
+;
+;
+; ITEMS
+;
+;
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description					Sound Effect			Attack Path
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14							15				16
+
+	1,	"Health Potion",		0,	0,	10,		0,	0,	0,	0,	0,	20,	0,	0,	80,	"Recharges HP a little bit.", "petGulp.wav"
+	2,	"Magic Potion",			0,	1,	10,		0,	0,	0,	0,	0,	0,	15,	0,	80,	"Recharges MP a little bit.", "petGulp.wav"
+	3,	"Poison Antidote",		1,	2,	25,		0,	0,	0,	0,	0,	0,	0,	-2,	80,	"Cures poisoning."
+	4,	"Sap Antidote",			1,	2,	25,		0,	0,	0,	0,	0,	0,	0,	-3,	80,	"Cures magic sapping."
+;	5,	"Town Finder",			0,	4,	0,		0,	0,	0,	0,	3,	0,	0,	0,	0,	"Warp back to a town."
+;	6,	"Talisman of Seth",		0,	5,	0,		0,	0,	0,	0,	30,	0,	0,	0,	0,	"Power of Seth increases attack strength."
+	7,	"Nefertiti",			0,	6,	500,	0,	0,	0,	0,	0,	0,	0,	0,	0,	"The spirit of Nefertiti protects you in battle."
+	8,	"Lizard Seed",			105,7,	135000,	50,	0,	0,	0,	0,	0,	0,	5,	1,	"Enhances ANY your abilities.", "magic7.wav"
+;	9,	"Gargoyle",				0,	8,	0,		0,	0,	0,	0,	0,	0,	0,	0,	1,	""
+;	10,	"Dragon Seed",			0,	9,	0,		35,	0,	0,	0,	0,	0,	0,	0,	0,	""
+;	11,	"Whale Seed",			0,	10,	0,		35,	0,	0,	0,	0,	0,	0,	0,	0,	""
+	12,	"Health Balm",			0,	11,	50,		0,	0,	0,	0,	0,	100,0,	0,	10,	"A man-sized health potion.", "squirt1.wav"
+	13,	"Magic Balm",			0,	12,	50,		0,	0,	0,	0,	0,	0,	75,	0,	4,	"Magic-restoring nectar, stolen from Mount Aegis.", "squirt1.wav"
+;	14,	"Talisman of Horus",	0,	13,	0,		0,	0,	0,	0,	0,	0,	0,	0,	1,	""
+	15,	"Eye of Horus",			2,	14,	1,		100,0,	0,	0,	0,	0,	0,	0,	0,	"You don't want to think about this guy's eyeglasses."
+	16,	"Heart Berry",			0,	15,	100,	0,	0,	0,	0,	0,	300,0,	0,	1,	"A king-sized health potion.", "summon8.wav"
+;	17,	"Eagle Seed",			0,	16,	0,		0,	0,	0,	0,	0,	0,	0,	0,	0,	""
+	18,	"Amber Berry",			0,	17,	100,	0,	0,	0,	0,	0,	0,225,	0,	10,	"Concentrated MP from the previous age."
+	19,	"Health Berry",			0,	18,	500,	0,	0,	0,	0,	0,	2000,0,	0,	1,	"Most likely a full health recharge.", "summon8.wav"
+	20,	"Gryphon Seed",			100,19,	99000,	35,	0,	0,	0,	0,	0,	0,	5,	1,	"Gives you the strength of the Gryphon.", "magic7.wav"
+	21,	"Canis Seed",			101,20,	99000,	35,	0,	0,	0,	0,	0,	0,	5,	1,	"Gives you the wisdom of Canis.", "magic7.wav"
+	22,	"Gecko Seed",			102,21,	99000,	35,	0,	0,	0,	0,	0,	0,	5,	1,	"Gives you the stamina of the Gecko.", "magic7.wav"
+	23,	"Wolf Seed",			103,22,	99000,	35,	0,	0,	0,	0,	0,	0,	5,	1,	"Gives you the agility of the Wolf.", "magic7.wav"
+	24,	"Fire Berry",			0,	23,	500,	0,	0,	0,	0,	0,	0,	1750,0,	1,	"For the wizard in a hurry to recharge MP.", "summon8.wav"
+	25,	"Swan Seed",			104,24,	99000,	35,	0,	0,	0,	0,	0,	0,	5,	1,	"Gives you the dexterity of a swan.", "magic7.wav"
+;	26,	"Lapis Wheel",			0,	25,	0,		0,	0,	0,	0,	0,	0,	0,	0,	1,	""
+	27,	"Tri-Amber",			0,	26,	1000,	0,	0,	0,	0,	0,	2000,2000,0,1,	"Like getting hit by a recharge thunderstroke.", "summon8.wav"
+;	28,	"Ruby Smoke",			0,	27,	0,		0,	0,	0,	0,	0,	0,	0,	0,	1,	""
+	29,	"Cheese Sandwich",		0,	29,	10,		0,	0,	0,	0,	0,	120	0,	0,	50,	"Just like mother used to make.", "petChew.wav"
+	30,	"Halibut",				0,	30,	10,		0,	0,	0,	0,	0,	100	0,	0,	40,	"The gentleman's fish.  Tastes like chicken.", "petChew.wav"
+	31,	"Fish",					0,	31,	10,		0,	0,	0,	0,	0,	80,	0,	0,	30,	"Tastes like fish.", "petChew.wav"
+	32,	Beer,					0,	32,	10,		21,	0,	0,	0,	0,	100,0,	0,	5,	"Emergency carbohydrates with an attitude.",petGulp.wav,	,				
+	33,	Ale,					0,	33,	10,		21,	0,	0,	0,	0,	130,0,	0,	3,	"You could eat it with a fork.",petGulp.wav,	,				
+	34,	Wine,					0,	34,	10,		21,	0,	0,	0,	0,	150,0,	0,	2,	"For the fancy elitist, a spunky vintage.",petGulp.wav,	,				
+	35,	"Mulled Port",			0,	35,	15,		21,	0,	0,	0,	0,	0,	180,0,	2,	"Don't chip your tooth on the pewter goblet.",petGulp.wav,	,				
+	36,	Mead,					0,	36,	22,		18,	0,	0,	0,	0,	200,0,	0,	2,	"Get a REAL mead mug from the synthetic-reality.com web site!",petGulp.wav,	,				
+	37,	"Pizza",				0,	37,	50,		0,	0,	0,	0,	0,	0,225,	0,	2,	"The preferred meal of ninjas everywhere.", "petChew.wav"
+	38,	"Mouse Pad",			0,	38,	22,		0,	0,	0,	0,	0,	15,0,	0,	2,	"Get a REAL mouse pad from the synthetic-reality.com web site!.", "petChew.wav"
+; 4.mode.num.link.dropin
+	96,	"Quest Dictionary",		201, 4, 0, 		0,	0,	0,	0,	0,	0,0,	0,	0,	"Look up Quest Arcana.", "http://www.synthetic-reality.com/wosquest.htm"
+	97,	"Pet Arena Ticket",		4.0.5.11.1, 4, 10, 0,0,	0,	0,	0,	15,0,	0,	2,	"Go to pet arena.", "travel1.wav"
+	98,	"PK Arena Ticket",		4.0.5.12.1, 4, 10, 0,0,	0,	0,	0,	15,0,	0,	2,	"Go to PK arena.", "travel1.wav"
+	99,	"Ticket Home",			4.0.0.0.1, 4, 10, 0,0,	0,	0,	0,	15,0,	0,	2,	"Go directly to gateway.", "travel1.wav"
+;
+; Special stuff
+; (Generally, special items you can only win by completing quests - set the $ to 0 so they
+; cannot be bought or sold.  Set the FP to 0, so they cannot be found.)
+;
+;	E#, name,					cl  Img	$		lvl Spl		El	D	A	HP	MP	AP	FP	Description		SFX		ATTACK
+;	0	1						2	3	4		5	6		7	8	9	10	11	12	13	14				15		16
+	100,"Elementia Corpuscula",	2,	4,	1000,	0,	0,		0,	0,	0,	0,	0,	0,	0,	"Written by Kervorkias in the 3rd century.  Looks pretty gruesome."
+	101,"Sea Kingdom Halibut",	2,	30,	0,		0,	0,		0,	0,	0,	0,	0,	0,	0,	"Looks tempting, but you know someone who needs it more.", "petChew.wav"
+
+	180,"Soul Helm",			10,	14,	0,		99,	0,		0,	255,0,	0,	0,	0,	0,	"The fabled helmet of Samsyn.", "", 0
+	181,"Soul Armor",			11,	6,	0,		99,	0,		0,	255,0,	0,	0,	0,	0,	"The fabled Armor of Josh.", 	"", 0
+	182,"Soul Blade",			12,	9,	0,		99,	0,		0,	0,255,	0,	0,	0,	0,	"The fabled Blade of Genji.", 	"saber1.wav", 	5.0.3.9.3
+	183,"Soul Staff",			13,	12,	0,		99,	223		0,	255,0,	0,	0,	0,	0,	"The fabled Resurrection Staff of Zenheart.", "", 0
+	184,"Soul Bow",				14,	16,	0,		99,	0,		0,	0,255,	0,	0,	0,	0,	"The fabled Bow of Choe.", 		"bow.wav", 	30.63.2.0.4
+	185,"Soul Horn",			15,	19,	0,		99,	0,		0,	0,255,	0,	0,	0,	0,	"The fabled Horn of Dee.", 		"music1.wav",	31.72.2.0.5
+	186,"Soul Knuckles",		16,	9,	0,		99,	0,		0,	0,255,	0,	0,	0,	0,	"The fabled Fist of Boris.", 	"fist.wav", 	4.0.2.0.5
+	187,"Soul Sphere",			17,	9,	0,		99,	0,		0,	0,255,	0,	0,	0,	0,	"The fabled Dart of Peregrine.",	"boom1.wav", 	31.57.2.2.2
+	188,"Soul Tome",			18,	9,	0,		99,	0,		0,	0,255,	0,	0,	0,	0,	"The fabled Book of Lady Gryphon.", "chant7.wav", 31.58.2.3.2
+	189,"Soul Fetich",			19,	9,	0,		99,	0,		0,	0,255,	0,	0,	0,	0,	"The fabled Fetich of FireFox.", "pain9.wav", 	31.80.3.7.3
+	190,"Soul Boots",			20,	18,	0,		99,	0.10,	0,	255,0,	0,	0,	0,	0,	"The fabled Boots of Lurch.", 	"", 0
+	191,"Soul Shield",			21,	16,	0,		99,	0.11,	0,	255,0,	0,	0,	0,	0,	"The fabled Shield of Chron.", 	"", 0
+	192,"Soul Ring",			22,	2,	0,		99,	0.12,	0,	0,255,	0,	0,	0,	0,	"The fabled Ring of Lukka.", 	"", 0
+	193,"Soul Amulet",			23,	3,	0,		99,	0,		0,	255,0,	0,	0,	0,	0,	"The fabled Amulet of Ryder.", 	"", 0
+
+; helmets
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	200,"Leather Toupee",		10,	2,	25,		0,	0,	0,	1,	0,	0,	0,	0,	10,	"Protects a very small amount of your scalp."
+	201,"Leather Mask",			10,	1,	50,		2,	0,	0,	5,	0,	0,	0,	0,	5,	"Not all that effective of a defense, but very intimidating to the enemy."
+	202,"Lizard Fur",			10,	3,	150,	4,	0,	0,	10,	0,	0,	0,	0,	2,	"Rare feathers of the fire lizard deflect hostile energy."
+	203,"Dead Orc",				10,	4,	200,	6,	0,	0,	15,	0,	0,	0,	0,	2,	"Used."
+	204,"Baleen Top",			10,	5,	250,	8,	0,	0,	20,	0,	0,	0,	0,	1,	"Reinforced brow."
+	205,"Roundhead",			10,	6,	300,	10,	0,	0,	25,	0,	0,	0,	0,	1,	"Integrated neck protection."
+	206,"Light Helmet",			10,	7,	350,	12,	0,	0,	30,	0,	0,	0,	0,	1,	"Doesn't restrict your screams."
+	207,"Bullet Crown",			10,	8,	400,	14,	0,	0,	35,	0,	0,	0,	0,	1,	"Openings make it easy to hear call for retreat."
+	208,"Conquistador",			10,	9,	450,	16,	0,	0,	40,	0,	0,	0,	0,	1,	"Protects the air above your head."
+	209,"Steel Chapeau",		10,	10,	500,	18,	0,	0,	40,	5,	0,	0,	0,	1,	"Doubles as a head-bayonet."
+	210,"Iron Skull",			10,	11,	550,	20,	0,	0,	45,	5,	0,	0,	0,	1,	"Cast fear in enemy."
+	211,"Fire Cap", 			10,	12,	600,	22,	0,	0,	50,	5,	0,	0,	0,	1,	"Increased protection from flame."
+	212,"Full Face",			10,	13,	650,	24,	0,	0,	60,	0,	0,	0,	0,	1,	"Good all around head protection."
+	213,"Mandarin Helm",		10,	14,	700,	26,	0,	0,	55,	10,	0,	0,	0,	1,	"Mystical protection."
+	214,"Connel's Cap",			10,	5,	750,	28,	0,	0,	60,	10,	0,	0,	0,	1,	""
+	215,"Steelman",				10,	6,	800,	30,	0,	0,	65,	10,	0,	0,	0,	1,	""
+	216,"Warrior Crown",		10,	7,	850,	32,	0,	0,	70,	10,	0,	0,	0,	1,	""
+	217,"Noggin",				10,	8,	900,	34,	0,	0,	70,	15,	0,	0,	0,	1,	""
+	218,"El Capitan",			10,	9,	950,	36,	0,	0,	75,	15,	0,	0,	0,	1,	""
+	219,"Skull Helm",			10,	10,	1000,	38,	0,	0,	80,	15,	0,	0,	0,	1,	""
+	220,"Iron Pate",			10,	11,	1050,	40,	0,	0,	85,	15,	0,	0,	0,	1,	""
+	221,"Feuer Keff", 			10,	12,	1100,	42,	0,	0,	85,	20,	0,	0,	0,	1,	""
+	222,"Al Maram",				10,	13,	1150,	44,	0,	0,	90,	20,	0,	0,	0,	1,	""
+	223,"Spear Bane",			10,	14,	1200,	46,	0,	0,	95,	20,	0,	0,	0,	1,	""
+
+	224,"Abyss Cap",			10,	5,	1250,	48,	0,	0, 100,	20,	0,	0,	0,	1,	""
+	225,"Plasma Helm",			10,	6,	1300,	50,	0,	0, 100,	25,	0,	0,	0,	1,	""
+	226,"Raven Helmet",			10,	7,	1350,	52,	0,	0, 105,	25,	0,	0,	0,	1,	""
+	227,"Mythic Cap",			10,	8,	1400,	54,	0,	0, 110,	25,	0,	0,	0,	1,	""
+	228,"Shadow Cap",			10,	9,	1450,	56,	0,	0, 115,	25,	0,	0,	0,	1,	""
+	229,"Omen Helm",			10,	10,	1500,	58,	0,	0, 115,	30,	0,	0,	0,	1,	""
+	230,"Storm Knob",			10,	11,	1550,	60,	0,	0, 120,	30,	0,	0,	0,	1,	""
+	231,"Tabris",				10,	12,	1600,	62,	0,	0, 125,	30,	0,	0,	0,	1,	""
+	232,"Mordiet",				10,	13,	1650,	64,	0,	0, 130,	30,	0,	0,	0,	1,	""
+	233,"Gore Cap",				10,	14,	1700,	66,	0,	0, 130,	35,	0,	0,	0,	1,	""
+	234,"Shadow Helm",			10,	5,	1750,	68,	0,	0, 135,	35,	0,	0,	0,	1,	""
+	235,"Weeble",				10,	6,	1800,	70,	0,	0, 140,	35,	0,	0,	0,	1,	""
+	236,"Mythic Helm",			10,	7,	1850,	72,	0,	0, 145,	35,	0,	0,	0,	1,	""
+	237,"Abyss Helm",			10,	8,	1900,	74,	0,	0, 145,	40,	0,	0,	0,	1,	""
+	238,"Master Cap",			10,	9,	1950,	76,	0,	0, 150,	40,	0,	0,	0,	1,	""
+	239,"Master Helm",			10,	10,	2000,	78,	0,	0, 155,	40,	0,	0,	0,	1,	""
+	240,"Gore Helm",			10,	11,	2050,	80,	0,	0, 160,	40,	0,	0,	0,	1,	""
+	241,"Rock Helmet", 			10,	12,	2100,	82,	0,	0, 160,	45,	0,	0,	0,	1,	""
+	242,"Shadow Crown",			10,	13,	2150,	84,	0,	0, 165,	45,	0,	0,	0,	1,	""
+	243,"Mythic Crown",			10,	14,	2200,	86,	0,	0, 170,	45,	0,	0,	0,	1,	""
+	244,"Grim Cap",				10,	10,	2250,	88,	0,	0, 175,	45,	0,	0,	0,	1,	""
+	245,"Master Crown",			10,	11,	2300,	90,	0,	0, 175,	50,	0,	0,	0,	1,	""
+	246,"Raven Crown",			10,	12,	2350,	92,	0,	0, 180,	50,	0,	0,	0,	1,	""
+	247,"Zeus' Crown",			10,	13,	2400,	94,	0,	0, 185,	50,	0,	0,	0,	1,	""
+	248,"Ysne's Crown",			10,	14,	2450,	96,	0,	0, 190,	50,	0,	0,	0,	1,	""
+
+; armor
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	250,"Chemise",				11,	3,	25,		0,	0,	0,	2,	0,	0,	0,	0,	10,	"You got one like this from your mother on your twelfth birthday."
+	251,"Leather Vest",			11,	1,	75,		4,	0,	0,	7,	0,	0,	0,	0,	5,	"A sturdy leather vest - chafes your armpits."
+	252,"Mail Tunic",			11,	5,	200,	8,	0,	0,	10,	0,	0,	0,	0,	2,	"Light armor from your neck to your knees."
+	253,"Base Breast",			11,	4,	300,	10,	0,	0,	15,	0,	0,	0,	0,	1,	"Keeps your vitals close together."
+	254,"Base Armor",			11,	2,	400,	12,	0,	0,	20,	0,	0,	0,	0,	1,	"A fine armor, crafted by a troll apprentice."
+	255,"Base Torso",			11,	6,	500,	14,	0,	0,	25,	-2,	0,	0,	0,	1,	"Confining, but durable."
+	256,"Brass Tunic",			11,	5,	600,	16,	0,	0,	30,	0,	0,	0,	0,	1,	""
+	257,"Brass Breast",			11,	4,	700,	18,	0,	0,	35,	0,	0,	0,	0,	1,	""
+	258,"Brass Armor",			11,	2,	800,	20,	0,	0,	40,	0,	0,	0,	0,	1,	""
+	259,"Brass Torso",			11,	6,	900,	22,	0,	0,	45,	-2,	0,	0,	0,	1,	""
+	260,"Bronze Tunic",			11,	5,	1000,	24,	0,	0,	50,	0,	0,	0,	0,	1,	""
+	261,"Bronze Breast",		11,	4,	1100,	26,	0,	0,	55,	0,	0,	0,	0,	1,	""
+	262,"Bronze Armor",			11,	2,	1200,	28,	0,	0,	60,	0,	0,	0,	0,	1,	""
+	263,"Bronze Torso",			11,	6,	1300,	30,	0,	0,	65,	-2,	0,	0,	0,	1,	""
+	264,"Iron Tunic",			11,	5,	1400,	32,	0,	0,	70,	0,	0,	0,	0,	1,	""
+	265,"Iron Breast",			11,	4,	1500,	34,	0,	0,	75,	0,	0,	0,	0,	1,	""
+	266,"Iron Armor",			11,	2,	1600,	36,	0,	0,	80,	0,	0,	0,	0,	1,	""
+	267,"Iron Torso",			11,	6,	1700,	38,	0,	0,	85,	-2,	0,	0,	0,	1,	""
+	268,"Steel Tunic",			11,	5,	1800,	40,	0,	0,	90,	0,	0,	0,	0,	1,	""
+	269,"Steel Breast",			11,	4,	1900,	42,	0,	0,	95,	0,	0,	0,	0,	1,	""
+	270,"Steel Armor",			11,	2,	2000,	44,	0,	0,	100,0,	0,	0,	0,	1,	""
+	271,"Steel Torso",			11,	6,	2100,	46,	0,	0,	105,-2,	0,	0,	0,	1,	""
+
+	272,"Ainvar Armor",			11,	2,	2150,	48,	0,	0,	110,0,	0,	0,	0,	1,	""
+	273,"Aoi",					11,	6,	2200,	50,	0,	0,	115,-2,	0,	0,	0,	1,	""
+	274,"Aragorn's Tunic",		11,	5,	2250,	52,	0,	0,	120,0,	0,	0,	0,	1,	""
+	275,"Oclet",				11,	4,	2300,	54,	0,	0,	125,0,	0,	0,	0,	1,	""
+	276,"Shadow Armor",			11,	2,	2350,	56,	0,	0,	130,0,	0,	0,	0,	1,	""
+	277,"Raistlin",				11,	6,	2400,	58,	0,	0,	135,-2,	0,	0,	0,	1,	""
+	278,"Marduk",				11,	5,	2450,	60,	0,	0,	140,0,	0,	0,	0,	1,	""
+	279,"Odin's Breast",		11,	4,	2500,	62,	0,	0,	145,0,	0,	0,	0,	1,	""
+	280,"Master Tunic",			11,	2,	2550,	64,	0,	0,	150,0,	0,	0,	0,	1,	""
+	281,"Master Breast",		11,	6,	2600,	66,	0,	0,	155,-2,	0,	0,	0,	1,	""
+	282,"Master Armor",			11,	2,	2650,	68,	0,	0,	160,0,	0,	0,	0,	1,	""
+	283,"Master Torso",			11,	6,	2700,	70,	0,	0,	165,-2,	0,	0,	0,	1,	""
+	284,"Grim Tunic",			11,	5,	2750,	68,	0,	0,	170,0,	0,	0,	0,	1,	""
+	285,"Grim Breast",			11,	4,	2800,	70,	0,	0,	175,0,	0,	0,	0,	1,	""
+	286,"Grim Armor",			11,	2,	2850,	72,	0,	0,	180,0,	0,	0,	0,	1,	""
+	287,"Grim Torso",			11,	6,	2900,	74,	0,	0,	185,-2,	0,	0,	0,	1,	""
+	288,"Mortal Tunic",			11,	5,	2950,	76,	0,	0,	190,0,	0,	0,	0,	1,	""
+	289,"Mortal Breast",		11,	4,	3000,	78,	0,	0,	195,0,	0,	0,	0,	1,	""
+	290,"Phoenix Plate",		11,	2,	3050,	80,	0,	0,	200,0,	0,	0,	0,	1,	""
+	291,"Mortal Torso",			11,	6,	3100,	82,	0,	0,	205,-2,	0,	0,	0,	1,	""
+	292,"Storm Armor",			11,	2,	3150,	84,	0,	0,	210,0,	0,	0,	0,	1,	""
+	293,"Omen Torso",			11,	6,	3200,	86,	0,	0,	215,-2,	0,	0,	0,	1,	""
+	294,"Matrix Tunic",			11,	5,	3250,	88,	0,	0,	220,0,	0,	0,	0,	1,	""
+	295,"Matrix Breast",		11,	4,	3300,	90,	0,	0,	225,0,	0,	0,	0,	1,	""
+	296,"Matrix Armor",			11,	2,	3350,	92,	0,	0,	230,0,	0,	0,	0,	1,	""
+	297,"Matrix Torso",			11,	6,	3400,	94,	0,	0,	235,-2,	0,	0,	0,	1,	""
+	298,"Mythic Tunic",			11,	5,	3450,	96,	0,	0,	240,0,	0,	0,	0,	1,	""
+
+; swords
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	300,"Butter Knife",			12,	1,	50,		0,	0,	0,	0,	5,	0,	0,	0,	10,	"A beginner's blade - perhaps stolen from a kitchen table.",	"", 	4
+	301,"Machete",				12,	6,	100,	2,	0,	0,	0,	10,	0,	0,	0,	5,	"Slightly dull from years of jungle hacking.",	"",	4
+	302,"Hatchet",				12,	8,	150,	4,	0,	0,	0,	15,	0,	0,	0,	2,	"A frightening melee weapon.","",	4
+	303,"Sickle",				12,	6,	200,	6,	0,	0,	0,	20,	0,	0,	0,	1,	"It used to be a plowshare.","",		4
+	304,"Axe",					12,	3,	250,	8,	0,	0,	0,	25,	0,	0,	0,	1,	"A two-handed battle axe of considerable heft.","",	4
+	305,"Sword",				12,	2,	300,	10,	0,	0,	0,	30,	0,	0,	0,	1,	"A sturdy blade of no particular lineage.","",	4
+	306,"Epee",					12,	9,	350,	12,	0,	0,	0,	35,	0,	0,	0,	1,	"A delicate blade, which makes a powerful point in any conversation.","",	4
+	307,"Battle Axe",			12,	3,	400,	14,	0,	0,	0,	40,	0,	0,	0,	1,	"A two-handed battle axe of considerable heft.","",	4
+	308,"Broad Sword",			12,	4,	450,	16,	0,	0,	0,	45,	0,	0,	0,	1,	"A fine slicing steel blade.","",	4
+	309,"Sabre",				12,	6,	500,	18,	0,	0,	0,	50,	0,	0,	0,	1,	"Once the property of a seafaring man.  He no longer needs it.","",	4
+	310,"Kodachi",				12,	12,	550,	20,	0,	0,	0,	55,	0,	0,	0,	1,	"Marked 'made in oosa' on the handle.","",4
+	311,"Scimitar",				12,	6,	600,	22,	0,	0,	0,	60,	0,	0,	0,	1,	"Captured in battle from a valiant Sarasen.","",4
+	312,"Draugluin",			12,	7,	650,	24,	0,	0,	0,	65,	0,	0,	0,	1,	"An indiscriminate blade, best used with two hands.","",4
+	313,"Ginsu",				12,	11,	700,	26,	0,	0,	0,	70,	0,	0,	0,	1,	"It cuts through metal cans, yet can still slice tomatoes perfectly.","",4
+	314,"Orcish Blade",			12,	11,	750,	28,	0,	0,	0,	75,	0,	0,	0,	1,	"This brutish sword focuses on as many ways to kill as possible.","",4
+	315,"Katana",				12,	10,	800,	30,	0,	0,	0,	80,	0,	0,	0,	1,	"An elegant blade from a different time, a different world.","",4
+	316,"Elven Blade",			12,	9,	850,	32,	0,	0,	0,	85,	0,	0,	0,	1,	"Exquisite craftmanship of the Elven Lords.","",4
+	317,"Cursed Blade",			12,	11,	900,	34,	0,	0,	-30,120,0,	0,	0,	1,	"Once the property of a hot-headed young prince.","",	4
+	318,"Excalibur",			12,	4,	1000,	36,	0,	0,	0,	95, 0,	0,	0,	1,	"Only the dexterous will make the most of this weapon.","",	100
+
+	319,"Sword of Offal",		12,	4,	1050,	38,	0,	0,	0,	100,0,	0,	0,	1,	"Found in the king's sewer.",	"",	4
+	320,"Avril's Blade",		12,	12,	1100,	40,	0,	0,	0,	105	0,	0,	0,	1,	"",	"",	4
+	321,"Zepyre's Shaft",		12,	5,	1150,	42,	0,	0,	0,	110,0,	0,	0,	1,	"",	"",	4
+	322,"Sword of Zeus",		12,	9,	1200,	44,	0,	0,	0,	115,0,	0,	0,	1,	"",	"",	4
+	323,"Warclaw",				12,	8,	1250,	46,	0,	0,	0,	120,0,	0,	0,	1,	"",	"",	4
+	324,"Tehoku",				12,	12,	1300,	48,	0,	0,	0,	125,0,	0,	0,	1,	"",	"",	4
+	325,"Mordor Sword",			12,	11,	1350,	50,	0,	0,	0,	130,0,	0,	0,	1,	"",	"",	4
+	326,"Monkichiwa",			12,	12,	1400,	52,	0,	0,	0,	135,0,	0,	0,	1,	"",	"",	4
+	327,"Gaelin's Blade",		12,	5,	1450,	54,	0,	0,	-30,170,0,	0,	0,	1,	"",	"",	4
+	328,"Skeletor",				12,	4,	1500,	56,	0,	0,	0,	145,0,	0,	0,	1,	"",	"",	4
+	329,"Jobu",					12,	7,	1550,	58,	0,	0,	0,	150,0,	0,	0,	1,	"",	"",	4
+	330,"Grim Shank",			12,	10,	1600,	60,	0,	0,	0,	155,0,	0,	0,	1,	"",	"",	4
+	331,"Mythic Blade",			12,	9,	1650,	62,	0,	0,	0,	160,0,	0,	0,	1,	"",	"",	4
+	332,"Raven Sword",			12,	11,	1700,	64,	0,	0,	0,	165,0,	0,	0,	1,	"",	"",	4
+	333,"Kledar",				12,	4,	1750,	66,	0,	0,	0,	170,0,	0,	0,	1,	"",	"",	4
+	334,"Kryll Blade",			12,	7,	1800,	68,	0,	0,	0,	175,0,	0,	0,	1,	"",	"",	4
+	335,"DarkHorse",			12,	11,	1850,	70,	0,	0,	0,	180,0,	0,	0,	1,	"",	"",	4
+	336,"Mortal Sword",			12,	5,	1900,	72,	0,	0,	0,	185,0,	0,	0,	1,	"",	"",	4
+	337,"Crimson Arc",			12,	6,	1950,	74,	0,	0,	-30,210,0,	0,	0,	1,	"",	"",	4
+	338,"Tabris Blade",			12,	4,	2000,	76,	0,	0,	0,	195,0,	0,	0,	1,	"",	"",	4
+	339,"Snert Slayer",			12,	11,	2050,	78,	0,	0,	0,	200,0,	0,	0,	1,	"",	"",	4
+	340,"Storm Blade",			12,	5,	2100,	80,	0,	0,	0,	205,0,	0,	0,	1,	"",	"",	4
+	341,"Dagget's Dagger",		12,	9,	2150,	82,	0,	0,	0,	210,0,	0,	0,	1,	"",	"",	4
+	342,"Loki's Hammer",		12,	8,	2200,	84,	0,	0,	0,	215,0,	0,	0,	1,	"",	"",	4
+	343,"Ghost Sword",			12,	10,	2250,	86,	0,	0,	0,	220,0,	0,	0,	1,	"",	"",	4
+	344,"Witchblade",			12,	11,	2300,	88,	0,	0,	0,	225,0,	0,	0,	1,	"",	"",	4
+	345,"Sword of Ryskar",		12,	7,	2350,	90,	0,	0,	0,	230,0,	0,	0,	1,	"",	"",	4
+	346,"Azkhent",				12,	10,	2400,	92,	0,	0,	0,	235,0,	0,	0,	1,	"",	"",	4
+	347,"Soul-Stealer",			12,	9,	2450,	94,	0,	0,	0,  240,0,	0,	0,	1,	"",	"",	4
+	348,"El Diablo",			12,	11,	2500,	96,	0,	0,	0,	245,0,	0,	0,	1,	"",	"",	4
+;	349,"El Diablo del Fuego",	12,	11,	2500,	96,	0,	5,	0,	245,0,	0,	0,	1,	"",	"",	4
+
+
+; Fists
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	350,"Cotton Mitten",		16,	2,	50,		0,	0,	0,	0,	5,	0,	0,	0,	10,	"", "fist.wav",		1
+	351,"Cotton Glove",			16,	8,	100,	2,	0,	0,	0,	10,	0,	0,	0,	5,	"", "fist.wav",		2
+	352,"Wooly Mitten",			16,	1,	150,	4,	0,	0,	0,	15,	0,	0,	0,	2,	"", "fist.wav",		3
+	353,"Broken Gauntlet",		16,	11,	200,	6,	0,	0,	0,	20,	0,	0,	0,	1,	"", "fist.wav",		4
+	354,"Leather Mitten",		16,	5,	250,	8,	0,	0,	0,	25,	0,	0,	0,	1,	"", "fist.wav",		5
+	355,"Wool Glove",			16,	7,	300,	10,	0,	0,	0,	30,	0,	0,	0,	1,	"", "fist.wav",		6
+	356,"Brass Mitten",			16,	4,	350,	12,	0,	0,	0,	35,	0,	0,	0,	1,	"", "fist.wav",		7
+	357,"Leather Glove",		16,	13,	400,	14,	0,	0,	0,	40,	0,	0,	0,	1,	"", "fist.wav",		1
+	358,"Leather Gauntlet",		16,	10,	450,	16,	0,	0,	0,	45,	0,	0,	0,	1,	"", "fist.wav",		2
+	359,"Boxing Glove",			16,	12,	500,	18,	0,	0,	0,	50,	0,	0,	0,	1,	"", "fist.wav",		3
+	360,"Copper Knuckle",		16,	9,	550,	20,	0,	0,	0,	55,	0,	0,	0,	1,	"", "fist.wav",		4
+	361,"Bronze Glove",			16,	6,	600,	22,	0,	0,	0,	60,	0,	0,	0,	1,	"", "fist.wav",		5
+	362,"Copper Gauntlet",		16,	10,	650,	24,	0,	0,	0,	65,	0,	0,	0,	1,	"", "fist.wav",		6
+	363,"Iron Mitten",			16,	5,	700,	26,	0,	0,	0,	70,	0,	0,	0,	1,	"", "fist.wav",		7
+	364,"Brass Knuckle",		16,	9,	750,	28,	0,	0,	0,	75,	0,	0,	0,	1,	"", "fist.wav",		1
+	365,"Iron Glove",			16,	16,	800,	30,	0,	0,	0,	80,	0,	0,	0,	1,	"", "fist.wav",		2
+	366,"Bronze Knuckle",		16,	9,	850,	32,	0,	0,	0,	85,	0,	0,	0,	1,	"", "fist.wav",		3
+	367,"Bronze Gauntlet",		16,	17,	900,	34,	0,	0,	-30,120,0,	0,	0,	1,	"", "fist.wav",		4
+	368,"Steel Mitten",			16,	14,	1000,	36,	0,	0,	0,	95, 0,	0,	0,	1,	"", "fist.wav",		5
+
+	369,"Steel Glove",			16,	18,	1050,	38,	0,	0,	0,	100,0,	0,	0,	1,	"", "fist.wav",		6
+	370,"Mythic Mitten",		16,	15,	1100,	40,	0,	0,	0,	105	0,	0,	0,	1,	"", "fist.wav",		7
+	371,"Iron Knuckle",			16,	9,	1150,	42,	0,	0,	0,	110,0,	0,	0,	1,	"", "fist.wav",		1
+	372,"Dress Knuckle",		16,	9,	1200,	44,	0,	0,	0,	115,0,	0,	0,	1,	"", "fist.wav",		2
+	373,"Death Mitten",			16,	15,	1250,	46,	0,	0,	0,	120,0,	0,	0,	1,	"", "fist.wav",		3
+	374,"Iron Gauntlet",		16,	18,	1300,	48,	0,	0,	0,	125,0,	0,	0,	1,	"", "fist.wav",		4
+	375,"Mythic Glove",			16,	19,	1350,	50,	0,	0,	0,	130,0,	0,	0,	1,	"", "fist.wav",		5
+	376,"Grave Knuckle",		16,	9,	1400,	52,	0,	0,	0,	135,0,	0,	0,	1,	"", "crash1.wav",		6
+	377,"Platinum Glove",		16,	16,	1450,	54,	0,	0,	-30,170,0,	0,	0,	1,	"", "fist.wav",		7
+	378,"Demon Gauntlet",		16,	17,	1500,	56,	0,	0,	0,	145,0,	0,	0,	1,	"", "fist.wav",		1
+	379,"Silver Knuckle",		16,	9,	1550,	58,	0,	0,	0,	150,0,	0,	0,	1,	"", "fist.wav",		2
+	380,"Ether Glove",			16,	7,	1600,	60,	0,	0,	0,	155,0,	0,	0,	1,	"", "fist.wav",		3
+	381,"Cloud Mitten",			16,	3,	1650,	62,	0,	0,	0,	160,0,	0,	0,	1,	"", "fist.wav",		4
+	382,"Steel Gauntlet",		16,	19,	1700,	64,	0,	0,	0,	165,0,	0,	0,	1,	"", "fist.wav",		5
+	383,"Cloud Glove",			16,	11,	1750,	66,	0,	0,	0,	170,0,	0,	0,	1,	"", "fist.wav",		6
+	384,"Mythic Knuckle",		16,	9,	1800,	68,	0,	0,	0,	175,0,	0,	0,	1,	"", "fist.wav",		7
+	385,"Silver Gauntlet",		16,	18,	1850,	70,	0,	0,	0,	180,0,	0,	0,	1,	"", "boom2.wav",		1
+	386,"Rampage Glove",		16,	8,	1900,	72,	0,	0,	0,	185,0,	0,	0,	1,	"", "fist.wav",		2
+	387,"Gold Knuckle",			16,	9,	1950,	74,	0,	0,	-30,210,0,	0,	0,	1,	"", "fist.wav",		3
+	388,"Mythic Gauntlet",		16,	16,	2000,	76,	0,	0,	0,	195,0,	0,	0,	1,	"", "fist.wav",		4
+	389,"Bloody Mitten",		16,	15,	2050,	78,	0,	0,	0,	200,0,	0,	0,	1,	"", "fist.wav",		5
+	390,"Needle Gauntlet",		16,	19,	2100,	80,	0,	0,	0,	205,0,	0,	0,	1,	"", "fist.wav",		6
+	391,"Bloody Glove",			16,	13,	2150,	82,	0,	0,	0,	210,0,	0,	0,	1,	"", "fist.wav",		7
+	392,"Cloud Knuckle",		16,	9,	2200,	84,	0,	0,	0,	215,0,	0,	0,	1,	"", "fist.wav",		1
+	393,"Golden Gauntlet",		16,	17,	2250,	86,	0,	0,	0,	220,0,	0,	0,	1,	"", "fist.wav",		2
+	394,"Rampage Knuckle",		16,	9,	2300,	88,	0,	0,	0,	225,0,	0,	0,	1,	"", "fist.wav",		3
+	395,"Bloody Knuckle",		16,	9,	2350,	90,	0,	0,	0,	230,0,	0,	0,	1,	"", "fist.wav",		4
+	396,"Cloud Gauntlet",		16,	18,	2400,	92,	0,	0,	0,	235,0,	0,	0,	1,	"", "fist.wav",		5
+	397,"Rampage Gauntlet",		16,	16,	2450,	94,	0,	0,	0,  240,0,	0,	0,	1,	"", "boom2.wav",		6
+	398,"Bloody Gauntlet",		16,	19,	2500,	96,	0,	0,	0,	245,0,	0,	0,	1,	"", "boom1.wav",		7
+
+
+
+; staffs
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	400,"Pine Staff",			13,	2,	50,		0,	0,	0,	0,	5,	0,	0,	0,	10,	"A simple walking stick, but you can hit people with it.", "staff.wav"
+	401,"Water Globe",			13,	1,	100,	2,	0,	0,	0,	10,	0,	0,	0,	5,	"A simple water staff.", "staff.wav"
+	402,"Magician's Staff",		13,	3,	150,	4,	0,	0,	0,	15,	0,	0,	0,	2,	"A simple air staff.", "staff.wav"
+	403,"Oak Staff",			13,	10,	200,	6,	0,	0,	0,	20,	0,	0,	0,	1,	"A simple earth staff.", "staff.wav"
+	404,"Lion Staff",			13,	4,	250,	8,	0,	0,	5,	20,	0,	0,	0,	1,	"A simple fire staff.", "staff.wav"
+	405,"Crystal Staff",		13,	8,	300,	10,	0,	0,	0,	30,	0,	0,	0,	1,	"Somewhat fragile, and carries the cracks from prior battles.", "staff.wav"
+	406,"Silver Staff",			13,	6,	350,	12,	54,	0,	0,	35,	0,	0,	0,	1,	"If you're broke, it can fetch a good price.", "staff.wav"
+	407,"Staff of Honus",		13,	11,	400,	14,	103,0,	10,	30,	0,	0,	0,	1,	"Lost for a millenium.", "staff.wav"
+	408,"Dog Staff",			13,	7,	450,	16,	156,0,	15,	30,	0,	0,	0,	1,	"Carved from a fang of Cerberus", "staff.wav"
+	409,"Serpent Staff",		13,	9,	500,	18,	5,	0,	25,	25,	0,	0,	0,	1,	"The tip of the Hydra's tail.", "staff.wav"
+	410,"Dragon Staff",			13,	5,	550,	20,	105	0,	10,	45,	0,	0,	0,	1,	"Leaves a burning impression.", "staff.wav"
+	411,"Blaze Staff",			13,	4,	600,	22,	101,0,	10,	50,	0,	0,	0,	1,	"A simple fire staff.", "staff.wav"
+	412,"Future Staff",			13,	6,	650,	24,	154,0,	35,	30,	0,	0,	0,	1,	"Somewhat fragile, and carries the cracks from prior battles.", "staff.wav"
+	413,"Palladium Staff",		13,	8,	700,	26,	54,	0,	35,	35,	0,	0,	0,	1,	"If you're broke, it can fetch a good price.", "staff.wav"
+	414,"Staff of Kronos",		13,	11,	750,	28,	105,0,	25,	50,	0,	0,	0,	1,	"Lost for a millenium.", "staff.wav"
+	415,"Hound Staff",			13,	7,	800,	30,	156,0,	40,	40,	0,	0,	0,	1,	"Carved from a fang of Cerberus", "staff.wav"
+	416,"Eel Staff",			13,	9,	850,	32,	5,	0,	25,	25,	0,	0,	0,	1,	"The tip of the Hydra's tail.", "staff.wav"
+	417,"Dark Staff",			13,	12,	900,	34,	157,0,	-30,80,0,	0,	0,	1,	"Cursed Staff of Zambini's Father.", "staff.wav"
+	418,"Wyrm Staff",			13,	5,	950,	36,	105	0,	20,	30,0,	0,	0,	1,	"Leaves a burning impression.", "staff.wav"
+
+	419,"Ronad Staff",			13,	9,	1000,	38,	5,	0,	20,	35,	0,	0,	0,	1,	"", "staff.wav"
+	420,"Leniad Staff",			13,	5,	1050,	40,	216	0,	25,	35,	0,	0,	0,	1,	"Carved from the root of a heart berry tree.", "staff.wav"
+	421,"Megares Staff",		13,	4,	1100,	42,	101,0,	25,	40,	0,	0,	0,	1,	"", "staff.wav"
+	422,"Cloud Staff",			13,	6,	1150,	44,	154,0,	30,	40,	0,	0,	0,	1,	"", "staff.wav"
+	423,"Mythic Staff",			13,	8,	1200,	46,	54,	0,	30,	45,	0,	0,	0,	1,	"", "staff.wav"
+	424,"Staff of Luna",		13,	11,	1250,	48,	104,0,	35,	45,	0,	0,	0,	1,	"", "staff.wav"
+	425,"Mustang Staff",		13,	7,	1300,	50,	156,0,	35,	50,	0,	0,	0,	1,	"", "staff.wav"
+	426,"Rowen Staff",			13,	9,	1350,	52,	5,	0,	40,	50,	0,	0,	0,	1,	"", "staff.wav"
+	427,"Ghost Staff",			13,	12,	1400,	54,	157,0,	40, 55, 0,	0,	0,	1,	"", "staff.wav"
+	428,"Borg Staff",			13,	3,	1450,	56,	105	0,	45,	55, 0,	0,	0,	1,	"", "staff.wav"
+	429,"Tharon Staff",			13,	9,	1500,	58,	5,	0,	45,	60,	0,	0,	0,	1,	"", "staff.wav"
+	430,"Merlin Staff",			13,	7,	1550,	60,	105	0,	50,	60,	0,	0,	0,	1,	"", "staff.wav"
+	431,"Kjilo Staff",			13,	4,	1600,	62,	101,0,	50,	65,	0,	0,	0,	1,	"", "staff.wav"
+	432,"Mortal Staff",			13,	6,	1650,	64,	154,0,	55,	65,	0,	0,	0,	1,	"", "staff.wav"
+	433,"Plasma Staff",			13,	9,	1700,	66,	54,	0,	55,	70,	0,	0,	0,	1,	"", "staff.wav"
+	434,"Staff of Chron",		13,	11,	1750,	68,	104,0,	60,	70,	0,	0,	0,	1,	"", "staff.wav"
+	435,"Odin Staff",			13,	7,	1800,	70,	156,0,	60,	75,	0,	0,	0,	1,	"", "staff.wav"
+	436,"Grim Staff",			13,	9,	1850,	72,	5,	0,	65,	75,	0,	0,	0,	1,	"", "staff.wav"
+	437,"Loomis Staff",			13,	12,	1900,	74,	157,0,	65, 80, 0,	0,	0,	1,	"", "staff.wav"
+	438,"Darmak Staff",			13,	5,	1950,	76,	105	0,	70,	80, 0,	0,	0,	1,	"", "staff.wav"
+	439,"Storm Staff",			13,	9,	2000,	78,	5,	0,	70,	85,	0,	0,	0,	1,	"", "staff.wav"
+	440,"Gandalf Staff",		13,	12,	2050,	80,	105	0,	75,	85,	0,	0,	0,	1,	"", "staff.wav"
+	441,"Great Staff",			13,	4,	2100,	82,	101,0,	75,	90,	0,	0,	0,	1,	"", "staff.wav"
+	442,"FireFox Staff",		13,	11,	2150,	84,	154,0,	80,	90,	0,	0,	0,	1,	"", "staff.wav"
+	443,"BriteLeaf Staff",		13,	8,	2200,	86,	54,	0,	80,	95,	0,	0,	0,	1,	"", "staff.wav"
+	444,"Staff of Jenova",		13,	10,	2250,	88,	105,0,	85,	95,	0,	0,	0,	1,	"", "staff.wav"
+	445,"Gore Staff",			13,	7,	2300,	90,	156,0,	85,	100,0,	0,	0,	1,	"", "staff.wav"
+	446,"Omen Staff",			13,	9,	2350,	92,	5,	0,	90,	100,0,	0,	0,	1,	"", "staff.wav"
+	447,"Raven Staff",			13,	12,	2400,	94,	157,0,	90, 105,0,	0,	0,	1,	"", "staff.wav"
+	448,"Drakken Staff",		13,	7,	2450,	96,	105	0,	95,	105,0,	0,	0,	1,	"", "staff.wav"
+
+; Darts
+; NOTE: use this for a class with all 'plural' items.. so they read well as "Some X" (some pebbles, some rotten eggs..)
+;
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	450,"Pebbles",				17,	15,	50,		0,	0,	0,	0,	5,	0,	0,	0,	10,	"", "dart.wav",			31.51.2.0.0
+	451,"Rotten Eggs",			17,	3,	100,	2,	0,	0,	0,	10,	0,	0,	0,	5,	"Ewwwww!", "dart.wav",	31.51.2.0.0
+	452,"Cream Pies",			17,	12,	150,	4,	0,	0,	0,	15,	0,	0,	0,	2,	"There seem to be some broken bits of biscuit in here.", "sword3.wav",		32.56.2.0.0
+	453,"Rotten Fruit",			17,	1,	200,	6,	0,	0,	0,	20,	0,	0,	0,	2,	"Let's your opponent know what you think of their singing.", "sword3.wav", 31.51.2.0.0
+	454,"Rubber Balls",			17,	3,	250,	8.0.0.0.1,0,	0,	0,	25,	0,	0,	0,	1,	"These really sting! ",	dart.wav,		31.51.2.0.0,	
+	455,"Dull Darts",			17,	13,	300,	10,	0,	0,	0,	30,	0,	0,	0,	1,	"", "dart.wav", 			31.55.2.0.0
+	456,"Fish",					17,	16,	350,	12,	0,	0,	0,	35,	0,	0,	0,	1,	"", "sword10.wav", 		31.56.2.0.0
+	457,"Iron Balls",			17,	9,	400,	14,	0,	0,	0,	40,	0,	0,	0,	1,	"", "sword10.wav", 		31.57.2.0.0
+	458,"Rotten Tomatoes",		17,	2,	450,	16,	0,	0,	0,	45,	0,	0,	0,	1,	"You'd be better off trading these for some magic beans.", "sword3.wav", 31.51.2.0.0
+	459,"Bolo",					17,	14,	500,	18,	0,	0,	0,	50,	0,	0,	0,	1,	"", "sword10.wav", 		31.54.2.0.0
+	460,"Broken Crockery",		17,	4,	550,	20,	0,	0,	0,	55,	0,	0,	0,	1,	"", "crash1.wav", 		32.1.2.0.0
+	461,"Darts",				17,	13,	600,	22,	0,	0,	0,	60,	0,	0,	0,	1,	"", "sword7.wav", 		31.55.2.0.0
+	462,"Hooks",				17,	5,	650,	24,	0,	0,	0,	65,	0,	0,	0,	1,	"", "dart.wav", 			31.64.2.0.0
+	463,"Steel Balls",			17,	9,	700,	26,	0,	0,	0,	70,	0,	0,	0,	1,	"I don't want to hear any lewd jokes about these!", "dart.wav", 			31.57.2.0.0
+	464,"Nails",				17,	6,	750,	28,	0,	0,	0,	75,	0,	0,	0,	1,	"Someone was up late last night prying these from the neighbor's walls.", "sword7.wav", 31.51.2.0.0
+	465,"Silver Stars",			17,	8,	800,	30,	0,	0,	0,	80,	0,	0,	0,	1,	"", "sword7.wav", 		31.51.2.0.0
+	466,"Daggers",				17,	10,	850,	32,	0,	0,	0,	85,	0,	0,	0,	1,	"", "sword10.wav", 		31.52.2.0.0
+	467,"Spears",				17,	11,	900,	34,	0,	0,	-30,120,0,	0,	0,	1,	"One of them has 'Britney' scratched on the side of it.", "sword12.wav", 31.61.2.0.0
+	468,"Iron Pellets",			17,	14,	1000,	36,	0,	0,	0,	95, 0,	0,	0,	1,	"", "sword10.wav", 		31.51.2.0.0
+
+	469,"Iron Pebbles",			17,	15,	1050,	38,	0,	0,	0,	100,0,	0,	0,	1,	"", "dart.wav", 			31.51.2.0.0
+	470,"Iron Hooks",			17,	7,	1100,	40,	0,	0,	0,	105	0,	0,	0,	1,	"Somewhere there's a pirate having trouble gaffing his dinner.", "sword7.wav", 31.64.2.0.0
+	471,"Iron Axes",			17,	6,	1150,	42,	0,	0,	0,	110,0,	0,	0,	1,	"", "dart.wav", 			31.53.2.0.0
+	472,"Iron Balls",			17,	9,	1200,	44,	0,	0,	0,	115,0,	0,	0,	1,	"", "boom1.wav", 		32.57.2.0.0
+	473,"Ninja Forks",			17,	6,	1250,	46,	0,	0,	0,	120,0,	0,	0,	1,	"Stamped: Made by the Nature's Kiss company.", "sword3.wav", 31.64.2.0.0
+	474,"Iron Stars",			17,	7,	1300,	48,	0,	0,	0,	125,0,	0,	0,	1,	"", "sword3.wav", 		31.51.2.0.0
+	475,"Iron Spears",			17,	11,	1350,	50,	0,	0,	0,	130,0,	0,	0,	1,	"", "sword12.wav", 		31.61.2.0.0
+	476,"Ninja Stars",			17,	8,	1400,	52,	0,	0,	0,	135,0,	0,	0,	1,	"Jackie Chan, Jet Li, ...", "dart.wav", 31.51.2.0.0
+	477,"Azaman's Needle",		17,	13,	1450,	54,	0,	0,	-30,170,0,	0,	0,	1,	"", "sword3.wav", 		31.55.2.0.0
+	478,"Bloody pebbles",		17,	15,	1500,	56,	0,	0,	0,	145,0,	0,	0,	1,	"", "sword10.wav", 		31.51.2.0.0
+	479,"Silver Axes",			17,	5,	1550,	58,	0,	0,	0,	150,0,	0,	0,	1,	"", "dart.wav", 			32.53.2.0.0
+	480,"Silver Pellets",		17,	14,	1600,	60,	0,	0,	0,	155,0,	0,	0,	1,	"", "sword3.wav", 		31.51.2.0.0
+	481,"Silver Hooks",			17,	6,	1650,	62,	0,	0,	0,	160,0,	0,	0,	1,	"", "dart.wav", 			31.64.2.0.0
+	482,"Bloody Rocks",			17,	16,	1700,	64,	0,	0,	0,	165,0,	0,	0,	1,	"", "boom1.wav", 		31.56.2.0.0
+	483,"Cactrot's Thorn",		17,	8,	1750,	66,	0,	0,	0,	170,0,	0,	0,	1,	"", "sword7.wav", 		32.6.2.0.0
+	484,"Silver Daggers",		17,	10,	1800,	68,	0,	0,	0,	175,0,	0,	0,	1,	"", "sword8.wav", 		31.52.2.0.0
+	485,"Mythic Stars",			17,	7,	1850,	70,	0,	0,	0,	180,0,	0,	0,	1,	"", "dart.wav", 			31.59.2.0.0
+	486,"Silver Spears",		17,	11,	1900,	72,	0,	0,	0,	185,0,	0,	0,	1,	"", "sword12.wav", 		31.61.2.0.0
+	487,"Poison Darts",			17,	13,	1950,	74,	0,	0,	-30,210,0,	0,	0,	1,	"", "sword10.wav", 		31.55.2.0.0
+	488,"Bloody Hooks",			17,	5,	2000,	76,	0,	0,	0,	195,0,	0,	0,	1,	"", "dart.wav", 			31.64.2.0.0
+	489,"Mythic Spears",		17,	11,	2050,	78,	0,	0,	0,	200,0,	0,	0,	1,	"", "sword12.wav", 		32.61.2.0.0
+	490,"F'noks Axe",			17,	6,	2100,	80,	0,	0,	0,	205,0,	0,	0,	1,	"It's f'nokkin' amazin'", "sword3.wav", 		31.53.2.0.0
+	491,"Bloody Bolos",			17,	7,	2150,	82,	0,	0,	0,	210,0,	0,	0,	1,	"", "dart.wav", 			31.54.2.0.0
+	492,"Kitchen Sinks",		17,	18,	2200,	84,	0,	0,	0,	215,0,	0,	0,	1,	"", "sword11.wav", 		31.56.2.0.0
+	493,"Bloody Darts",			17,	13,	2250,	86,	0,	0,	0,	220,0,	0,	0,	1,	"", "sword10.wav", 		31.55.2.0.0
+	494,"Bloody Daggers",		17,	10,	2300,	88,	0,	0,	0,	225,0,	0,	0,	1,	"", "sword8.wav", 		31.52.2.0.0
+	495,"Boomerangs",			17,	17,	2350,	90,	0,	0,	0,	230,0,	0,	0,	1,	"", "petFrisbee.wav", 	31.50.2.0.0
+	496,"Bowling Balls",		17,	9,	2400,	92,	0,	0,	0,	235,0,	0,	0,	1,	"", "boom1.wav", 		31.57.2.0.0
+	497,"Bloody Spears",		17,	11,	2450,	94,	0,	0,	0,  240,0,	0,	0,	1,	"", "sword12.wav", 		31.61.2.0.0
+	498,"Shiruken",				17,	8,	2500,	96,	0,	0,	0,	245,0,	0,	0,	1,	"", "sword3.wav", 		31.51.2.0.0	
+
+
+;
+; archery weapons (bows.bmp)
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	500,"Sapling Bow",			14,	1,	50,		0,	0,	0,	0,	5,	0,	0,	0,	10,	"A beginner's bow, suitable for squirrel hunting.", "bow.wav", 		30.60.2.0.0
+	501,"Steel Bow",			14,	2,	100,	2,	0,	0,	0,	10,	0,	0,	0,	5,	"A fine hunting bow.", "bow.wav", 								30.60.2.0.0
+	502,"Walnut Bow",			14,	3,	150,	4,	0,	0,	0,	15,	0,	0,	0,	2,	"Elven craftsmanship shows proudly here.", "bow.wav", 			30.60.2.0.0
+	503,"Gilt Bow",				14,	4,	200,	6,	0,	0,	0,	20,	0,	0,	0,	1,	"The fancy bow of an aristocrat.", "bow.wav", 					30.0.2.0.0
+	504,"Long Bow",				14,	5,	250,	8,	0,	0,	0,	25,	0,	0,	0,	1,	"A solid distance weapon.", "bow.wav", 							30.60.2.0.0
+	505,"Twin Beam",			14,	6,	300,	10,	0,	0,	0,	30,	0,	0,	0,	1,	"Twice the power in each pull.", "bow.wav", 						30.5.2.0.0
+	506,"Dark Twin",			14,	7,	350,	12,	0,	0,	0,	35,	0,	0,	0,	1,	"Packed granite, dipped in sugar.", "bow.wav", 					30.4.2.0.0
+	507,"Ranger",				14,	16,	400,	14,	0,	0,	0,	40,	0,	0,	0,	1,	"This bow is much more traveled than you.", "bow.wav", 			30.65.2.0.0
+	508,"Orc Bow",				14,	8,	450,	16,	0,	0,	0,	45,	0,	0,	0,	1,	"The orc in question no longer needs it.", "bow.wav", 			30.4.2.0.0
+	509,"Strider",				14,	16,	500,	18,	0,	0,	0,	50,	0,	0,	0,	1,	"The 20 league bow.", "bow.wav", 								30.60.2.0.0
+	510,"Storm Bow",			14,	11,	550,	20,	0,	0,	0,	55,	0,	0,	0,	1,	"You don't want to think too hard about where this one came from.", "bow.wav", 30.5.2.0.0
+	511,"Elven War Bow",		14,	11,	600,	22,	0,	0,	0,	60,	0,	0,	0,	1,	"The elves are well known for their accuracy.", "bow.wav", 			30.2.2.0.0
+	512,"Ice Bow",				14,	12,	650,	24,	0,	0,	0,	65,	0,	0,	0,	1,	"Finely crafted of enchanted ice crystals.", "bow.wav", 			30.62.2.7.3
+	513,"Skull Bow",			14,	13,	700,	26,	0,	0,	0,	70,	0,	0,	0,	1,	"Powdered Orc skull, held together by magic.", "bow.wav", 			30.0.2.0.0
+	514,"Bat Wing",				14,	14,	750,	28,	0,	0,	0,	75,	0,	0,	0,	1,	"Your arrows find their target magically.", "bow.wav", 			30.4.2.0.0
+	515,"Orc Crossbow",			14,	15,	800,	30,	0,	0,	0,	80,	0,	0,	0,	1,	"Excellent short-range weapon.", "arrow1.wav", 					30.7.2.0.0
+	516,"Fire Bow",				14,	13,	850,	32,	0,	0,	0,	85,	0,	0,	0,	1,	"Only fiery in the sense of the target's outrage.", "bow.wav", 		30.63.2.0.4
+	517,"Bone Bow",				14,	10,	900,	34,	0,	0,-30,	120,0,	0,	0,	1,	"Cursed in the battle of Iskandar. Now you are, too.", "bow.wav", 	30.3.2.0.0
+	518,"Pearl Crossbow",		14,	16,	950,	36,	0,	0,	0,	95,0,	0,	0,	1,	"A short-range weapon of impeccable class.", "arrow1.wav", 			30.8.2.0.0
+
+	519,"Viper",				14,	16,	800,	38,	0,	0,	0,	100,0,	0,	0,	1,	"", "bow.wav", 								30.4.2.0.0
+	520,"Ysne's Bow",			14,	11,	850,	40,	0,	0,	0,	105,0,	0,	0,	1,	"", "bow.wav", 								30.2.2.0.0
+	521,"Viper War Bow",		14,	11,	900,	42,	0,	0,	0,	110,0,	0,	0,	1,	"", "bow.wav", 								30.63.2.0.0
+	522,"Korogo",				14,	12,	950,	44,	0,	0,	0,	115,0,	0,	0,	1,	"", "bow.wav", 								30.60.2.0.0
+	523,"Khostri Bow",			14,	13,	1000,	46,	0,	0,	0,	120,0,	0,	0,	1,	"", "bow.wav", 								30.60.2.0.0
+	524,"Raven Wing",			14,	14,	1050,	48,	0,	0,	0,	125,0,	0,	0,	1,	"", "bow.wav", 								30.62.2.0.0
+	525,"Omen Crossbow",		14,	15,	1100,	50,	0,	0,	0,	130,0,	0,	0,	1,	"", "arrow1.wav", 							30.0.2.0.0
+	526,"Casey's Bow",			14,	13,	1150,	52,	0,	0,	0,	135,0,	0,	0,	1,	"Helped Casey get 1st in the state of Michigan at the NAA indoor.", "bow.wav", 								30.60.2.0.0
+	527,"Avenger",				14,	10,	1200,	54,	0,	0,-30,	140,0,	0,	0,	1,	"", "bow.wav", 								30.63.2.0.0
+	528,"Gore Crossbow",		14,	16,	1250,	56,	0,	0,	0,	145,0,	0,	0,	1,	"", "arrow1.wav", 							30.7.2.0.0
+	529,"Fang",					14,	16,	1300,	58,	0,	0,	0,	150,0,	0,	0,	1,	"", "bow.wav", 								30.62.2.0.0
+	530,"Grim Bow",				14,	11,	1350,	60,	0,	0,	0,	155,0,	0,	0,	1,	"", "bow.wav", 								30.4.2.0.0
+	531,"Mythic Bow",			14,	11,	1400,	62,	0,	0,	0,	160,0,	0,	0,	1,	"", "bow.wav", 								30.65.2.0.0
+	532,"Plasma Bow",			14,	12,	1450,	64,	0,	0,	0,	165,0,	0,	0,	1,	"", "bow.wav", 								30.2.2.0.0
+	533,"Ghost Bow",			14,	13,	1500,	66,	0,	0,	0,	170,0,	0,	0,	1,	"", "bow.wav", 								30.63.2.0.0
+	534,"Drakkath",				14,	14,	1550,	68,	0,	0,	0,	175,0,	0,	0,	1,	"", "bow.wav", 								30.4.2.0.0
+	535,"Raven Crossbow",		14,	15,	1600,	70,	0,	0,	0,	180,0,	0,	0,	1,	"Black as the night is long.", "arrow1.wav", 30.62.2.0.0
+	536,"Mortal Bow",			14,	13,	1650,	72,	0,	0,	0,	185,0,	0,	0,	1,	"", "bow.wav", 								30.65.2.0.0
+	537,"Garret's Bow",			14,	10,	1700,	74,	0,	0,-30,	190,0,	0,	0,	1,	"", "bow.wav", 								30.5.2.0.0
+	538,"Warlord Crossbow",		14,	16,	1750,	76,	0,	0,	0,	195,0,	0,	0,	1,	"", "arrow1.wav", 							30.0.2.0.0
+	539,"Storm Bow",			14,	16,	1800,	78,	0,	0,	0,	200,0,	0,	0,	1,	"", "bow.wav", 								30.63.2.0.0
+	540,"Crad Bow",				14,	11,	1850,	80,	0,	0,	0,	205,0,	0,	0,	1,	"", "bow.wav", 								30.69.2.0.0
+	541,"Yoshi War Bow",		14,	11,	1900,	82,	0,	0,	0,	210,0,	0,	0,	1,	"", "bow.wav", 								30.68.2.0.0
+	542,"Lysandus",				14,	12,	1950,	84,	0,	0,	0,	215,0,	0,	0,	1,	"", "bow.wav", 								30.62.2.0.0
+	543,"Lurch",				14,	13,	2000,	86,	0,	0,	0,	220,0,	0,	0,	1,	"Fires an infinite barrage.", "bow.wav", 	30.67.2.0.0
+	544,"Fray Wing",			14,	14,	2050,	88,	0,	0,	0,	225,0,	0,	0,	1,	"", "bow.wav", 								30.63.2.0.0
+	545,"Viper Crossbow",		14,	15,	2100,	90,	0,	0,	0,	230,0,	0,	0,	1,	"", "arrow1.wav", 							30.4.2.0.0
+	546,"Zephyr Bow",			14,	13,	2150,	92,	0,	0,	0,	235	0,	0,	0,	1,	"", "bow.wav", 								30.66.2.0.0
+	547,"T-Bone Bow",			14,	10,	2200,	94,	0,	0,-30,	240,0,	0,	0,	1,	"", "bow.wav", 								30.65.2.0.0
+	548,"Zeus Crossbow",		14,	16,	2250,	96,	0,	0,	0,	245,0,	0,	0,	1,	"The King of bows.", "arrow1.wav", 			30.63.2.0.0
+
+; Books
+;	E#, name,						cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1							2	3	4		5	6	7	8	9	10	11	12	13	14
+	550,"Article on Atrocity",		18,	1,	50,		0,	0,	0,	0,	5,	0,	0,	0,	10,	"Required reading in grade one."
+	551,"Primer on Depravity",		18,	2,	100,	2,	0,	0,	0,	10,	0,	0,	0,	5,	"You used to subscribe to this one."
+	552,"Tract about Terror",		18,	3,	150,	4,	0,	0,	0,	15,	0,	0,	0,	2,	"Eeeeek!"
+	553,"Pamphlet about Plague",		18,	4,	200,	6,	0,	0,	0,	20,	0,	0,	0,	1,	"Better not touch that suspicious stain on the cover."
+	554,"Essay on Evil",			18,	5,	250,	8,	0,	0,	0,	25,	0,	0,	0,	1,	"The author won a prize for this one."
+	555,"Fiendish Booklet",			18,	6,	300,	10,	701,0,	0,	30,	0,	0,	0,	1,	"Don't turn your back on it."
+	556,"Glossary of Curses",		18,	7,	350,	12,	701,0,	0,	35,	0,	0,	0,	1,	"You already heard most of these from your mom."
+	557,"Scroll of Sin",			18,	8,	400,	14,	701,0,	0,	40,	0,	0,	0,	1,	""
+	558,"Slanderous Tract",			18,	9,	450,	16,	701,0,	0,	45,	0,	0,	0,	1,	""
+	559,"Vicious Pamphlet",			18,	10,	500,	18,	701,0,	0,	50,	0,	0,	0,	1,	"Watch out - it bites the hand that reads it!"
+	560,"Monstrous Monograph",		18,	11,	550,	20,	702,0,	0,	55,	0,	0,	0,	1,	""
+	561,"Infernal Essay",			18,	12,	600,	22,	702,0,	0,	60,	0,	0,	0,	1,	""
+	562,"Malevolent Brochure",		18,	13,	650,	24,	702,0,	0,	65,	0,	0,	0,	1,	"It has a plan, an agenda, and non-refundable tickets to Heck."
+	563,"Corrupt Scroll",			18,	14,	700,	26,	702,0,	0,	70,	0,	0,	0,	1,	""
+	564,"Treatise on Infamy",		18,	15,	750,	28,	702,0,	0,	75,	0,	0,	0,	1,	""
+	565,"Torn Index",				18,	16,	800,	30,	703,0,	0,	80,	0,	0,	0,	1,	""
+	566,"Missing Appendix",			18,	17,	850,	32,	703,0,	0,	85,	0,	0,	0,	1,	"You've been looking for this ever since you woke up with that scar on your belly."
+	567,"Cursed Book",				18,	18,	900,	34,	703,0,	-30,120,0,	0,	0,	1,	""
+	568,"Unclean Album",			18,	19,	1000,	36,	703,0,	0,	95, 0,	0,	0,	1,	"A little elbow grease might fix this right up."
+
+	569,"Textbook of Tantrums",		18,	1,	1050,	38,	703,0,	0,	100,0,	0,	0,	1,	""
+	570,"Depraved Booklet",			18,	2,	1100,	40,	704,0,	0,	105	0,	0,	0,	1,	"Page 15 isn't *too* depraved. Just a little 'bent.'"
+	571,"Nepharious Essay",			18,	3,	1150,	42,	704,0,	0,	110,0,	0,	0,	1,	""
+	572,"Unholy Dissertation",		18,	4,	1200,	44,	704,0,	0,	115,0,	0,	0,	1,	""
+	573,"Malignant Monograph",		18,	5,	1250,	46,	704,0,	0,	120,0,	0,	0,	1,	""
+	574,"Infamous Index",			18,	6,	1300,	48,	704,0,	0,	125,0,	0,	0,	1,	""
+	575,"Codex of Corruption",		18,	7,	1350,	50,	705,0,	0,	130,0,	0,	0,	1,	""
+	576,"Malefic Monograph",		18,	8,	1400,	52,	705,0,	0,	135,0,	0,	0,	1,	""
+	577,"Demonic Dissertation",		18,	9,	1450,	54,	705,0,	-30,170,0,	0,	0,	1,	""
+	578,"Wicked Almanac",			18,	10,	1500,	56,	705,0,	0,	145,0,	0,	0,	1,	""
+	579,"Plagerized Pamphlet",		18,	11,	1550,	58,	705,0,	0,	150,0,	0,	0,	1,	"Definitely NOT written by Terry Pratchett."
+	580,"Faded Scroll",				18,	12,	1600,	60,	706,0,	0,	155,0,	0,	0,	1,	""
+	581,"Album of Misdeeds",		18,	13,	1650,	62,	706,0,	0,	160,0,	0,	0,	1,	"Your mom kept detailed notes of your school years."
+	582,"Heinous Dissertation",		18,	14,	1700,	64,	706,0,	0,	165,0,	0,	0,	1,	""
+	583,"Dark Tome",				18,	15,	1750,	66,	706,0,	0,	170,0,	0,	0,	1,	""
+	584,"Naughty First Edition",		18,	16,	1800,	68,	706,0,	0,	175,0,	0,	0,	1,	""
+	585,"Damp Dictionary",			18,	17,	1850,	70,	707,0,	0,	180,0,	0,	0,	1,	"From the smell, you can tell you do NOT want to know."
+	586,"Manual on Miscreancy",		18,	18,	1900,	72,	707,0,	0,	185,0,	0,	0,	1,	""
+	587,"Arcane Almanac",			18,	19,	1950,	74,	707,0,	-30,210,0,	0,	0,	1,	""
+	588,"Naughty Dictionary",		18,	1,	2000,	76,	707,0,	0,	195,0,	0,	0,	1,	"Sadly, it isn't illustrated."
+	589,"Anthology of Injury",		18,	2,	2050,	78,	707,0,	0,	200,0,	0,	0,	1,	""
+	590,"Foul Gazeteer",			18,	3,	2100,	80,	708,0,	0,	205,0,	0,	0,	1,	"Tastes like chicken."
+	591,"Lexicon of Malmots",		18,	4,	2150,	82,	708,0,	0,	210,0,	0,	0,	1,	"It has a section about gerbils, as well."
+	592,"Ruptured Appendix",		18,	5,	2200,	84,	708,0,	0,	215,0,	0,	0,	1,	"Bursting with important information."
+	593,"Yearbook of Morality",		18,	6,	2250,	86,	708,0,	0,	220,0,	0,	0,	1,	"Very quick read."
+	594,"Devil's Dictionary",		18,	7,	2300,	88,	708,0,	0,	225,0,	0,	0,	1,	"He must have dropped it.  It's still smoking."
+	595,"Omnibus of Villainy",		18,	8,	2350,	90,	709,0,	0,	230,0,	0,	0,	1,	"Abstracted from the classic: 'Mass Transit of the Damned.'"
+	596,"Diabolical Tome",			18,	9,	2400,	92,	709,0,	0,	235,0,	0,	0,	1,	"First time you've seen paper scream."
+	597,"Colophon of Devilry",		18,	10,	2450,	94,	709,0,	0,  240,0,	0,	0,	1,	"Someone tore out the page explaining what a colophon was."
+	598,"Incunabula of Iniquity",	18,	11,	2500,	96,	709,0,	0,	245,0,	0,	0,	1,	"The Iditerod of Ill Issues"
+
+
+;
+; musical instruments (music.bmp)
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	600,"Silver Bell",			15,	1,	50,		0,	0,	0,	0,	5,	0,	0,	0,	10,	"Is it dinner time already?", 								"music.wav", 	31.70.2.0.0
+	601,"Pair of Bones",		15,	2,	100,	2,	0,	0,	0,	10,	0,	0,	0,	5,	"You hope the previous owner had a sense of rhythm.", 		"drum2.wav", 	31.71.2.0.0
+	602,"Pair of Spoons",		15,	3,	150,	4,	0,	0,	0,	15,	0,	0,	0,	2,	"Rhythmically enchanting, doubles as dinnerware.", 			"drum2.wav", 	31.72.2.0.0
+	603,"Ocarina",				15,	4,	200,	6,	0,	0,	0,	20,	0,	0,	0,	1,	"Each note scrapes a separate nerve.", 						"music4.wav", 	31.73.2.0.0
+	604,"Flute",				15,	5,	250,	8,	0,	0,	0,	25,	0,	0,	0,	1,	"A dwarven flute has fewer finger holes.", 					"music.wav", 	31.70.2.0.0
+	605,"Thumb Piano",			15,	6,	300,	10,	0,	0,	0,	30,	0,	0,	0,	1,	"A two-handed weapon of dubious effectiveness.", 			"music.wav", 	31.71.2.0.0
+	606,"Bodhran",				15,	7,	350,	12,	0,	0,	0,	35,	0,	0,	0,	1,	"Good for scaring game out of the brush.", 					"drum2.wav", 	31.72.2.0.0
+	607,"Health Ball",			15,	8,	400,	14,	0,	0,	0,	40,	0,	0,	0,	1,	"Placating chimes may put enemy to sleep.", 					"bell3.wav", 	31.73.2.0.0
+	608,"Bird Call",			15,	9,	450,	16,	0,	0,	0,	45,	0,	0,	0,	1,	"Almost as effective as fingernails on a blackboard.", 		"music2.wav", 	31.71.2.0.0
+	609,"Maracas",				15,	10,	500,	18,	0,	0,	0,	50,	0,	0,	0,	1,	"Filled with small rocks.", 									"music6.wav", 	31.71.2.0.0
+	610,"Death Shaker",			15,	11,	550,	20,	0,	0,	0,	55,	0,	0,	0,	1,	"Filled with the knuckle bones of your enemies.", 			"music6.wav", 	31.73.2.0.0
+	611,"Mesmer Lute",			15,	12,	600,	22,	0,	0,	0,	60,	0,	0,	0,	1,	"Hypnotizes your opponent.", 								"music1.wav", 	31.70.2.0.0
+	612,"Battle Drum",			15,	13,	650,	24,	0,	0,	0,	65,	0,	0,	0,	1,	"Calls the spirits to battle with you.", 					"drum2.wav", 	31.71.2.0.0
+	613,"Pan Pipes",			15,	14,	700,	26,	0,	0,	0,	70,	0,	0,	0,	1,	"Distracts the enemy with the sounds of revelry.", 			"music5.wav", 	31.73.2.0.0
+	614,"Concertina",			15,	15,	750,	28,	0,	0,	0,	75,	0,	0,	0,	1,	"If only you could juggle at the same time.", 				"music2.wav", 	31.70.2.0.0
+	615,"Elven Flute",			15,	16,	800,	30,	0,	0,	0,	80,	0,	0,	0,	1,	"Its eery tune makes your opponent cry to death.", 			"saber11.wav", 	31.71.2.0.0
+	616,"Battle Horn",			15,	17,	850,	32,	0,	0,	0,	85,	0,	0,	0,	1,	"Wakes the dead to aid you in battle.", 						"music.wav", 	31.73.2.0.0
+	617,"Dark Fiddle",			15,	18,	900,	34,	0,	0, -30,	120,0,	0,	0,	1,	"Curses the enemy with the sound of cats. Curses you, too.", 	"string1.wav", 	31.71.2.0.0
+	618,"Janus Horn",			15,	19,	950,	36,	0,	0,	0,	95, 0,	0,	0,	1,	"The heavens open and spill forth the music of the gods.", 		"music.wav", 	31.72.2.0.0
+
+	619,"Maatok",				15,	10,	1000,	38,	0,	0,	0,	100,0,	0,	0,	1,	"", "drum2.wav", 	31.71.2.0.0
+	620,"Squirt",				15,	11,	1050,	40,	0,	0,	0,	105,0,	0,	0,	1,	"", "bell3.wav", 	31.70.2.0.0
+	621,"Mythic Lute",			15,	12,	1100,	42,	0,	0,	0,	110,0,	0,	0,	1,	"", "music1.wav", 	31.72.2.0.0
+	622,"Drogan",				15,	13,	1150,	44,	0,	0,	0,	115,0,	0,	0,	1,	"", "music.wav", 	31.71.2.0.0
+	623,"Sand Pipes",			15,	14,	1200,	46,	0,	0,	0,	120,0,	0,	0,	1,	"", "music.wav", 	31.73.2.0.0
+	624,"Katt",					15,	15,	1250,	48,	0,	0,	0,	125,0,	0,	0,	1,	"", "music2.wav", 	31.72.2.0.0
+	625,"Geordi's Flute",		15,	16,	1300,	50,	0,	0,	0,	130,0,	0,	0,	1,	"", "music.wav", 	31.71.2.0.0
+	626,"Gabriel's Horn",		15,	17,	1350,	52,	0,	0,	0,	135,0,	0,	0,	1,	"", "music.wav", 	31.70.2.0.0
+	627,"Storm Fiddle",			15,	18,	1400,	54,	0,	0, -30,	140,0,	0,	0,	1,	"", "string2.wav", 	31.72.2.0.0
+	628,"Atoshi",				15,	19,	1450,	56,	0,	0,	0,	145,0,	0,	0,	1,	"", "bell3.wav", 	31.71.2.0.0
+	629,"Gore Clubs",			15,	10,	1500,	58,	0,	0,	0,	150,0,	0,	0,	1,	"", "boom1.wav", 	31.73.2.0.0
+	630,"Dionysian",			15,	11,	1550,	60,	0,	0,	0,	155,0,	0,	0,	1,	"", "music.wav", 	31.71.2.0.0
+	631,"Ryskar Lute",			15,	12,	1600,	62,	0,	0,	0,	160,0,	0,	0,	1,	"", "music.wav", 	31.72.2.0.0
+	632,"Mongo",				15,	13,	1650,	64,	0,	0,	0,	165,0,	0,	0,	1,	"", "drum2.wav", 	31.71.2.0.0
+	633,"Crixo Pipes",			15,	14,	1700,	66,	0,	0,	0,	170,0,	0,	0,	1,	"", "saber2.wav", 	31.73.2.0.0
+	634,"Dancelon",				15,	15,	1750,	68,	0,	0,	0,	175,0,	0,	0,	1,	"", "bell3.wav", 	31.71.2.0.0
+	635,"Piccolo",				15,	16,	1800,	70,	0,	0,	0,	180,0,	0,	0,	1,	"", "crash1.wav", 	31.72.2.0.0
+	636,"Plasma Horn",			15,	17,	1850,	72,	0,	0,	0,	185,0,	0,	0,	1,	"", "music.wav", 	31.71.2.0.0
+	637,"Ghost Fiddle",			15,	18,	1900,	74,	0,	0, -30,	190,0,	0,	0,	1,	"", "string1.wav", 	31.71.2.0.0
+	638,"Jabla Horn",			15,	19,	1950,	76,	0,	0,	0,	195,0,	0,	0,	1,	"", "music3.wav", 	31.70.2.0.0
+	639,"Averon's Call",		15,	10,	2000,	78,	0,	0,	0,	200,0,	0,	0,	1,	"", "string2.wav", 	31.71.2.0.0
+	640,"Omen Shaker",			15,	11,	2050,	80,	0,	0,	0,	205,0,	0,	0,	1,	"", "drum2.wav", 	31.71.2.0.0
+	641,"Grim Lute",			15,	12,	2100,	82,	0,	0,	0,	210,0,	0,	0,	1,	"", "music1.wav", 	31.72.2.0.0
+	642,"Shadow Drum",			15,	13,	2250,	84,	0,	0,	0,	215,0,	0,	0,	1,	"", "drum2.wav", 	31.73.2.0.0
+	643,"Cyrus Pipes",			15,	14,	2300,	86,	0,	0,	0,	220,0,	0,	0,	1,	"", "music3.wav", 	31.74.2.0.0
+	644,"Raven",				15,	15,	2350,	88,	0,	0,	0,	225,0,	0,	0,	1,	"", "crow1.wav", 	31.75.2.0.0
+	645,"Lark",					15,	16,	2400,	90,	0,	0,	0,	230,0,	0,	0,	1,	"", "crow1.wav", 	31.76.2.0.0
+	646,"Kain's Horn",			15,	17,	2450,	92,	0,	0,	0,	235,0,	0,	0,	1,	"", "saber3.wav", 	31.77.2.0.0
+	647,"Dark Cello",			15,	18,	2500,	94,	0,	0, -30,	240,0,	0,	0,	1,	"", "string1.wav", 	31.78.2.0.0
+	648,"Apocalypse Horn",		15,	19,	2550,	96,	0,	0,	0,	245,0,	0,	0,	1,	"", "music5.wav", 	31.79.2.0.0
+
+; Spirits
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description SFX  ATTACK
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14			15	16
+	650,"Brownie Hex",			19,	7,	50,		0,	0,	0,	0,	5,	0,	0,	0,	10,	"",	""
+	651,"Sprite Hex",			19,	2,	100,	2,	0,	0,	0,	10,	0,	0,	0,	5,	"",	""
+	652,"Ghost Hex",			19,	19,	150,	4,	0,	0,	0,	15,	0,	0,	0,	2,	"",	""
+	653,"Spook Hex",			19,	5,	200,	6,	0,	0,	0,	20,	0,	0,	0,	1,	"",	""
+	654,"Apparition Hex",		19,	17,	250,	8,	0,	0,	0,	25,	0,	0,	0,	1,	"",	""
+	655,"Imp Hex",				19,	12,	300,	10,	751,0,	0,	30,	0,	0,	0,	1,	"",	""
+	656,"Spectre Hex",			19,	6,	350,	12,	751,0,	0,	35,	0,	0,	0,	1,	"",	""
+	657,"Sylph Hex",			19,	11,	400,	14,	751,0,	0,	40,	0,	0,	0,	1,	"",	""
+	658,"Poltergeist Hex",		19,	9,	450,	16,	751,0,	0,	45,	0,	0,	0,	1,	"",	""
+	659,"Fiend Hex",			19,	10,	500,	18,	751,0,	0,	50,	0,	0,	0,	1,	"",	""
+	660,"Sandman Hex",			19,	4,	550,	20,	752,0,	0,	55,	0,	0,	0,	1,	"",	""
+	661,"Djinn Hex",			19,	15,	600,	22,	752,0,	0,	60,	0,	0,	0,	1,	"",	""
+	662,"Bogeyman Hex",			19,	13,	650,	24,	752,0,	0,	65,	0,	0,	0,	1,	"",	""
+	663,"Incubus Hex",			19,	18,	700,	26,	752,0,	0,	70,	0,	0,	0,	1,	"",	""
+	664,"Wraith Hex",			19,	8,	750,	28,	752,0,	0,	75,	0,	0,	0,	1,	"",	""
+	665,"Succubus Hex",			19,	14,	800,	30,	753,0,	0,	80,	0,	0,	0,	1,	"",	""
+	666,"Daemon Hex",			19,	3,	850,	32,	753,0,	0,	85,	0,	0,	0,	1,	"",	""
+
+	667,"Brownie Rune",			19,	7,	900,	34,	753,0,	-30,120,0,	0,	0,	1,	"",	""
+	668,"Sprite Rune",			19,	2,	1000,	36,	753,0,	0,	95, 0,	0,	0,	1,	"",	""
+	669,"Ghost Rune",			19,	19,	1050,	38,	753,0,	0,	100,0,	0,	0,	1,	"",	""
+	670,"Spook Rune",			19,	5,	1100,	40,	754,0,	0,	105	0,	0,	0,	1,	"",	""
+	671,"Apparition Rune",		19,	17,	1150,	42,	754,0,	0,	110,0,	0,	0,	1,	"",	""
+	672,"Imp Rune",				19,	12,	1200,	44,	754,0,	0,	115,0,	0,	0,	1,	"",	""
+	673,"Spectre Rune",			19,	6,	1250,	46,	754,0,	0,	120,0,	0,	0,	1,	"",	""
+	674,"Sylph Rune",			19,	11,	1300,	48,	754,0,	0,	125,0,	0,	0,	1,	"",	""
+	675,"Poltergeist Rune",		19,	9,	1350,	50,	755,0,	0,	130,0,	0,	0,	1,	"",	""
+	676,"Fiend Rune",			19,	10,	1400,	52,	755,0,	0,	135,0,	0,	0,	1,	"",	""
+	677,"Sandman Rune",			19,	4,	1450,	54,	755,0,	-30,170,0,	0,	0,	1,	"",	""
+	678,"Djinn Rune",			19,	15,	1500,	56,	755,0,	0,	145,0,	0,	0,	1,	"",	""
+	679,"Bogeyman Rune",		19,	13,	1550,	58,	755,0,	0,	150,0,	0,	0,	1,	"",	""
+	680,"Incubus Rune",			19,	18,	1600,	60,	756,0,	0,	155,0,	0,	0,	1,	"",	""
+	681,"Wraith Rune",			19,	8,	1650,	62,	756,0,	0,	160,0,	0,	0,	1,	"",	""
+	682,"Succubus Rune",		19,	14,	1700,	64,	756,0,	0,	165,0,	0,	0,	1,	"",	""
+	683,"Daemon Rune",			19,	3,	1750,	66,	756,0,	0,	170,0,	0,	0,	1,	"",	""
+
+	684,"Brownie Fetich",		19,	7,	1800,	68,	756,0,	0,	175,0,	0,	0,	1,	"",	""
+	685,"Spook Fetich",			19,	5,	1850,	70,	757,0,	0,	180,0,	0,	0,	1,	"",	""
+	686,"Apparition Fetich",	19,	17,	1900,	72,	757,0,	0,	185,0,	0,	0,	1,	"",	""
+	687,"Imp Fetich",			19,	12,	1950,	74,	757,0,	-30,210,0,	0,	0,	1,	"",	"chant5.wav", 31.85.2.7.3
+	688,"Spectre Fetich",		19,	6,	2000,	76,	0,	0,	0,	195,0,	0,	0,	1,	"",	"chant4.wav", 31.81.2.7.3
+	689,"Sylph Fetich",			19,	11,	2050,	78,	757,0,	0,	200,0,	0,	0,	1,	"",	""
+	690,"Poltergeist Fetich",	19,	9,	2100,	80,	758,0,	0,	205,0,	0,	0,	1,	"",	"chant5.wav", 31.86.2.7.3
+	691,"Fiend Fetich",			19,	10,	2150,	82,	758,0,	0,	210,0,	0,	0,	1,	"",	""
+	692,"Sandman Fetich",		19,	4,	2200,	84,	758,0,	0,	215,0,	0,	0,	1,	"",	"chant5.wav", 31.89.2.7.3
+	693,"Djinn Fetich",			19,	15,	2250,	86,	758,0,	0,	220,0,	0,	0,	1,	"",	""
+	694,"Bogeyman Fetich",		19,	13,	2300,	88,	0,	0,	0,	225,0,	0,	0,	1,	"",	"chant5.wav", 31.82.2.7.3
+	695,"Incubus Fetich",		19,	18,	2350,	90,	759,0,	0,	230,0,	0,	0,	1,	"",	"chant5.wav", 31.88.2.7.3
+	696,"Wraith Fetich",		19,	8,	2400,	92,	0,	0,	0,	235,0,	0,	0,	1,	"",	"chant6.wav", 31.84.2.7.3
+	697,"Succubus Fetich",		19,	14,	2450,	94,	759,0,	0,  240,0,	0,	0,	1,	"",	"chant5.wav", 31.87.2.7.3
+	698,"Daemon Fetich",		19,	3,	2500,	96,	0,	0,	0,	245,0,	0,	0,	1,	"",	"chant7.wav", 31.83.2.7.3
+
+
+; boots
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	700,"Frog Boots",			20,	1,	0,		5,	4,	0,	0,	0,	0,	0,	0,	0,	"Let you walk on water.  Well, on swamp water."
+	701,"Rubber Boots",			20,	13,	0,		6,	2,	0,	0,	0,	0,	0,	0,	0,	"Let you walk on electrified grids."
+	702,"Fire Boots",			20,	7,	0,		7,	1,	0,	0,	0,	0,	0,	0,	0,	"Let you walk on lava... for awhile."
+	703,"Cowboy Boots",			20,	11,	10000,	10,	12,	0,	0,	0,	0,	0,	0,	0,	"Increases your walking speed by two."
+	704,"Jesters Shoes",		20,	3,	10000,	10,	11,	0,	0,	0,	0,	0,	0,	0,	"Their humorous appearance keeps monsters away."
+	705,"Elven Booties",		20,	10,	0,		20,	10,	0,	0,	0,	0,	0,	0,	0,	"Low level flying boots."
+	706,"Cane Sandals",			20,	5,	25,		0,	0,	0,	1,	0,	0,	0,	0,	10,	"It's hard to say whether you get more blisters with or without these."
+	707,"Leather Sandals",		20,	4,	50,		3,	0,	0,	5,	0,	0,	0,	0,	5,	"Adequate for light walking in warm climates."
+	708,"Leather Hightops",		20,	12,	100,	6,	0,	0,	10,	0,	0,	0,	0,	2,	"Basically, it's a shoe."
+	709,"Ostrich Shoes",		20,	9,	150,	9,	0,	0,	15,	0,	0,	0,	0,	1,	"A fancy, elitist, shoe.  Makes you feel important."
+	710,"Leather Boots",		20,	2,	200,	12,	0,	0,	20,	0,	0,	0,	0,	1,	"Sturdy hard-leather hiking boots."
+	711,"Equestrians",			20,	8,	250,	15,	0,	0,	25,	0,	0,	0,	0,	1,	"Good-looking boots."
+	712,"Mummer Boots",			20,	6,	300,	18,	0,	0,	30,	0,	0,	0,	0,	1,	"Silly shoes and leggings for silly people."
+	713,"Swashbucklers",		20,	16,	350,	21,	0,	0,	30,	5,	0,	0,	0,	1,	"Dashing and stylish footwear."
+	714,"Bronze Boots",			20,	15,	400,	24,	0,	0,	40,	0,	0,	0,	0,	1,	"A little tight on you, but good protection."
+	715,"Iron Boots",			20,	16,	450,	27,	0,	0,	40,	5,	0,	0,	0,	1,	"People hear you clanking up on them, and fear you'll tread on them."
+	716,"Mithril Boots",		20,	14,	500,	30,	0,	0,	45,	5,	0,	0,	0,	1,	"Light and durable fighting protection."
+
+
+
+; shields
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	800,"Leather Shield",		21,	3,	50,		0,	0,	0,	5,	0,	0,	0,	0,	10,	"A simple, but cracked, leather shield."
+	801,"Doe Shield",			21,	4,	100,	2,	0,	0,	10,	0,	0,	0,	0,	5,	"Calls upon the forest spirits for stealth."
+	802,"Stag Shield",			21,	5,	150,	4,	0,	0,	15,	0,	0,	0,	0,	2,	"Fortified by organically grown buck antler."
+	803,"Ice Shield",			21,	1,	200,	6,	0,	1,	20,	0,	0,	0,	0,	1,	"Polished by an Elf apprentice.",,				,				
+	804,"Gecko Shield",			21,	6,	250,	8,	0,	0,	25,	0,	0,	0,	0,	1,	"Essence of Gecko makes it a little slimy."
+	805,"Lizard Shield",		21,	7,	300,	10,	0,	0,	30,	0,	0,	0,	0,	1,	"Overlapping scales afford good protection."
+	806,"Fire Shield",			21,	2,	350,	12,	0,	0,	35,	0,	0,	0,	0,	1,	"A small but effective tempered brass shield."
+	807,"Ruby Shield",			21,	8,	400,	14,	0,	0,	40,	0,	0,	0,	0,	1,	"Hardened by a ruby matrix."
+	808,"Shield of Ra",			21,	9,	450,	16,	0,	0,	45,	0,	0,	0,	0,	1,	"Borrows life from the gods."
+	809,"Cross Shield",			21,	19,	500,	18,	0,	0,	50,	0,	0,	0,	0,	1,	""
+	810,"Celtic Shield",		21,	18,	550,	20,	0,	0,	55,	0,	0,	0,	0,	1,	""
+	811,"Shield of Life",		21,	10,	600,	22,	0,	0,	60,	0,	0,	0,	0,	1,	""
+	812,"Iron Shield",			21,	17,	650,	24,	0,	0,	65,	0,	0,	0,	0,	1,	""
+	813,"Snake Shield",			21,	11,	700,	26,	0,	0,	70,	0,	0,	0,	0,	1,	""
+	814,"Cabuchon Shield",		21,	12,	750,	28,	0,	0,	75,	0,	0,	0,	0,	1,	""
+	815,"Shield of Eire",		21,	13,	800,	30,	0,	0,	80,	0,	0,	0,	0,	1,	""
+	816,"Dragon Shield",		21,	14,	850,	32,	0,	0,	85,	0,	0,	0,	0,	1,	""
+	817,"Wyrm Shield",			21,	15,	900,	34,	0,	0,	120,-30,0,	0,	0,	1,	"Cursed"
+	818,"Crescent Shield",		21,	16,	950,	36,	0,	0,	95, 0,	0,	0,	0,	1,	""
+
+	819,"Kanoch'c Shield",		21,	19,	1000,	38,	0,	0,	100,0,	0,	0,	0,	1,	""
+	820,"Aranos Shield",		21,	18,	1050,	40,	0,	0,	105,0,	0,	0,	0,	1,	""
+	821,"Shield of Tleilaxu",	21,	10,	1100,	42,	0,	0,	110,0,	0,	0,	0,	1,	""
+	822,"Shadow Shield",		21,	17,	1150,	44,	0,	0,	115,0,	0,	0,	0,	1,	""
+	823,"Omnus Shield",			21,	11,	1200,	46,	0,	0,	120,0,	0,	0,	0,	1,	""
+	824,"Jaynen Shield",		21,	12,	1250,	48,	0,	0,	125,0,	0,	0,	0,	1,	""
+	825,"Shield of Tor",		21,	13,	1300,	50,	0,	0,	130,0,	0,	0,	0,	1,	""
+	826,"Gore Shield",			21,	14,	1350,	52,	0,	0,	135,0,	0,	0,	0,	1,	""
+	827,"Kemper Shield",		21,	15,	1400,	54,	0,	0,	140,-30,0,	0,	0,	1,	"Cursed"
+	828,"Magus Shield",			21,	16,	1450,	56,	0,	0,	145,0,	0,	0,	0,	1,	""
+	829,"Sangre Shield",		21,	19,	1500,	58,	0,	0,	150,0,	0,	0,	0,	1,	""
+	830,"Hutijin Shield",		21,	18,	1550,	60,	0,	0,	155,0,	0,	0,	0,	1,	""
+	831,"Shield of Junius",		21,	10,	1600,	62,	0,	0,	160,0,	0,	0,	0,	1,	""
+	832,"Mandarb Shield",		21,	17,	1650,	64,	0,	0,	165,0,	0,	0,	0,	1,	""
+	833,"Grim Shield",			21,	11,	1700,	66,	0,	0,	170,0,	0,	0,	0,	1,	""
+	834,"Tveran Shield",		21,	12,	1750,	68,	0,	0,	175,0,	0,	0,	0,	1,	""
+	835,"Shield of Lawba",		21,	13,	1800,	70,	0,	0,	180,0,	0,	0,	0,	1,	""
+	836,"Titan Shield",			21,	14,	1850,	72,	0,	0,	185,0,	0,	0,	0,	1,	""
+	837,"Aries Shield",			21,	15,	1900,	74,	0,	0,	190,-30,0,	0,	0,	1,	"Cursed"
+	838,"Storm Shield",			21,	16,	1950,	76,	0,	0,	195,0,	0,	0,	0,	1,	""
+	849,"Pelsaert Shield",		21,	19,	2000,	78,	0,	0,	200,0,	0,	0,	0,	1,	""
+	840,"Mortal Shield",		21,	18,	2050,	80,	0,	0,	205,0,	0,	0,	0,	1,	""
+	841,"Shield of Tiberian",	21,	10,	2100,	82,	0,	0,	210,0,	0,	0,	0,	1,	""
+	842,"Ghwyn's Shield",		21,	17,	2150,	84,	0,	0,	215,0,	0,	0,	0,	1,	""
+	843,"Raaka Shield",			21,	11,	2200,	86,	0,	0,	220,0,	0,	0,	0,	1,	""
+	844,"Joy Shield",			21,	12,	2250,	88,	0,	0,	225,0,	0,	0,	0,	1,	""
+	845,"Shield of Leniad",		21,	13,	2300,	90,	0,	0,	230,0,	0,	0,	0,	1,	""
+	846,"Hades Shield",			21,	14,	2350,	92,	0,	0,	235,0,	0,	0,	0,	1,	""
+	847,"Viper Shield",			21,	15,	2400,	94,	0,	0,	240,-30,0,	0,	0,	1,	"Cursed"
+	848,"Mythic Shield",		21,	16,	2450,	96,	0,	0,	245,0,	0,	0,	0,	1,	""
+
+; rings
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	900,"Amethyst Ring",		22,	3,	15,		0,	0,	0,	0,	0,	0,	0,	0,	10,	"It just makes you feel pretty."
+	901,"Emerald Ring",			22,	1,	30,		1,	0,	0,	5,	0,	0,	0,	0,	5,	"Imbues you with the cunning of the lizard."
+	902,"Ring of Faith",		22,	4,	50, 	3,	0,	0,	10,	0,	0,	0,	0,	2,	"Counts your blessings."
+	903,"Golden Ring",			22,	5,	70,		5,	0,	0,	10,	5,	0,	0,	0,	1,	"Its glitter distracts your enemies."
+	904,"Rose Ring",			22,	6,	90,		7,	0,	0,	10,	10,	0,	0,	0,	1,	"Its pleasant aroma calms your enemy."
+	905,"Star Emerald Ring",	22,	7,	110,	9,	0,	0,	20,	5,	0,	0,	0,	1,	"It rivets your opponents gaze."
+	906,"Ring of Mesmer",		22,	8,	130,	11,	0,	0,	25,	5,	0,	0,	0,	1,	""
+	907,"Ring of Light",		22,	9,	150,	13,	0,	0,	35,	0,	0,	0,	0,	1,	""
+	908,"Rune Ring",			22,	10,	170,	15,	0,	0,	35,	5,	0,	0,	0,	1,	""
+	909,"Ring of Storms",		22,	11,	190,	17,	0,	0,	5,	40,	0,	0,	0,	1,	""
+	910,"Eel Ring",				22,	12,	210,	19,	0,	0,	10,	40,	0,	0,	0,	1,	""
+	911,"Royal Ring",			22,	13	230,	21,	0,	0,	25,	30,	0,	0,	0,	1,	""
+	912,"Ring of Bond",			22,	14,	250,	23,	0,	0,	50,	10,	0,	0,	0,	1,	""
+	913,"Chain Ring",			22,	15,	270,	25,	0,	0,	40,	25,	0,	0,	0,	1,	""
+	914,"Water Ring",			22,	16,	290,	27,	0,	0,	30,	40,	0,	0,	0,	1,	""
+	915,"Ring of Growth",		22,	17,	310,	29,	0,	0,	65,	10,	0,	0,	0,	1,	""
+	916,"Ring of Clouds",		22,	18,	330,	31,	0,	0,	80,	0,	0,	0,	0,	1,	""
+	917,"Ring of Confusion",	22,	19,	350,	33,	0,	0,	55,	30,	0,	0,	0,	1,	""
+	918,"Ring of Invisibility",	22,	2,	0,		35,	0,	0,	-5,	-5,	0,	0,	0,	0,	"Hides you from your enemies."
+
+	919,"Pyro Ring",			22,	11,	400,	37,	0,	0,	50,	40,	0,	0,	0,	1,	""
+	920,"Astromida's Ring",		22,	12,	450,	39,	0,	0,	50,	45,	0,	0,	0,	1,	""
+	921,"Malekite Ring",		22,	13	500,	41,	0,	0,	55,	45,	0,	0,	0,	1,	""
+	922,"Ring of Hypnok",		22,	14,	550,	43,	0,	0,	55,	50,	0,	0,	0,	1,	""
+	923,"Ghost Ring",			22,	15,	600,	45,	0,	0,	60,	50,	0,	0,	0,	1,	""
+	924,"Pablo's Ring",			22,	16,	650,	47,	0,	0,	60,	55,	0,	0,	0,	1,	""
+	925,"Ring of Myth",			22,	17,	700,	49,	0,	0,	65,	55,	0,	0,	0,	1,	""
+	926,"Ring of Mortals",		22,	18,	750,	51,	0,	0,	65,	60,	0,	0,	0,	1,	""
+	927,"Ring of Nash",			22,	19,	800,	53,	0,	0,	70,	60,	0,	0,	0,	1,	""
+	928,"Ring of Lashiec",		22,	2,	850,	55,	0,	0,	70,	65,	0,	0,	0,	1,	""
+	929,"Ring of Prophets",		22,	11,	900,	57,	0,	0,	75,	65,	0,	0,	0,	1,	""
+	930,"Paladin's Ring",		22,	12,	950,	59,	0,	0,	75,	70,	0,	0,	0,	1,	""
+	931,"Dione's Ring",			22,	13	1000,	61,	0,	0,	80,	70,	0,	0,	0,	1,	""
+	932,"Ring of Nekales",		22,	14,	1050,	63,	0,	0,	80,	75,	0,	0,	0,	1,	""
+	933,"Ayla's Ring",			22,	15,	1100,	65,	0,	0,	85,	75,	0,	0,	0,	1,	""
+	934,"Rinoa's Ring",			22,	16,	1150,	67,	0,	0,	85,	80,	0,	0,	0,	1,	""
+	935,"Ring of Shadows",		22,	17,	1200,	69,	0,	0,	90,	80,	0,	0,	0,	1,	""
+	936,"Ring of Tara",			22,	18,	1250,	71,	0,	0,	90,	85,	0,	0,	0,	1,	""
+	937,"Ring of Evasion",		22,	19,	1300,	73,	0,	0,	95,	85,	0,	0,	0,	1,	""
+	938,"Ring of Dumas",		22,	2,	1350,	75,	0,	0,	95,	90,	0,	0,	0,	1,	""
+	939,"Ring of Madness",		22,	11,	1400,	77,	0,	0,	100,90,	0,	0,	0,	1,	""
+	940,"Sand Ring",			22,	12,	1450,	79,	0,	0,	100,95,	0,	0,	0,	1,	""
+	941,"Gore Ring",			22,	13	1500,	81,	0,	0,	105,95,	0,	0,	0,	1,	""
+	942,"Ring of Syanna",		22,	14,	1550,	83,	0,	0,	105,100,0,	0,	0,	1,	""
+	943,"Ominous Ring",			22,	15,	1600,	85,	0,	0,	110,100,0,	0,	0,	1,	""
+	944,"Azzuron's Ring",		22,	16,	1650,	87,	0,	0,	110,105,0,	0,	0,	1,	""
+	945,"Ring of Titans",		22,	17,	1700,	89,	0,	0,	115,105,0,	0,	0,	1,	""
+	946,"Ring of Enigma",		22,	18,	1750,	91,	0,	0,	115,110,0,	0,	0,	1,	""
+	947,"Ring of Confusion",	22,	19,	1800,	93,	0,	0,	120,110,0,	0,	0,	1,	""
+	948,"Ring of Consternation",	22,	2,	1850,	95,	0,	0,	120,115,0,	0,	0,	1,	""
+
+; amulets
+;	E#, name,					cl  Img	$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2	3	4		5	6	7	8	9	10	11	12	13	14
+	950,"Snake Amulet",			23,	1,	100,	2,	0,	0,	0,	10,	0,	0,	0,	10,	"Increases the bite of your weapon."
+	951,"Emerald Amulet",		23,	2,	150,	4,	0,	0,	15,	0,	0,	0,	0,	5,	"Collects the protective properties of the earth."
+	952,"Gold Amulet",			23,	3,	200,	6,	0,	0,	10,	10,	0,	0,	0,	2,	"Blinds your opponent with greed."
+	953,"Weft Amulet",			23,	1,	250,	8,	0,	0,	15,	10,	0,	0,	0,	1,	"Focuses the spirit."
+	954,"Kaydrn Amulet",		23,	2,	300,	10,	0,	0,	15,	15,	0,	0,	0,	1,	"Gives you caffeinated reflexes."
+	955,"Waltz Amulet",			23,	3,	350,	12,	0,	0,	15,	20,	0,	0,	0,	1,	"Beguiles with the spirit of the dance."
+	956,"Loikka Amulet",		23,	1,	400,	14,	0,	0,	25,	15,	0,	0,	0,	1,	"Impresses your friends, intimidates enemies."
+	957,"Bitsooth Amulet",		23,	2,	450,	16,	0,	0,	25,	20,	0,	0,	0,	1,	"Visits confusion upon your enemies."
+	958,"Spindle Amulet",		23,	3,	500,	18,	0,	0,	50,	0,	0,	0,	0,	1,	"Protects you from poky things."
+	959,"Arxs Amulet",			23,	1,	550,	20,	0,	0,	10,	45,	0,	0,	0,	1,	"Power of the elf travels with you."
+	960,"Stirrup Amulet",		23,	2,	600,	22,	0,	0,	20,	40,	0,	0,	0,	1,	"Gives you a leg up."
+	961,"Pommel Amulet",		23,	3,	650,	24,	0,	0,	45,	20,	0,	0,	0,	1,	"Imbues you with the smell of freshly-baked bread."
+	962,"Sheik Amulet",			23,	3,	650,	26,	0,	0,	45,	25,	0,	0,	0,	1,	""
+	963,"Lennon Amulet",		23,	3,	650,	28,	0,	0,	55,	20,	0,	0,	0,	1,	""
+	964,"Asylum Amulet",		23,	3,	650,	30,	0,	0,	45,	35,	0,	0,	0,	1,	""
+	965,"Grotto Amulet",		23,	3,	650,	32,	0,	0,	25,	20,	0,	0,	0,	1,	""
+	966,"Shepherd Amulet",		23,	3,	650,	34,	0,	0,	50,	40,	0,	0,	0,	1,	""
+	967,"Mood Amulet",			23,	3,	650,	36,	0,	0,	45,	50,	0,	0,	0,	1,	""
+	968,"Rutles Amulet",		23,	3,	650,	38,	0,	0,	75,	25,	0,	0,	0,	1,	""
+	969,"Soleil Amulet",		23,	3,	650,	40,	0,	0,	45,	60,	0,	0,	0,	1,	""
+	970,"Lava Amulet",			23,	3,	650,	42,	0,	0,	75,	35,	0,	0,	0,	1,	""
+	971,"Celtic Amulet",		23,	3,	650,	44,	0,	0,	45,	70,	0,	0,	0,	1,	""
+	972,"Frakken Amulet",		23,	3,	650,	46,	0,	0,	95,	25,	0,	0,	0,	1,	""
+	973,"Adiemus Amulet",		23,	3,	650,	48,	0,	0,	25,	100,0,	0,	0,	1,	""
+
+	974,"Cran Amulet",			23,	3,	650,	50,	0,	0,	45,	90,	0,	0,	0,	1,	""
+	975,"Plague Amulet",		23,	3,	650,	52,	0,	0,	50,	90,	0,	0,	0,	1,	""
+	976,"Clannad Amulet",		23,	3,	650,	54,	0,	0,	85,	60,	0,	0,	0,	1,	""
+	977,"Mech Amulet",			23,	3,	650,	56,	0,	0,	65,	95,	0,	0,	0,	1,	""
+	978,"Blood Amulet",			23,	3,	650,	58,	0,	0,	45,	120,0,	0,	0,	1,	""
+	979,"Amulet of Choice",		23,	3,	650,	60,	0,	0,	145,25,	0,	0,	0,	1,	""
+	980,"Flight Amulet",		23,	3,	650,	62,	0,	0,	55,	100,0,	0,	0,	1,	""
+	981,"Graal Amulet",			23,	3,	650,	64,	0,	0,	65,	120,0,	0,	0,	1,	""
+	982,"Trespass Amulet",		23,	3,	650,	66,	0,	0,	50,	140,0,	0,	0,	1,	"" 
+	983,"Life Amulet",			23,	3,	650,	68,	0,	0,	145,50,	0,	0,	0,	1,	""
+	984,"BioGen Amulet",		23,	3,	650,	70,	0,	0,	145,55,	0,	0,	0,	1,	""
+	985,"Platinum Amulet",		23,	3,	650,	72,	0,	0,	145,60,	0,	0,	0,	1,	""
+	986,"Chastity Amulet",		23,	3,	650,	74,	0,	0,	145,45,	0,	0,	0,	1,	""
+	987,"Canker Amulet",		23,	3,	650,	76,	0,	0,	105,110,0,	0,	0,	1,	""
+	988,"Kraft Amulet",			23,	3,	650,	78,	0,	0,	145,75,	0,	0,	0,	1,	""
+	989,"Zone Amulet",			23,	3,	650,	80,	0,	0,	145,80,	0,	0,	0,	1,	""
+	990,"Warpath Amulet",		23,	3,	650,	82,	0,	0,	110,120,0,	0,	0,	1,	""
+	991,"Command Amulet",		23,	3,	650,	84,	0,	0,	145,90,	0,	0,	0,	1,	""
+	992,"Diablo Amulet",		23,	3,	650,	86,	0,	0,	145,95,	0,	0,	0,	1,	""
+	993,"Quake Amulet",			23,	3,	650,	88,	0,	0,	135,110,0,	0,	0,	1,	""
+	994,"Carnage Amulet",		23,	3,	650,	90,	0,	0,	145,105,0,	0,	0,	1,	""
+	995,"Razor Amulet",			23,	3,	650,	92,	0,	0,	45,	210,0,	0,	0,	1,	"" 
+	996,"Safety Amulet",		23,	3,	650,	94,	0,	0,	240,20,	0,	0,	0,	1,	""
+	997,"Bloodtooth Amulet",	23,	3,	650,	96,	0,	0,	45,	220,0,	0,	0,	1,	""
+	998,"Blind Amulet",			23,	3,	650,	98,	0,	0,	150,120,0,	0,	0,	1,	""
+
+
+;
+; pets (note: these are handled very specially and can only be offered via the OFFER command
+; and not the OFFER2 command).  arg3 is not an image#, it is the MONSTER ID of the monster which is
+; to be 'sellable' in a shop.  The monsters statistics will be the pet statistics, so do not set
+; the pet's stats in the ITEM table.  For example, here the 'level' entry just means the minimum
+; player level before the player can purchase the pet.  the element entry does NOT specify the
+; pet's element, which comes from the MONSTER table.  Make the MONSTER entry first.  I hope this
+; isn't way too confusing.
+;
+; A "Pet Shop" is just a regular shop using the OFFER command with the pets enumerated, as in:
+;
+;    "OFFER 1000,1002"  (offers two pets only)
+;
+; You can NOT use the OFFER2 command with pets. (have I said that enough times yet?)
+; And you can never sell a pet back to a storekeeper.
+;
+;	E#, name,					cl		Img		$		lvl Spl	El	D	A	HP	MP	AP	FP	Description
+;	0	1						2		3		4		5	6	7	8	9	10	11	12	13	14
+	1000,"Cage #1",				200,	1000,	2000,	10,	0,	0,	0,	0,	0,	0,	0,	0,	"Isn't he cute? or is it a she?"
+	1001,"Cage #2",				200,	1001,	10000,	20,	0,	0,	0,	0,	0,	0,	0,	0,	"We found this one rooting in the garbage cans behind the kennel."
+	1002,"Cage #3",				200,	1002,	50000,	30,	0,	0,	0,	0,	0,	0,	0,	0,	"Spay and neutering fees are a little higher with this one, but recommended."
+	1003,"Cage #4",				200,	1003,	150000,	40,	0,	0,	0,	0,	0,	0,	0,	0,	"This one is a little mean. And he loves children, if you know what I mean."
+	1004,"Cage #5",				200,	1004,	2000,	20,	0,	0,	0,	0,	0,	0,	0,	0,	"Your basic chicken, only not cowardly."
+	1005,"Cage #6",				200,	1005,	20000,	25,	0,	0,	0,	0,	0,	0,	0,	0,	"A rugged free-range fighter."
+	1006,"Cage #7",				200,	1006,	50000,	30,	0,	0,	0,	0,	0,	0,	0,	0,	"Likely to make you sit on your OWN #@&^!! eggs."
+	1007,"Cage #8",				200,	1007,	90000,	35,	0,	0,	0,	0,	0,	0,	0,	0,	"Tastes like death."
+	1008,"Cage #9",				200,	1008,	200000,	50,	0,	0,	0,	0,	0,	0,	0,	0,	"Note from 'Lefty': keep him well fed!"
+	1009,"Cage #10",			200,	1009,	120000,	40,	0,	0,	0,	0,	0,	0,	0,	0,	"Cactrot asked us to take care of this one for a couple weeks"
+
+; quest prize pets
+	1020,"Cage #21",			200,	2000,	0,	80,	0,	0,	0,	0,	0,	0,	0,	0,	""
+	1021,"Cage #22",			200,	2001,	0,	80,	0,	0,	0,	0,	0,	0,	0,	0,	""
+	1022,"Cage #23",			200,	2002,	0,	80,	0,	0,	0,	0,	0,	0,	0,	0,	""
+	1023,"Cage #24",			200,	2003,	0,	80,	0,	0,	0,	0,	0,	0,	0,	0,	""
+
+;-------------------------- ITEMS 1024-5119 are SINGLETON items.. user can have only one of EACH -----------------
+
+	1024,	"Guild Hall",		201, 4, 0, 		0,	0,	0,	0,	0,	0,0,	0,	0,	"Guild Hall.", 	"http://www.synthetic-reality.com/cgi-bin/myCGI/sr-guilds.cgi/WOS/hall"
+	5119,	"Forum",				201, 4, 0, 		0,	0,	0,	0,	0,	0,0,	0,	0,	"Forum.", 		"http://www.synthetic-reality.com/cgi-bin/ultimatebb.cgi"
+
+
+
+
+;	
+;	OFFER2 shop styles
+;
+; The script commands OFFER and OFFER2 let you populate the shop window with the items of your
+; choice.  Here are some example commands for various specialty shops
+;
+;	// basic shop, levels 0-10, all items
+;	OFFER2	0,10
+;	OFFER2	5,15
+;	OFFER2	10,20
+;	OFFER2	15,25
+;	OFFER2	20,30
+;	OFFER2	25,35
+;	
+;	// specialty shops
+;	OFFER2	0,30,10			;helmets-
+;	OFFER2	0,30,11			;armor
+;	OFFER2	0,30,12			;swords
+;	OFFER2	0,30,13			;staffs
+;	OFFER2	0,30,14			;bows
+;	OFFER2	0,30,15			;music
+;	OFFER2	0,30,16			;rh5
+;	OFFER2	0,30,17			;rh6
+;	OFFER2	0,30,18			;rh7
+;	OFFER2	0,30,19			;rh8
+;	OFFER2	0,30,20			;boots
+;	OFFER2	0,30,21			;shields
+;	OFFER2	0,30,22			;rings
+;	OFFER2	0,30,23			;amulets
+
+;
+; Be sure to leave a blank line at the end of this file
+

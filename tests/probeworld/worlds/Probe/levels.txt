@@ -1,0 +1,639 @@
+;-------------------
+; character levels
+;
+; You can define various character 'classes' which control the
+; basic limits of a character (what weapon they can hold in their
+; right hand, whether they get magic points, the rate at which
+; their levels increase, and some other things)
+;
+; But a character also has a LEVEL which starts at '1' and goes up along
+; with experience points.
+;
+; This section lets you specify the experience points needed to attain each
+; level, and lets you associate a name with each level, so your character
+; can appear to evolve through various stages (mage, wizard, warlock, sorceror, etc.)
+; even though REALLY only the actual level number is important.
+;
+; The first argument is a number which indicates the class and the level.  
+;
+;    arg0:		Class+Level (103 = warrior level 3, 203 = wizard level 3)
+;    arg1:		[NO LONGER USED] Additional Experience points to attain level from previous level
+;	 arg2:		Additional max HP earned when level is attained
+;	 arg3:		Additional max MP earned when level is attained
+;    arg4:      Level Name (use the same name for several levels in a row)
+;
+; These arguments are only valid for level 0 in each character class.  They control
+; common aspects of the class
+;
+;	 arg5		(level 0 only)  magic-ratio
+;	 arg6		(level 0 only)  right-hand weapon (1 - 8, or 0 if none (will use start_hand_training instead))
+;
+; Levels run from 1 to 99 maximum.  A bonus level "100" is supplied by the game, but it uses the same
+; table entry as level 99.  That is to say, you cannot provide a custom level name for level 100.
+;
+; You only need to have entries for levels where you want the hp, mp, new spell, or
+; level name to change.  Minimum experience levels are now computed automatically
+; for you.  If you give an 'empty' level name (except for level 1 where it is
+; mandatory) the previous name will be used for that level
+;
+; Note that LEVEL ZERO (100,200, etc) is a SPECIAL ENTRY which names the actual
+; character class, and is not a level in of itself.  I know this is horribly
+; confusing, but it is just so dang CONVENIENT to do it this way!
+; So, for LEVEL 0 ONLY:  maxHP and maxMP are the starting levels of a new character
+; in that class, level_name is the 'character class name' which appears in the
+; new soul dialog box.  
+;
+; LEVEL ZERO is where you define a characters magic-ration and right-hand weapon.
+; Their 'magic ratio' determines what percentage of their attack points are used for magic versus sword attack;
+;
+; Hence a MAGIC-USER would have a high magic ratio (80-90) while a SWORD-USER
+; would have lower one (10-20), and some other characters might be more 50-50
+; A character needs to be more than 50% in the respective sense in order to 
+; equip swords or staffs.  For example a magic ratio > 50 would allow staff,
+; < 50 would allow sword, and == 50 would allow both.
+;
+; The right-hand weapon controls which class of EQUIP item they can hold in their
+; right hand (each class is hard-wired to a single right-hand item, but the
+; world designer can define what those actual items are).  Between the combination
+; of magic-ratio and right-hand you can create some interesting classes.  For example
+; an ARCHER and a MAGIC-ARCHER might both have right-hand set to 'BOW' but different
+; magic-ratios.  The magic-archer (with the higher magic-ratio) would be better at
+; casting spells, but his actual bow-use would be weaker.
+;
+; The default (used in Evergreen) right-hand weapons are:
+;
+;	1	Sword
+;	2	Staff
+;	3	Bow
+;	4	Musical Instrument
+;   5   Fist
+;   6   Dart
+;   7   Book
+;   8   Spirit
+; 
+; if you set arg6 to a value between 1 and 8, then characters of that class will always
+; be born with level 5 training in that hand, no matter what the start_hand_pp option
+; is for that hand. 
+;
+; But if you set this field to 0 (Version A57 and later, only), then no hand will be
+; pre-trained unless you specifically use the start_hand_pp option.
+;
+; Setting this field to zero in versions of WoS before A57 will lead to a bug which can
+; render the character unusable.  If you publish your world later than July 2001, you can
+; probably ignore this comment :)
+;
+; LEVEL NAME GENDERS
+;
+; If you have some level names which would read better for different genders, you may provide
+; alternates.  If you do, these must be in order, left to right, genders 0, 1, 2, and 3.  You
+; *must* provide gender 0 in all cases.  What the individual genders mean is defined in your
+; world's gender.ini file.  In Evergreen the genders are: 0=undefined, 1=male, 2=female, 3-unused.
+; So if I want to have a female version of something, I need to provide 3 entries on those lines,
+; such as:
+;
+;    "Emperor|Emperor|Empress"
+; 
+; Use the 'pipe' symbol to separate the names inside a single set of quotes (don't put each gender in a separate
+; set of quotes.)  The pipe symbol is the SHIFT - \ key on most american keyboards.  You foreigner types are
+; on your own!  (hint: you can copy and paste from above, if your keyboard hasn't got the symbol.)
+;
+; Note that the gender 0 value will be used for any missing entries.  Hence I can provide just the first gender
+; in those cases where male and female can use the same value.  This is no doubt confusing, but it maintains
+; compatibility with existing worlds, and minimizes typing.
+;
+; OPTIONAL CHARACTER LIMITATIONS
+;
+; If you (as the world designer) like, you can apply certain special commands to each
+; character class, generally to limit its access to element and hand training,  You
+; place these commands (one per line) just after the introductory line of the class
+; For example:
+;
+; The class name
+;	100,	0,			20,		0,		"Dingle-User",   10,				1
+;    DESCRIPTION	"Dingle Users are known for their mad dingling skillz...."
+;    MAGIC_RATIO	10
+;    HAND_RATIO		90
+;    MAX_ABILITY 100,100,50,255,0
+;    START_ELEMENT_PP 556,1251,2143,3334,5001,7501,11667,20001		<-- no particular sense to these example values, just levels in order
+;    MAX_ELEMENT_PP 1251,2143,3334,5001,7501,11667,20001,45001
+;    START_HAND_PP 557,1251,2143,3334,5001,7501,11667,20001
+;    MAX_HAND_PP 1251,2143,3334,5001,7501,11667,20001,45001
+; now the class level names
+;	101,	0,			1,		0,		"Dinglet"
+;   etc.
+;	198,	0,			1,		0,		"El Dinglo"
+;	199,	0,			1,		0,		"Dingle King"
+;
+; Each command is optional and applies only to the class within which is is embedded.  See how
+; all the commands appear between line 100 and line 101? 
+; You must provide the information in a fixed syntax, as shown.
+;
+; Here are the available commands:
+;
+;   DESCRIPTION	 "This class sucks.  People who pick it are losers"		
+;	A short text which appears on character creation dialog.  Put text in double quotes
+;
+;	MAGIC_RATIO	n		
+;	Where n is a number from 0 to 100, specifies effectiveness with magical attacks
+;
+;   HAND_RATIO	n
+;	Where n is a number from 1-100, specifies effectiveness of non-magical attacks.  
+;   If you set to '0' it will use "100 - magic ratio" for "balanced" classes.
+;
+;   START_ABILITY str, wis, sta, agi, dex  
+;	Provide all 5 ability values in order, giving the starting level for each.
+;   Valid max levels are 0 to 255.  These should be less than the MAX_ABILITY
+;
+;   MAX_ABILITY str, wis, sta, agi, dex  
+;	Provide all 5 ability values in order, giving the maximum level allowed for each.
+;   Valid max levels are 0 to 255.
+;
+;   START_ELEMENT_PP  0,1,2,3,4,5,6,7
+;	Must have 8 values, in order of +ELEMENTS table.  Sets initial elemental training.
+;   Values range from 0 to 1000000 as described later (PP Levels).
+;
+;   MAX_ELEMENT_PP 0,1,2,3,4,5,6,7 
+;	Must have 8 values, in order of +ELEMENTS table.  Sets max possible elemental training
+;   Values range from 0 to 1000000 as described later (PP Levels).
+;
+;   START_HAND_PP 0,1,2,3,4,5,6,7  
+;	Must have 8 values, in order of +HANDS table. Sets initial right-hand training
+;   Values range from 0 to 1000000 as described later (PP Levels).
+;
+;   MAX_HAND_PP 0,1,2,3,4,5,6,7   
+;	Must have 8 values, in order of +HANDS table. Sets maximum right-hand training.
+;   Values range from 0 to 1000000 as described later (PP Levels).
+;
+;   AUTO_MAX minHP, maxHP, minMP, maxMP, startMPLevel 
+;	Must have all five values.  Sets the max HP and MP levels for each level of the character.
+;   That is to say, you are setting the maxHP and maxMP for level 1 and level 100, and the intermediate levels are
+;   then computed automatically to span those maximums "appropriately" (semi-logarithmic algorithm)
+;	The initial level 1 HP will be minHP, final level 100 HP will be maxHP
+;	The fifth arg (startMPLevel) lets you postpone first MP (maxMP will stay 0 until that level).
+;	NOTE: Actual maximums will be a little lower than you specify because of curve-shaping
+;	If you use this command, the HP and MP entries in your level table for that class will be ignored.
+;
+;	START_LOCATION  <map>, <link>, <dropIn> 
+;	Lets you set where a newly created character will appear on their first
+;	incarnation, based on class.  (so all elves can be born in Elf Town, for example).  Otherwise, they
+;	will appear above link 0 on map 0.  It is your responsibility to make sure the map and link specified
+;	actually exist and 'make sense' (it would be cruel to incarnate a newbie in a tough spot)
+;   As of A76, a third argument (dropIn) is supported.  If this is set to 1 they will incarnate INTO the link
+;   (which logically should be linked to a scene in that case).  Set to 0, or missing, and they will be above the link.
+;
+;   MAX_WALLET n 
+; 	Further limits wallet size to n (0 to 1000000). (cannot make wallets BIGGER than
+;	normal game restrictions.)  Normally characters start off with a wallet holding 20K GP at level 1, with
+;   an additional 10K added for each level, until they reach one million at level 99.
+;
+;   NO_GIFTS
+;	(No arguments). Indicates that class cannot receive money or items from other players.  (but from scripts is OK)
+;
+;   START_ITEMS 1, 2, 3, ...
+;	Lets you give character up to 8 items right at start of game.  
+;	Use valid Item numbers only
+;
+;	START_SPELLS 1, 2, 3, .. 
+;	Lets you give characters up to 8 spells right at start of game
+;	 Use valid Spell IDs only.
+;
+;   START_TOKENS 1, 2, 3...  
+;	Lets you give character up to 8 tokens right at start of game.  
+;	Use valid token numbers only
+;
+;	HIDDEN_CLASS  <startLevel>
+;   (startLevel optional). Class doesn't show up on New Character dialog as an available choice.
+;   You have to be morphed into such a class via "SET num.hostClass, <class#>" script
+;   command. If the <startlevel> argument is included, then the character will be changed to that
+;   level (so long as it is less than their current level).  Hence "HIDDEN_CLASS 20" would lower
+;   a level 40 character to level 20 in the new class, but would NOT raise a level 5 character to
+;   level 20 in the new class.
+;
+;   DEFAULT_SKIN  <skinName0>, <skinName0>, <skinName0>, <skinName0>  (just the names, don't add the .bmp)
+;       This skin will be used for players of this class if you don't have a copy of their actual skin file.
+;       The four skin names are used for the four genders.
+;       This supersedes the gender-specific default skin file in genders.ini
+;
+; Note that the 'preferred right hand training' of each class will always be level 5 at start, no 
+; matter what START_HAND_PP says.  This is for compatibility with existing worlds.  Sorry.
+;
+; PP Levels
+;
+; The PP required for each level grows according to a nasty equation, but here are the PP
+; limits as of the time of this writing.
+;
+; level 0		PP 0 - 554
+; level 1		PP 555 - 1249
+; level 2		PP 1250 - 2141
+; level 3		PP 2142 - 3332
+; level 4		PP 3333 - 4999
+; level 5		PP 5000 - 7499
+; level 6		PP 7500 - 11665
+; level 7		PP 11666 - 19999
+; level 8		PP 20000 - 44999
+; level 9		PP 45000 - 1000000 (one million)(you approach level 9.9999999 asymptotically)
+;
+; Note that is the total PP which affects your skill and the level numbers are somewhat arbitrary
+; so a training level 3 with 3333 PP will hit harder than a training level 3 with 2143 PP
+;
+; To protect yourself against floating point round off issues from one version of windows to
+; another, I recommend not using these exact values, but include a safety buffer.  So, for example
+; if you wanted a STARTING level of 4, use 3350 instead of 3333.  And if you want a MAXIMUM level
+; of 4, use 4970, not 4999.  A 20 unit buffer should not be noticeable by the user and might make
+; your world more reliable.
+;
+
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; First the Warrior levels (100 + level #)
+;  CCLL	    ???????.	MaxHP	maxMP	Level_name		Magic Ratio		Right-Hand
+;	0		1			2		3		4				5				6
+;
+; The class name (sword user, magic ratio of 10.. ergo hand ratio of 90.. preferred right-hand weapon is #1 (sword))
+	100,	0,			20,		0,		"Sword-User",   10,				1
+
+; Next the special commands for the sword-user class.  These come between line nn00 and line nn01
+	DESCRIPTION	"Warriors are often the first to battle, and last to leave.  Though mightiest with blade, they eventually pick up some minor magical skills"
+	AUTO_MAX	20, 3759,  10, 1186,  20		
+;   START_ABILITY str, wis, sta, agi, dex  
+	START_ABILITY   0,  0,   10,   0,   0
+
+	DEFAULT_SKIN	adventurer, adventurer, Tracker2, Tracker2
+
+
+; now the class level names.. note that since I used the AUTO_MAX command, the maxHP and maxMP values shown in this
+; table are actually ignored.  If I weren't so lazy, I would change them all to 0.
+
+	101,	0,			1,		0,		"Barbarian"
+	105,	0,			2,		0,		"Fighter"
+	110,	0,			5,		0,		"Soldier"
+	120,	0,			8,		10,		"Warrior"
+	130,	0,			10,		0,		"Ranger"
+	140,	0,			14,		10,		"Dragoon"
+	150,	0,			22,		0,		"Knight"
+	160,	0,			28,		20,		"Templar"
+	170,	0,			36,		0,		"Paladin"
+	180,	0,			50,		20,		"Conqueror"
+	190,	0,			65,		0,		"Emperor||Emperess"
+;
+;---
+; Now the Wizard levels (200 + level #)
+;  CCLL	    ???			MaxHP	maxMP	Level_name			Magic-ratio		Right-Hand
+;	0		1			2		3		4					5				6
+;
+; The class name
+	200,	0,			15,		5,		"Magic-User",		90,				2
+
+; now the special commands for the magic user class.  These also come between line nn00 and nn01 (200 and 201 for this
+; class)
+
+	DESCRIPTION	"No one trusts a magician.  Their arcane activities are opaque to the outsider. Yet their hearts beat to the same rhythm."
+	AUTO_MAX	15, 3321,  10, 2184,  0	
+;   START_ABILITY str, wis, sta, agi, dex  
+	START_ABILITY   0,  10,   0,   0,   0
+
+	DEFAULT_SKIN	Warlock2, Warlock2, Enchantress, Enchantress
+
+
+; the class level names for the magic-user class
+	201,	0,			1,		2,		"Shaman"
+	205,	0,			2,		5,		"Enchanter",		
+	210,	0,			4,		10,		"Magician",			
+	220,	0,			7,		15,		"Conjuror",			
+	230,	0,			8,		15,		"Mage",				
+	240,	0,			11,		20,		"Wizard",			
+	250,	0,			18,		25,		"Sorcerer||Sorceress",			
+	260,	0,			22,		30,		"Thaumaturge",		
+	270,	0,			28,		35,		"Demonologist",		
+	280,	0,			40,		40,		"Necromancer"
+	290,	0,			55,		55,		"Deity",
+;			
+;---
+; Now the Archer levels (300 + level #)
+;  CCLL	    Exp_Pts.	MaxHP	maxMP	Level_name			Magic-ratio		Right-Hand
+;	0		1			2		3		4					5				6
+;
+; The class name
+	300,	0,			18,		2,		"Bow-User",			40,				3
+
+	DESCRIPTION	"Archers tend to be aloof, as their elegant weapons do not require such closed quarters. But only a narrow shaft stands between them and their doom."
+	AUTO_MAX	20, 3656,  10, 1435,  5	
+;   START_ABILITY str, wis, sta, agi, dex  
+	START_ABILITY   0,  0,   0,   10,   0
+
+	DEFAULT_SKIN	Atlatler, Atlatler, Elf2, Elf2
+
+; the class levels
+	301,	0,			2,		2,		"Stringer"			
+	305,	0,			4,		3,		"Shafter",		
+	310,	0,			6,		6,		"Bowman||Bowwoman",			
+	320,	0,			9,		9,		"Arrow Head",			
+	330,	0,			12,		11,		"Archer",				
+	340,	0,			15,		16,		"Long Arrow",			
+	350,	0,			20,		20,		"Boltman||Boltwoman",			
+	360,	0,			25,		22,		"Master Bowman||Master Boltwoman",		
+	370,	0,			32,		27,		"Arbelest",		
+	380,	0,			48,		32,		"Master Archer"
+	390,	0,			65,		40,		"Quiver Lord||Quiver Lady",
+;
+;	
+;---
+; Now the MUSE levels (400 + level #)
+;  CCLL	    Exp_Pts.	MaxHP	maxMP	Level_name			Magic-ratio		Right-Hand
+;	0		1			2		3		4					5				6
+;
+; The class name
+	400,	0,			18,		2,		"Music-User",		60,				4
+
+	DESCRIPTION	"Everyone loves a good song, but people take notice when a muse in the vicinity. Trained in the dark side of melody, their instruments can kill."
+	AUTO_MAX	20, 2954,  10, 1435,  5	
+;   START_ABILITY str, wis, sta, agi, dex  
+	START_ABILITY   0,  0,   0,   10,   0
+
+	DEFAULT_SKIN	Muse2, Muse2, Sylph2, Sylph2
+
+; the class levels
+	401,	0,			1,		2,		"Castrati||Maiden"			
+	405,	0,			2,		5,		"Novice",		
+	410,	0,			5,		10,		"Hummer",			
+	420,	0,			8,		15,		"Yodeler",			
+	430,	0,			10,		15,		"Crooner",				
+	440,	0,			12,		20,		"Chanter||Chanteuse",			
+	450,	0,			15,		25,		"Singer",			
+	460,	0,			20,		30,		"Musician",		
+	470,	0,			30,		35,		"Troubador",		
+	480,	0,			50,		40,		"Virtuoso"
+	490,	0,			65,		55,		"Muse",
+
+;
+;	
+;---
+; Now the FIST levels (500 + level #)
+;  CCLL	    Exp_Pts.	MaxHP	maxMP	Level_name			Magic-ratio		Right-Hand
+;	0		1			2		3		4					5				6
+;
+; The class name
+	500,	0,			20,		0,		"Fist-User",		5,				5
+
+	DESCRIPTION	"These feisty warriors take a hands-on approach, with a minimum of metal between their fists and their enemy's tender parts. They also disdain the use of magic."
+	AUTO_MAX	20, 3549,  10, 1285,  18	
+;   START_ABILITY str, wis, sta, agi, dex  
+	START_ABILITY   10,  0,   0,   0,   0
+
+	DEFAULT_SKIN	Brawler2, Brawler2, Feisty2, Feisty2
+
+
+; the class levels
+	501,	0,			2,		1,		"Baby"			
+	505,	0,			3,		2,		"Punk",		
+	510,	0,			7,		4,		"Bully",			
+	520,	0,			10,		7,		"Scrapper",			
+	530,	0,			12,		9,		"Tussler",				
+	540,	0,			14,		11,		"Rumbler",			
+	550,	0,			22,		15,		"Brawler",			
+	560,	0,			28,		18,		"Contender",		
+	570,	0,			36,		21,		"Boxer",		
+	580,	0,			50,		24,		"Pugilist"
+	590,	0,			65,		27,		"Heavyweight",
+
+
+;
+;	
+;---
+; Now the DART levels (600 + level #)
+;  CCLL	    Exp_Pts.	MaxHP	maxMP	Level_name			Magic-ratio		Right-Hand
+;	0		1			2		3		4					5				6
+;
+; The class name
+	600,	0,			18,		0,		"Dart-User",		20,				6
+
+	DESCRIPTION	"These shy fighters prefer to lurk in the shadows, from which they can hurl sharp objects at their enemies with minimum chance of personal injury."
+	AUTO_MAX	20, 4217,  10, 1467,  10	
+;   START_ABILITY str, wis, sta, agi, dex  
+	START_ABILITY   0,   0,   0,   5,   5
+
+	DEFAULT_SKIN	Shriukener2, Shriukener2, "Bola Thrower2", "Bola Thrower2"
+
+
+; the class levels
+	601,	0,			1,		1,		"Camper"			
+	605,	0,			2,		2,		"Pitcher",		
+	610,	0,			5,		4,		"Hurler",			
+	620,	0,			8,		6,		"Pelter",			
+	630,	0,			10,		8,		"Lobber",				
+	640,	0,			12,		11,		"Sniper",			
+	650,	0,			15,		15,		"Shadow",			
+	660,	0,			20,		20,		"Assassin",		
+	670,	0,			30,		25,		"Ballista",		
+	680,	0,			50,		30,		"Catapulter"
+	690,	0,			65,		35,		"Ninja",
+
+
+;
+;	
+;---
+; Now the BOOK levels (700 + level #)
+;  CCLL	    Exp_Pts.	MaxHP	maxMP	Level_name			Magic-ratio		Right-Hand
+;	0		1			2		3		4					5				6
+;
+; The class name
+	700,	0,			10,		8,		"Book-User",		70,				7
+
+	DESCRIPTION	"Education is key with these fighters. Their vast knowledge of arcane lore gives them almost magical powers."
+	AUTO_MAX	20, 2823,  10, 1954,  0	
+;   START_ABILITY str, wis, sta, agi, dex  
+	START_ABILITY   0,  10,   0,   0,   0
+
+	DEFAULT_SKIN	 Wizard2, Wizard2, sorceress, sorceress
+
+
+; the class levels
+	701,	0,			1,		2,		"Flunky"			
+	705,	0,			2,		5,		"Diletante",		
+	710,	0,			5,		8,		"Pupil",			
+	720,	0,			8,		12,		"Student",			
+	730,	0,			10,		14,		"Tutor",				
+	740,	0,			12,		16,		"Instructor",			
+	750,	0,			15,		19,		"Teacher",			
+	760,	0,			20,		23,		"Professor",		
+	770,	0,			30,		30,		"Scholar",		
+	780,	0,			50,		35,		"Researcher"
+	790,	0,			65,		55,		"Pundit",
+
+
+;
+;	
+;---
+; Now the SPIRIT levels (800 + level #)
+;  CCLL	    Exp_Pts.	MaxHP	maxMP	Level_name			Magic-ratio		Right-Hand
+;	0		1			2		3		4					5				6
+;
+; The class name
+	800,	0,			8,		20,		"Spirit-User",		80,				8
+
+	DESCRIPTION	"These deeply religious souls act as mediums, channeling the forces of spirits from another domain. They are also skillful magicians."
+	AUTO_MAX	20, 3081,  10, 1954,  0	
+;   START_ABILITY str, wis, sta, agi, dex  
+	START_ABILITY   0,  5,   5,   0,   0
+
+	DEFAULT_SKIN	Elemental2, Elemental2, Nymph, Nymph
+
+
+
+; the class levels
+	801,	0,			1,		5,		"Charlatan"			
+	805,	0,			2,		8,		"Gentile",		
+	810,	0,			4,		15,		"Medium",			
+	820,	0,			6,		20,		"Preacher",			
+	830,	0,			8,		25,		"Channeler",				
+	840,	0,			10,		30,		"Priest||Priestess",			
+	850,	0,			13,		35,		"Monastic",			
+	860,	0,			16,		40,		"Bishop",		
+	870,	0,			19,		45,		"Spirit Guide",		
+	880,	0,			24,		50,		"Ecclesiast"
+	890,	0,			65,		55,		"Oracle",
+
+;	
+;---
+; Now the OLD SCAVENGER levels (900 + level #)
+;  CCLL	    Exp_Pts.	MaxHP	maxMP	Level_name			Magic-ratio		Right-Hand
+;	0		1			2		3		4					5				6
+;
+; The class name
+	900,	0,			8,		20,		"X-treme!",			5,				0
+
+	DESCRIPTION	"Members of this class reject the filthy contamination of gold or gifts.  They use only what they find after battle.  They are EXTREME Hard-Core, Old-School!.  They are also a bit weak. They carry NO gold."
+	AUTO_MAX	20, 2407,  10, 1954,  0	
+	MAX_WALLET	0		; these guys don't believe in money
+	NO_GIFTS			; these guys can't accept stuff from other players
+	MAGIC_RATIO	45
+	HAND_RATIO	45
+	START_HAND_PP 1000,1000,1000,1000,1000,1000,1000,1000
+	MAX_HAND_PP 5000,5000,5000,5000,5000,5000,5000,5000
+	MAX_ABILITY 100,100,100,100,100
+
+	DEFAULT_SKIN	"Battle Dwarf", "Battle Dwarf", Assassin2, Assassin2
+
+
+; the class levels
+	901,	0,			1,		5,		"X-Fool"			
+	905,	0,			2,		8,		"X-Prude",		
+	910,	0,			4,		15,		"X-Oppressor",			
+	920,	0,			6,		20,		"X-Steward",			
+	930,	0,			8,		25,		"X-Tyrant",				
+	940,	0,			10,		30,		"X-Stoic",			
+	950,	0,			13,		35,		"X-Disciple",			
+	960,	0,			16,		40,		"X-Purist",		
+	970,	0,			19,		45,		"X-Ascetic",		
+	980,	0,			24,		50,		"X-Spartan"
+	990,	0,			65,		55,		"X-Hardcore",
+
+;	
+;---
+; Now the BEGGAR levels (1000 + level #)
+;  CCLL	    Exp_Pts.	MaxHP	maxMP	Level_name			Magic-ratio		Right-Hand
+;	0		1			2		3		4					5				6
+;
+; The class name
+	1000,	0,			8,		20,		"Beggar",		50,				5
+
+	DESCRIPTION	"These filthy beggars depend upon your largesse for their success.  They can carry no more than 100GP at a time."
+	AUTO_MAX	20, 2688,  10, 1954,  0	
+	MAX_WALLET	100		; these guys don't have MUCH money
+	MAGIC_RATIO	50
+	HAND_RATIO	50
+
+	DEFAULT_SKIN	"Killer Death Hen2", "Killer Death Hen2", "Killer Death Hen", "Killer Death Hen"
+
+
+; the class levels
+	1001,	0,			1,		5,		"Hobo"			
+	1005,	0,			2,		8,		"Transient",		
+	1010,	0,			4,		15,		"Stricken",			
+	1020,	0,			6,		20,		"Pauper",			
+	1030,	0,			8,		25,		"Leech",				
+	1040,	0,			10,		30,		"Tramp",			
+	1050,	0,			13,		35,		"Pleader",			
+	1060,	0,			16,		40,		"Supplicant",		
+	1070,	0,			19,		45,		"Indigent",		
+	1080,	0,			24,		50,		"Vagabond"
+	1090,	0,			65,		55,		"Mendicant",
+
+
+;	
+;---
+; Now the SPARTAN levels (1100 + level #)
+;  CCLL	    Exp_Pts.	MaxHP	maxMP	Level_name			Magic-ratio		Right-Hand
+;	0		1			2		3		4					5				6
+;
+; The class name
+	1100,	0,			8,		20,		"Scavenger",		80,				0
+
+	DESCRIPTION	"Members of this class reject the filthy contamination of gold or gifts.  They use only what they find after battle.  They carry NO gold."
+	AUTO_MAX	20, 2407,  10, 1954,  0	
+	MAX_WALLET	0		; these guys don't believe in money
+	NO_GIFTS			; these guys can't accept stuff from other players
+	MAGIC_RATIO	60
+	HAND_RATIO	75
+	START_HAND_PP 3334,3334,3334,3334,3334,3334,3334,3334
+
+	DEFAULT_SKIN	Mercenary2, Mercenary2, Rogue, Rogue
+
+
+; the class levels
+	1101,	0,			1,		5,		"Fool"			
+	1105,	0,			2,		8,		"Prude",		
+	1110,	0,			4,		15,		"Oppressor",			
+	1120,	0,			6,		20,		"Steward",			
+	1130,	0,			8,		25,		"Tyrant",				
+	1140,	0,			10,		30,		"Stoic",			
+	1150,	0,			13,		35,		"Disciple",			
+	1160,	0,			16,		40,		"Purist",		
+	1170,	0,			19,		45,		"Ascetic",		
+	1180,	0,			24,		50,		"Spartan"
+	1190,	0,			65,		55,		"Hardcore",
+
+;	
+;---
+; This last class is a joke, just to test the class number stuff... can I really have 88 classes now?
+; Be careful not to use levels above 25 until everyone has upgraded to A67.
+; This is the HIGHEST LEGAL NUMBERED CLASS (as of A67).  Do NOT try to make a class 89.
+;
+; Now the PIANO levels (8800 + level #)
+;  CCLL	    Exp_Pts.	MaxHP	maxMP	Level_name			Magic-ratio		Right-Hand
+;	0		1			2		3		4					5				6
+;
+; The class name
+	8800,	0,			8,		20,		"Piano-User",		20,				0
+
+	DESCRIPTION	"Members of this class live and die by the piano.  They have no interest in leveling or PKing.  They suck."
+	AUTO_MAX	20, 2407,  10, 1954,  0	
+	MAGIC_RATIO	20
+	HAND_RATIO	20
+	START_HAND_PP 3334,3334,3334,3334,3334,3334,3334,3334
+;   START_ABILITY str, wis, sta, agi, dex  
+	START_ABILITY   0,   0,   0,   0,  10
+	START_LOCATION  2, 13, 1
+	DEFAULT_SKIN	"Moor Cat2", "Moor Cat2", "Moor Cat", "Moor Cat"
+
+
+; the class levels
+	8801,	0,			1,		5,		"Mover"			
+	8805,	0,			2,		8,		"Chopsticks",		
+	8810,	0,			4,		15,		"Chord",			
+	8820,	0,			6,		20,		"Student",			
+	8830,	0,			8,		25,		"HonkyTonk",				
+	8840,	0,			10,		30,		"Tuner",			
+	8850,	0,			13,		35,		"Classical",			
+	8860,	0,			16,		40,		"Professional",		
+	8870,	0,			19,		45,		"Prodigy",		
+	8880,	0,			24,		50,		"Impressario"
+	8890,	0,			65,		55,		"Chopin",
+
+
+
+
+; Be sure to leave this comment or a blank line at the very end

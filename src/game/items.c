@@ -116,8 +116,8 @@ int items_attr_assign(int ability)
 static int travel(const ItemDef *item)
 {
     if (item->travel_scene != 0 && game_current_scene() != item->travel_scene) {
-        wos_log_event("travel_failed","reason=scene scene=%d need=%d",
-                      game_current_scene(), item->travel_scene);
+        wos_log_event("travel_failed","reason=scene item=%d scene=%d need=%d",
+                      item->klass,game_current_scene(), item->travel_scene);
         say("Travel Failed.");
         return 0;
     }
@@ -125,6 +125,9 @@ static int travel(const ItemDef *item)
                                               item->travel_drop_in);
     else game_enter_scene(item->travel_map_scene, NULL);
     say("Travel.");
+    wos_log_event("travel","item=%d mode=%d map=%d link=%d drop_in=%d",
+                  0,item->travel_mode,item->travel_map_scene,item->travel_link,
+                  item->travel_drop_in);
     return 1;
 }
 

@@ -833,11 +833,14 @@ static void read_config(void)
         "petsCanBitePeople","maxUnspentPP","maxPKAttackAdvantage","startingGP",
         "worldHomeUrl","tacticsSourceUrl"
     };
-    /* The DEFAULT column is the string each call site pushes, which is not always the
-     * InitInstance pre-init value at 0x41E300. spellSuccessPercent defaults to "0", NOT
-     * the 100 written at 0x41E315: 0x41E922 pushes ebx = 0x4DCAF4 = "0". */
+    /* The DEFAULT column is the FIRST argument pushed at each FUN_0047C5C5 call site, read off
+     * 0x41E8A5..0x41EB3D. It is sometimes an immediate and sometimes `push %ebx`, and %ebx only
+     * changes twice in the whole run: `mov ebx,0x4e246c` ("100") at 0x41E8B1, then
+     * `mov ebx,0x4dcaf4` ("0") at 0x41E93A. So spellSuccessPercent, pushed at 0x41E922, still
+     * gets "100" - the 0x41E93A reload serves karmaPointsAreAlsoWarPoints onwards. Verified by
+     * walking the push sequence, not by reading the nearest mov. */
     static const char *const fallback[CONFIG_KEYS]={
-        "GP","100","100","0","0","0","0","0","0","0","1","1000000","80","1000","",""
+        "GP","100","100","100","0","0","0","0","0","0","1","1000000","80","1000","",""
     };
     const char *value[CONFIG_KEYS];
     char path[1024], *text;
