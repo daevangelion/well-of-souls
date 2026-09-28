@@ -1,5 +1,6 @@
 #ifdef __ANDROID__
 #include "platform/platform.h"
+#include "install.h"
 #include <SDL.h>
 #include <SDL_system.h>
 #include <errno.h>
@@ -81,6 +82,16 @@ int wos_android_paths(char *data, char *save, size_t capacity)
     if (make_path(data, root, "data") || make_path(save, root, "saves") ||
         plat_mkdir(data) || plat_mkdir(save) || make_path(marker, root, "installed-manifest.txt") ||
         make_path(temporary, root, "installed-manifest.part")) return -1;
+    /* Runtime supply: if the game data is not installed yet but the user supplied an
+     * installer (WosActivity writes it to installer-supplied.bin via the SAF picker or
+     * an HTTP download), decode it into the data dir with the native CIC decoder. Once
+     * installed, the Souls.exe check short-circuits this on every later launch. */
+    if (!wos_data_installed(data)) {
+        char supplied[PATH_CAP];
+        if (!make_path(supplied, root, "installer-supplied.bin") &&
+            wos_install_from_file(supplied, data, NULL, NULL) == 0)
+            return 0;
+    }
     rw = SDL_RWFromFile("wos-manifest.txt", "rb");
     if (!rw) return -1;
     length = SDL_RWsize(rw);
