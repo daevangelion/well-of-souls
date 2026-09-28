@@ -100,7 +100,7 @@ static CicResult unpack(const unsigned char *image, size_t len, const char *out_
                 uint32_t dec = (uint32_t)image[dstart] | ((uint32_t)image[dstart+1] << 8) |
                                ((uint32_t)image[dstart+2] << 16) | ((uint32_t)image[dstart+3] << 24);
                 unsigned char comp = image[dstart + 4];
-                if (comp == 1 && dec > 0 && dec <= CIC_MAX_BLOCK) {
+                if (comp == 1 && dec > 0 && dec <= CIC_MAX_BLOCK && dstart + 7 <= len) {
                     unsigned char *out = (unsigned char *)malloc(dec);
                     if (!out) { free(file_list); return CIC_ERR_MEMORY; }
                     int got = inflate_deflate(image + dstart + 7, len - (dstart + 7), out, dec);
@@ -183,12 +183,21 @@ static CicResult unpack(const unsigned char *image, size_t len, const char *out_
             size_t base = data_block + (size_t)f->off + 4;
             unsigned char method = 0;
             if (base >= len || !at(image, len, base, &method)) { fclose(out); rc = CIC_ERR_FORMAT; break; }
+            /* Bound the payload against the image before using the (untrusted) sizes:
+             * a corrupt/hostile file list can point past the image or wrap lengths. */
+            if (method == 0) {
+                if (base + 1 > len || (size_t)f->unc > len - (base + 1)) { fclose(out); rc = CIC_ERR_FORMAT; break; }
+            } else if (method == 1) {
+                if (base + 3 > len) { fclose(out); rc = CIC_ERR_FORMAT; break; }
+            } else if (method == 2) {
+                if (base + 1 > len) { fclose(out); rc = CIC_ERR_FORMAT; break; }
+            } else { fclose(out); rc = CIC_ERR_FORMAT; break; }
             unsigned char *buf = (unsigned char *)malloc(f->unc);
             if (!buf) { fclose(out); rc = CIC_ERR_MEMORY; break; }
             int got = -1;
             if (method == 1)      got = inflate_deflate(image + base + 3, len - (base + 3), buf, f->unc);
             else if (method == 2) got = inflate_bzip2(image + base + 1, len - (base + 1), buf, f->unc);
-            else if (method == 0) { memcpy(buf, image + base + 1, f->unc); got = (int)f->unc; }
+            else                  { memcpy(buf, image + base + 1, f->unc); got = (int)f->unc; }
             if (got != (int)f->unc) { free(buf); fclose(out); rc = CIC_ERR_CODEC; break; }
             total_out += f->unc;
             if (total_out > CIC_MAX_TOTAL) { free(buf); fclose(out); rc = CIC_ERR_MEMORY; break; }

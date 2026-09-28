@@ -2,6 +2,7 @@
 #include "third_party/tsf.h"
 #include "third_party/tml.h"
 #include <SDL.h>
+#include <SDL_system.h>
 #include <limits.h>
 #include <math.h>
 #include <string.h>
@@ -54,8 +55,19 @@ static tsf *find_soundfont(void)
 #ifdef _WIN32
     if (!home || !*home) home = SDL_getenv("USERPROFILE");
 #endif
-    /* A user-supplied bank (written by the app's first-run supply flow) takes
-     * precedence over the bundled/default one. */
+    /* A user-supplied bank (written by the app's supply flow) takes precedence over
+     * the bundled/default one. On Android SDL never sets HOME to the app's internal
+     * storage, so check SDL_AndroidGetInternalStoragePath() (== getFilesDir()) directly. */
+#ifdef __ANDROID__
+    {
+        const char *adir = SDL_AndroidGetInternalStoragePath();
+        if (adir && *adir) {
+            n = SDL_snprintf(path, sizeof(path), "%s/user-soundfont.sf2", adir);
+            if (n >= 0 && n < (int)sizeof(path)) font = load_soundfont(path, 0);
+            if (font) return font;
+        }
+    }
+#endif
     if (home && *home) {
         n = SDL_snprintf(path, sizeof(path), "%s/user-soundfont.sf2", home);
         if (n >= 0 && n < (int)sizeof(path)) font = load_soundfont(path, 0);

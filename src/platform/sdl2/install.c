@@ -24,21 +24,33 @@ static void on_progress(int done, int total, void *user) {
     if (cb) cb(done, total, NULL);
 }
 
+/* A data tree only counts as installed once the decoder finished cleanly and we wrote
+ * the completion marker. Souls.exe alone is NOT enough (it is file ~719/875, so a
+ * partial/failed extraction would be trusted forever). */
 int wos_data_installed(const char *data_dir) {
     char path[4096];
     if (!data_dir || !*data_dir) return 0;
+    snprintf(path, sizeof(path), "%s/.install-complete", data_dir);
+    if (!plat_fopen(path, "rb")) return 0;
     snprintf(path, sizeof(path), "%s/Souls.exe", data_dir);
     return plat_fopen(path, "rb") != NULL;
 }
 
 int wos_install_from_memory(const unsigned char *bytes, size_t len, const char *data_dir,
                             WosInstallProgress progress, void *user) {
+    char marker[4096];
+    FILE *m;
     if (!bytes || !len) { set_message("empty installer"); return 1; }
     if (!data_dir || !*data_dir) { set_message("no data directory"); return 1; }
     if (progress) progress(0, 0, NULL);
     decoded_count = 0;
+    /* Remove any stale marker so a failed decode is never trusted. */
+    snprintf(marker, sizeof(marker), "%s/.install-complete", data_dir);
+    remove(marker);
     CicResult r = cic_unpack_memory(bytes, len, data_dir, on_progress, (void *)progress);
     if (r != CIC_OK) { set_message("unpack failed: %s", cic_result_string(r)); return 1; }
+    m = fopen(marker, "wb");           /* written only after a clean decode */
+    if (m) fclose(m);
     set_message("installed %d files", decoded_count);
     (void)user;
     return 0;

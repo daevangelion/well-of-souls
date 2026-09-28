@@ -32,13 +32,30 @@ public final class WosActivity extends SDLActivity {
                 || new File(getFilesDir(), SUPPLIED).isFile();
     }
 
+    private void offerSupplyForm() {
+        if (!dataReady()) startActivity(new Intent(this, SupplyActivity.class));
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);   // always start SDL
-        if (!dataReady()) {
-            // Fresh install: open the supply form. The native thread waits in the
-            // background; supplying the installer makes it decode and boot the game.
-            startActivity(new Intent(this, SupplyActivity.class));
-        }
+        offerSupplyForm();                    // fresh install: supply form; native waits behind it
+    }
+
+    // WosActivity is singleTask, so relaunching the icon while data is absent delivers
+    // onNewIntent (not onCreate) -> re-offer the form instead of showing an empty game.
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        offerSupplyForm();
+    }
+
+    // While the native thread is blocked waiting for the installer, tearing SDL down
+    // (Back -> nativeSendQuit + mSDLThread.join) ANRs for the rest of the wait. Ignore
+    // Back until data is ready.
+    @Override
+    public void onBackPressed() {
+        if (dataReady()) super.onBackPressed();
     }
 }

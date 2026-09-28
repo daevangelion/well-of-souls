@@ -52,7 +52,7 @@ public final class SupplyActivity extends Activity {
         progress = findViewById(R.id.progress);
         Button pick = findViewById(R.id.pickButton);
         Button download = findViewById(R.id.downloadButton);
-        Button game = findViewById(R.id.gameButton);
+        gameButton = findViewById(R.id.gameButton);
         EditText url = findViewById(R.id.urlField);
 
         pick.setOnClickListener(v -> launchPicker());
@@ -61,12 +61,16 @@ public final class SupplyActivity extends Activity {
             if (u.isEmpty()) { setStatus("Enter a URL first.", false); return; }
             downloadInBackground(u);
         });
-        game.setOnClickListener(v -> openGame());
+        gameButton.setOnClickListener(v -> openGame());
         refresh();
     }
 
+    private Button gameButton;
+
     private void refresh() {
-        if (dataReady()) {
+        boolean ready = dataReady();
+        if (gameButton != null) gameButton.setEnabled(ready);
+        if (ready) {
             setStatus("Installer ready. Tap Continue to game.", false);
         } else {
             setStatus("Waiting for the installer…", true);
@@ -79,9 +83,14 @@ public final class SupplyActivity extends Activity {
     }
 
     private void openGame() {
+        // Guard: launching the game with no data just triggers the 5-minute wait and
+        // the failure box. Only proceed once the installer is present.
+        if (!dataReady()) { setStatus("Supply the installer first.", false); refresh(); return; }
         startActivity(new Intent(this, WosActivity.class));
         finish();
     }
+
+
 
     private void launchPicker() {
         Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
