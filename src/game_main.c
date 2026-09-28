@@ -51,7 +51,7 @@ void game_request_quit(void) { quitting = 1; }
 typedef void (*DumpFn)(DumpEmit, void *);
 #define WOS_DUMP(n) extern void n##_dump(DumpEmit, void *);
 WOS_DUMP(hero) WOS_DUMP(map) WOS_DUMP(scene) WOS_DUMP(battle)
-WOS_DUMP(panels) WOS_DUMP(items) WOS_DUMP(minigame) WOS_DUMP(options)
+WOS_DUMP(panels) WOS_DUMP(items) WOS_DUMP(minigame) WOS_DUMP(options) WOS_DUMP(world)
 #undef WOS_DUMP
 #define WOS_WEAK __attribute__((weak))
 WOS_WEAK void hero_dump(DumpEmit e, void *u) { (void)e; (void)u; }
@@ -62,6 +62,7 @@ WOS_WEAK void panels_dump(DumpEmit e, void *u) { (void)e; (void)u; }
 WOS_WEAK void items_dump(DumpEmit e, void *u) { (void)e; (void)u; }
 WOS_WEAK void minigame_dump(DumpEmit e, void *u) { (void)e; (void)u; }
 WOS_WEAK void options_dump(DumpEmit e, void *u) { (void)e; (void)u; }
+WOS_WEAK void world_dump(DumpEmit e, void *u) { (void)e; (void)u; }
 
 typedef struct { const char *label; DumpFn fn; } DumpEntry;
 static const DumpEntry dump_table[] = {
@@ -74,7 +75,8 @@ static const DumpEntry dump_table[] = {
     { "panels", panels_dump },
     { "items",  items_dump },
     { "minigame", minigame_dump },
-    { "options", options_dump }
+    { "options", options_dump },
+    { "world",   world_dump }
 };
 #define DUMP_ENTRIES ((int)(sizeof(dump_table) / sizeof(dump_table[0])))
 

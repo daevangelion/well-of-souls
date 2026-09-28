@@ -292,6 +292,72 @@ backlog. Re-arming is from the **deadline**, not from the dispatch instant; the 
 readings differ by exactly the coalesced backlog, which is the kind of thing that shows
 up as a three-second drift in a four-second spell.
 
+### 3.4 The measured pump model at the title screen
+
+Everything in this section is measured, not inferred. `WOS_MSGLOG=1` (with
+`WOS_MSGLOG_MS=<virtual ms>` to bound it) makes the hook log **every** message the app's
+own pump takes — id, target window, window class, the remove flag — plus every
+`PostMessageA`/`SendMessageA`/`SetCursorPos` with the caller's return address, and every
+move of the 20 Hz stamp.
+
+**The app's loop is a Peek/Get pair, not a PeekMessage idle loop.** The stream is
+literally `Peek(PM_NOREMOVE)` then `Get(PM_REMOVE)` for every message, and
+`PeekMessage` **never returns FALSE** — not once in a whole run. The idle counter in the
+log stays at 0 from the first step to `WM_QUIT`.
+
+That is the answer to "why does the 20 ms gate stamp lag". It is not that the queue is
+busy: it is that **the original has no PeekMessage-based idle loop on this path at all**,
+so the queue being empty is never *observed*. `FUN_0040A7C7` is entered from an idle
+handler, the idle handler is only reached from a `PeekMessage` that returned FALSE, and
+that never happens. The live proof is in the log itself: with `WOS_MSGLOG=1` the
+`gate=` field the pump prints is **`00000000` for every step of the run**. `_DAT_004DD510`
+is never written once. The stamp does not lag the clock; it never moves, and the 20 ms
+work runs once per message the app happens to be given, not once per 20 ms of time.
+
+**The messages that exist at the title**, in the order they arrive, with no input at all
+(`at 0 dump clock` / `end 1500`):
+
+| virtual ms | id | window | class | what |
+|---|---|---|---|---|
+| 0 | `0x036A` | `00010070` | `Afx:400000:b:1004e:6:1005a` "Well of Souls" | MFC42 private message, `SendMessage` from `0x5F40DF1A` |
+| 20 | `0x0362` | `00010070` | same | MFC42 private message, `wParam=0xE001` |
+| 60 | `0x0200` `WM_MOUSEMOVE` | `0001007A` | `AfxFrameOrView42` | one real pointer motion, `lParam=0x00ED017A` (493,378) |
+| 100 | `0x0113` `WM_TIMER` | `000101AE` | `#32770` "Book of Tactics" | **live timer, id 2, 100 ms** |
+| 1500 | `0x0113` `WM_TIMER` | `00010070` | main frame | **live timer, id 0x16, 100 ms** |
+| 1500 | `0x0012` `WM_QUIT` | — | — | posted by the harness at `end` |
+
+`oracle.timers_live=2` and `oracle.next_deadline=100` in every dump, which is the same
+fact from the other side. **The two live 100 ms timers are the ones the front end arms at
+boot, and they belong to `FUN_0040A8D9`'s owner, i.e. Core/FrontHero-2 — not to any
+module:**
+
+* id `0x16` (22), 100 ms, on the **main frame** `00010070`, armed by `SetTimer` at
+  **`0x00428803`** in `FUN_00428360` (which calls `FUN_004094E7` first; the timer slot is
+  `this+0x114`).
+* id `2`, 100 ms, on the **"Book of Tactics" dialog** `000101AE` (class `#32770`), armed
+  by `SetTimer` at **`0x00455F6D`** in `FUN_00455F56`, the WoS Tactics dialog's
+  `OnInitDialog` (slot `this+0x60`).
+
+**Is the model real Windows or a harness artefact?** It is real, with one caveat that
+does not change the model. The `0x036A`/`0x0362` pair and the `Peek`-then-`Get` shape are
+MFC42 and Wine, not Wine-specific behaviour: MFC's `CWinApp::PumpMessage` tests with
+`PeekMessage(PM_NOREMOVE)` and then takes with `GetMessage`, and it returns FALSE from
+`PumpMessage` only when the *test* fails — and under this path the test never fails
+because nothing in the loop ever lets the queue be observed empty. The one message that
+is genuinely the harness's is the single `WM_MOUSEMOVE` at (493,378): it is posted by
+Wine from the X11 pointer, and it happens once. The port must not model it as a
+repeating event.
+
+**What the port therefore implements.** At the title, in one virtual second: two MFC
+private messages, one real mouse move, and then nothing until the two 100 ms timers fire.
+The 20 ms gate work runs **once per message the pump delivers**, never on a wall-clock
+schedule, and `_DAT_004DD510` stays at 0. `rng.calls` is therefore a function of the
+message count, and the port's `clock_20hz_next()` / `clock_idle_due()` must be driven by
+the same thing — a delivered-message counter — not by elapsed virtual time. Over *N* ms
+of a *quiet* title the original delivers 0 messages, so the correct answer is 0 ticks,
+not `floor(N/20)`.
+
+
 ---
 
 ## 4. The `.dsc` diff script

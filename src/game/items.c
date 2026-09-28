@@ -19,38 +19,28 @@ static const char *const ability_names[HERO_ABILITIES] = {
     "Strength", "Wisdom", "Stamina", "Agility", "Dexterity"
 };
 
-/* FUN_004823C4 seeds DAT_007CDE30 (stride 0x28, ids 0..13) and the +EQUIP
- * section overwrites 0..13 (FUN_004824B4). "Ring" is the literal at 0x4FD304. */
-static const char *const equip_defaults[EQUIP_SLOT_COUNT] = {
-    "Helmet", "Armor", "Boots", "Shield", "Ring", "Amulet"
-};
-static char equip_names[EQUIP_SLOT_COUNT][40];
 /* FUN_00413181's ten unrolled EncInt constructions run before the monster lookup
- * is validated, so they need somewhere to land even on a rejected pet. */
+ * is validated, so they need somewhere to land even on a rejected pet. Core
+ * measured the stride as 0x38 = sizeof(EncInt) and the order as descending. */
 #define PET_SCRATCH 10
 static EncInt pet_scratch[PET_SCRATCH];
 
-const char *world_equip_slot_name(int slot)
-{
-    if (slot < 0 || slot >= EQUIP_SLOT_COUNT) return "";
-    /* FUN_00482431 falls back to the literal when the +EQUIP row is absent. */
-    return equip_names[slot][0] ? equip_names[slot] : equip_defaults[slot];
-}
-
-void world_equip_slot_set_name(int slot, const char *name)
-{
-    if (slot < 0 || slot >= EQUIP_SLOT_COUNT || !name) return;
-    snprintf(equip_names[slot], sizeof equip_names[slot], "%.39s", name);
-}
-
+/* FUN_00482431 returns the +EQUIP name for an item class, and forwards classes
+ * 2..9 (the right hands) to FUN_004825BF, whose table is the +HANDS names. Both
+ * tables live in world.c (FUN_004824B4 / FUN_004825BF), so read them there rather
+ * than keeping a second copy here. */
 const char *items_class_slot_name(int item_class)
 {
-    if (item_class == ITEM_HELMET) return world_equip_slot_name(EQUIP_SLOT_HELMET);
-    if (item_class == ITEM_ARMOR) return world_equip_slot_name(EQUIP_SLOT_ARMOR);
-    if (item_class == ITEM_BOOTS) return world_equip_slot_name(EQUIP_SLOT_BOOTS);
-    if (item_class == ITEM_SHIELD) return world_equip_slot_name(EQUIP_SLOT_SHIELD);
-    if (item_class == ITEM_RING) return world_equip_slot_name(EQUIP_SLOT_RING);
-    if (item_class == ITEM_AMULET) return world_equip_slot_name(EQUIP_SLOT_AMULET);
+    /* FUN_00482431: the item class IS the equip id, so classes 12..19 are the
+     * hand classes and are named from the HANDS table, not the EQUIP table. */
+    if (item_class == ITEM_HELMET) return world_equip_name(0);
+    if (item_class == ITEM_ARMOR) return world_equip_name(1);
+    if (item_class >= ITEM_RIGHT_FIRST && item_class <= ITEM_RIGHT_LAST)
+        return world_hand_name(item_class - ITEM_RIGHT_FIRST);
+    if (item_class == ITEM_BOOTS) return world_equip_name(10);
+    if (item_class == ITEM_SHIELD) return world_equip_name(11);
+    if (item_class == ITEM_RING) return world_equip_name(12);
+    if (item_class == ITEM_AMULET) return world_equip_name(13);
     return NULL;
 }
 
@@ -662,9 +652,6 @@ void items_dump(DumpEmit emit, void *user)
 
 void items_init(void)
 {
-    int i;
-    for (i = 0; i < EQUIP_SLOT_COUNT; ++i)
-        snprintf(equip_names[i], sizeof equip_names[i], "%s", equip_defaults[i]);
     items_clear_message();
     attr_pool = 0;
     throw_item_id = 0;

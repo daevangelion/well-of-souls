@@ -38,7 +38,7 @@ key DOWN
 key RETURN
 expect hero_ready 300
 expect map_enter 600
-click 415 8
+click 358 32
 wait 3
 click 110 44
 wait 3

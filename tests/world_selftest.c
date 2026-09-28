@@ -7,15 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
-/* src/game/items.c (Panels) owns the display-name table in the game build; this stand-in records
- * what world.c's +EQUIP parser feeds it, which is exactly what the test needs to check. */
-static char equip_seen[6][40];
-void world_equip_slot_set_name(int slot, const char *name)
-{
-    if(slot<0 || slot>=6 || !name) return;
-    snprintf(equip_seen[slot],sizeof equip_seen[slot],"%.39s",name);
-}
 static void check_tokenizer(void)
 {
     char tokens[8][256];
@@ -135,10 +126,6 @@ static void check_new_sections(void)
     assert(!strcmp(world_equip_name(2),world_hand_name(0)) && !strcmp(world_hand_name(8),"Right-Hand"));
     assert(world_equip_slot_by_name("amulet")==13 && world_equip_slot_by_name("Sword")==2);
     assert(world_equip_slot_by_name("nonesuch")==-1);
-    /* world.c hands the same six names to Panels' items.c table in the game build. */
-    assert(!strcmp(equip_seen[0],"Helmet") && !strcmp(equip_seen[1],"Armor"));
-    assert(!strcmp(equip_seen[2],"Boots") && !strcmp(equip_seen[3],"Shield"));
-    assert(!strcmp(equip_seen[4],"Ring") && !strcmp(equip_seen[5],"Amulet"));
     assert(!strcmp(world_hero_slot_name(8,3),"Music") && !strcmp(world_hero_slot_name(2,0),"Boots"));
     assert(world_story_count()>10 && !strcmp(world_story_line(0),":S 200"));
     assert(!strcmp(world_story_line(1),":C 255,255,0") && !strcmp(world_story_line(2),"|Evergreen"));
@@ -157,8 +144,12 @@ static void check_new_sections(void)
     assert(g_world.monster_xp_are_also_war_points==1000 && g_world.tactics_win_gives_war_points==1000);
     assert(!strcmp(g_world.world_home_url,"http://www.synthetic-reality.com/wosHome.htm"));
     assert(!strcmp(g_world.tactics_source_url,"http://www.synthetic-reality.com/tactics"));
-    /* CRC-1 is never 0 for a loaded world and CRC-2 answers the seed for an empty buffer. */
-    assert(g_world.crc1 && g_world.crc2);
+    /* CRC-1 (FUN_0047977a: rotate-left-1 + XOR over the raw quest.txt stream, then XOR the
+     * summed per-file byte counts) and CRC-2 (FUN_0047983e, dword XOR) are pinned for retail
+     * Evergreen: both land in the hero record (+0x6F0/+0x6C4/+0x1B1), where a mismatch blocks
+     * soul switching with "Modified Quest File Detected" (FUN_0044B196). Both values were
+     * reproduced independently from the reconstructed raw byte stream. */
+    assert(g_world.crc1==0xfe2166a6u && g_world.crc2==0x5902bf6du);
     printf("new sections: tokens=%d equip[0,1,10..13]=%s/%s/%s/%s/%s/%s story=%d credits=%d bytes"
            " startingGP=%d pp=%d cookie=%d crc1=%08lx crc2=%08lx\n",
            tokens,world_equip_name(0),world_equip_name(1),world_equip_name(10),world_equip_name(11),

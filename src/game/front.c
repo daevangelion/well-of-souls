@@ -201,7 +201,8 @@ enum {
     MSG_MAP         = 0x487,
     MSG_HAUNT       = 0x48F,
     MSG_ONLINE      = 0x498,
-    MSG_CREATE_WORLD= 0x620  /* solo: "--- or Create Your Own World ---"    */
+    MSG_CREATE_WORLD= 0x620, /* solo: "--- or Create Your Own World ---"    */
+    MSG_BIO          = 0x63B  /* the "Edits" button, FUN_00452107               */
 };
 
 /* ----------------------------------------------------------------- state --- */
@@ -212,6 +213,12 @@ static char worlds[MAX_CHOICES][64], souls[MAX_CHOICES][HERO_NAME_MAX];
 static char genders[4][64], name[HERO_NAME_MAX], message[160];
 static int pending_death, resurrect_on_well, place_prompt, place_map, place_link;
 static int show_credits;
+/* The BIO editor. FUN_00452107 is a custom CWnd whose commit handler reads the
+ * edit at +0x338; the port keeps the body here and hands it to hero_bio_save.
+ * The button that opens it is "Edits" (0x4F02C4) on the world-select screen. */
+static int bio_open, bio_focus;
+static char bio_text[HERO_BIO_TEXT_MAX];
+static const Rect bio_edit_rect = { 96, 132, 448, 168 };
 static FrontDialogFn dialog_fn;
 static Image background, buttons[5];
 static Sheet portrait;
@@ -347,6 +354,11 @@ static void art_choose(void)
             }
         }
     }
+    /* The "Edits" button (0x4F02C4) that opens the personal BIO editor,
+     * FUN_00452107. It lives on this screen in the original, whose own prompt
+     * string says so: "Use the BIO button on the 'Where would you like to play'
+     * screen to set your personal BIO info." (0x4F0314). */
+    spot_add(1,0x620, 250,"Edits",0x00ff00,500,20,10,500,20,10, MSG_BIO,0);
     /* DAT_004E6910 == 0 is the solo channel, so the link reads
      * "--- or Create Your Own World ---" and hands over to the world editor. */
     spot_add(1,0x620, 750,"--- or Create Your Own World ---",0x00ff00,500,1000,875,500,875,875,
@@ -610,9 +622,62 @@ static void place_yourself_draw(Framebuffer *fb)
     label_button(fb,(Rect){280,240,120,28},"Onward");
 }
 
+int front_bio_active(void) { return bio_open; }
+
+int front_bio_op(const char *text, int ok)
+{
+    if (text) { snprintf(bio_text,sizeof(bio_text),"%s",text); }
+    if (ok) {
+        if (!g_hero.valid) { snprintf(message,sizeof(message),"You have no soul yet."); return 1; }
+        if (hero_bio_save(bio_text)) snprintf(message,sizeof(message),"Could not save your BIO.");
+        else wos_log_event("hero_bio","serial=%08x",(unsigned)g_hero.serial);
+    }
+    bio_open=0; bio_focus=0; plat_text_input(0);
+    return 1;
+}
+
+static void front_bio_open_panel(void)
+{
+    char *text; size_t n=0;
+    bio_text[0]=0;
+    text = hero_bio_text(&n);
+    if (text) { snprintf(bio_text,sizeof(bio_text),"%s",text); free(text); }
+    bio_open=1; bio_focus=1; plat_text_input(1);
+    wos_log_event("bio_open","bytes=%d",(int)n);
+}
+
+static void front_bio_draw(Framebuffer *fb)
+{
+    ui_panel(fb,(Rect){64,88,512,300},"Personal BIO","");
+    font_draw(fb,80,110,"Your biography is stored with your soul.",0xf0e0bd);
+    fb_fill(fb,bio_edit_rect,bio_focus?0x181830:0x101018);
+    fb_rect(fb,bio_edit_rect,bio_focus?0xffdf80:0xbcad80);
+    font_wrap(fb,(Rect){bio_edit_rect.x+4,bio_edit_rect.y+4,bio_edit_rect.w-8,bio_edit_rect.h-8},
+              bio_text,0xffffff);
+    label_button(fb,(Rect){300,316,110,26},"OK");
+    label_button(fb,(Rect){430,316,110,26},"Cancel");
+}
+
+static int front_bio_update(const Input *in)
+{
+    if (in->pressed[PLAT_KEY_ESCAPE] || clicked(in,(Rect){430,316,110,26})) {
+        front_bio_op(NULL,0); return 1;
+    }
+    if (clicked(in,bio_edit_rect)) { bio_focus=1; plat_text_input(1); }
+    if (bio_focus) {
+        size_t len=strlen(bio_text), add=strlen(in->text);
+        if (in->pressed[PLAT_KEY_BACKSPACE] && len) bio_text[--len]=0;
+        if (add>sizeof(bio_text)-1-len) add=sizeof(bio_text)-1-len;
+        memcpy(bio_text+len,in->text,add); bio_text[len+add]=0;
+    }
+    if (in->pressed[PLAT_KEY_RETURN] || clicked(in,(Rect){300,316,110,26})) front_bio_op(NULL,1);
+    return 1;
+}
+
 static void front_update(const Input *in)
 {
     int i, hit=-1, key=0; last_input=*in;
+    if (bio_open) { front_bio_update(in); return; }
     if (show_credits) {
         /* FUN_0042198F shows it for 1000 ms with the text centred; the port
          * keeps it up until any key or click, which is the same information. */
@@ -690,6 +755,7 @@ static void front_update(const Input *in)
             int msg=spot_msg(hit), arg=spot_lparam(hit);
             if (msg==MSG_WORLDS_PREV) { world_first-=4; if(world_first<0) world_first=0; front_goto(FRONT_CHOOSE); return; }
             if (msg==MSG_WORLDS_NEXT) { world_first+=4; if(world_first+4>world_count) world_first=world_count>4?world_count-4:0; front_goto(FRONT_CHOOSE); return; }
+            if (msg==MSG_BIO) { front_bio_open_panel(); return; }
             if (msg==MSG_CREATE_WORLD) {
                 wos_log_event("front_state","state=%d",FRONT_WE_WORLD);
                 if (editors_enter(NULL)) snprintf(message,sizeof(message),"The world editor could not open.");
@@ -823,6 +889,14 @@ static int front_dialog_apply(int dialog_id, const char *const *kv, int n, int o
         create_soul(front_new_soul_pk);
         return 1;
     }
+    if (dialog_id==FRONT_DIALOG_BIO) {        /* the port's own pseudo-id */
+        const char *text = NULL;
+        int i2;
+        for (i2=0;i2<n;++i2)
+            if (!strncmp(kv[i2],"bio=",4)) { text = kv[i2]+4; break; }
+        front_bio_op(text,ok);
+        return 1;
+    }
     if (dialog_id==149) {                     /* the post-creation follow-up */
         wos_log_event("new_soul_followup","ok=%d",ok?1:0);
         return 1;
@@ -867,7 +941,9 @@ static void front_render(Framebuffer *fb)
     spot_advance();
     spot_layout();
     fb_clear(fb,0x151322); fb_blit(fb,&background,0,0,-1);
-    if (show_credits) {
+    if (bio_open) {
+        front_bio_draw(fb);
+    } else if (show_credits) {
         ui_panel(fb,(Rect){80,60,480,360},"Credits","");
         font_wrap(fb,(Rect){96,88,448,300},world_credits_text(),0xf0e0bd);
     } else if (state==FRONT_STORY) {

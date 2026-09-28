@@ -14,6 +14,7 @@
 #ifndef WOS_HERO_H
 #define WOS_HERO_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include "../engine/dump.h"
 
@@ -38,6 +39,9 @@
  * ("her"). The per-hero INI (cookies, kill counts) uses the same builder with
  * an EMPTY extension, so its file is "<save>/<world>/savedHeroes/<Name>". */
 #define HERO_FILE_EXT   "her"
+/* FUN_00452107 reads the bio edit with CWnd::GetWindowTextA into a 20000-byte
+ * buffer, so the port sizes its editor buffer the same way. */
+#define HERO_BIO_TEXT_MAX 20000
 
 enum { ABIL_STR, ABIL_WIS, ABIL_STA, ABIL_AGI, ABIL_DEX };
 enum {
@@ -155,13 +159,13 @@ uint32_t hero_record_checksum(const uint8_t in[HERO_RECORD_SIZE], int mode);
  * section is "Bio" (0x4EB538) and its keys are serNum, className, levelName,
  * worldLocation and skin; the text file is the bio edit's contents verbatim.
  * hero_bio_save writes both and unlinks the name-only siblings, which is what
- * FUN_00452107 does on its +0x94 == 0 path. Returns 0 on success. */
-int   hero_bio_save(void);
+ * FUN_00452107 does on its +0x94 == 0 path. `text` is the edit control's
+ * contents, as FUN_00452107 reads it off CWnd+0x338; NULL or empty deletes the
+ * text file. Returns 0 on success. */
+int   hero_bio_save(const char *text);
 /* The bio text into a malloc'd NUL-terminated buffer the caller frees, or NULL
  * when no bio exists. *size, when given, receives the length. */
 char *hero_bio_text(size_t *size);
-/* The hero's current bio text, in the same form, without touching the disk. */
-const char *hero_bio_current(void);
 
 /* Per-hero INI, "<save>/<world>/savedHeroes/<Name>" (FUN_00460962 with the
  * empty extension in DAT_004DCBAC). Section "cookies" is the quest SET store

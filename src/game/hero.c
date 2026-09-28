@@ -1059,3 +1059,95 @@ void hero_dump(DumpEmit emit, void *user)
     snprintf(hex,sizeof(hex),"%u,%u",(unsigned)h->pet_ids[0],(unsigned)h->pet_ids[1]);
     emit("hero.pet_ids",hex,user);
 }
+
+/* --------------------------------------------------- the personal BIO ----
+ * FUN_00452107 is the bio editor's commit handler, reached from FUN_00450E94,
+ * FUN_00450DBC and FUN_00452DF0. Its +0x94 == 0 path reads the bio edit
+ * (CWnd at +0x338) and writes "%s\BIO\%08X.txt" verbatim when the text is
+ * non-empty, unlinks it when it is empty, and then unlinks the name-only
+ * "%s\BIO\%s.txt" and "%s\BIO\%s.ini" siblings (all.c:58447-58470). The
+ * structured half (all.c:58040-58070) writes "%s\bio\%08X-%s.ini" with the
+ * section "Bio" (0x4EB538) and the keys serNum, className, levelName,
+ * worldLocation and skin.
+ *
+ * The original keys both files on the hero's SERIAL and writes them under the
+ * INSTALL ROOT, not the save directory. The port has no install root, so it
+ * writes them under game_save_path()/bio/ - the same save root the .her and the
+ * per-hero INI live in - and keeps the original's "%08X" keying and "%08X-%s"
+ * file names so the two are the same documents. */
+static int bio_path(char *path, size_t size, const char *name, int serial)
+{
+    int n;
+    if (!g_hero.valid) return -1;
+    n = snprintf(path,size,"%s/bio",game_save_path());
+    if (n < 0 || (size_t)n >= size) return -1;
+    if (plat_mkdir(path)) return -1;
+    n = name && *name
+      ? snprintf(path,size,"%s/bio/%08X-%s.ini",game_save_path(),serial,name)
+      : snprintf(path,size,"%s/bio/%08X.ini",game_save_path(),serial);
+    return n < 0 || (size_t)n >= size ? -1 : 0;
+}
+static int bio_text_path(char *path, size_t size, int serial)
+{
+    int n = snprintf(path,size,"%s/bio/%08X.txt",game_save_path(),serial);
+    return n < 0 || (size_t)n >= size ? -1 : 0;
+}
+
+int hero_bio_save(const char *text)
+{
+    char path[1024], text_path[1024], sibling[1024];
+    FILE *f; int failed = 0;
+    if (!g_hero.valid) return -1;
+    if (bio_text_path(text_path,sizeof(text_path),g_hero.serial)) return -1;
+    if (bio_path(path,sizeof(path),g_hero.name,g_hero.serial)) return -1;
+    if (!text || !*text) {
+        /* FUN_00452107's empty-text branch: _unlink the text and the siblings. */
+        remove(text_path);
+    } else {
+        size_t len = strlen(text);
+        f = plat_fopen(text_path,"wb");
+        if (!f) return -1;
+        if (fwrite(text,1,len,f)!=len) failed = 1;
+        if (fclose(f)) failed = 1;
+    }
+    if (snprintf(sibling,sizeof(sibling),"%s/bio/%s.txt",game_save_path(),g_hero.name) < (int)sizeof(sibling)) remove(sibling);
+    if (snprintf(sibling,sizeof(sibling),"%s/bio/%s.ini",game_save_path(),g_hero.name) < (int)sizeof(sibling)) remove(sibling);
+    {
+        const ClassDef *c = hero_class(&g_hero);
+        char body[2048];
+        int n = snprintf(body,sizeof(body),
+            "[Bio]\r\n"
+            "serNum=%d\r\n"
+            "className=%s\r\n"
+            "levelName=%s\r\n"
+            "worldLocation=%s\r\n"
+            "skin=%s\r\n",
+            g_hero.serial,
+            c && c->used ? c->name : "",
+            c && c->used && g_hero.level>=0 && g_hero.level<100 ? c->levels[g_hero.level].name : "",
+            g_world.name, g_hero.skin);
+        if (n < 0 || (size_t)n >= sizeof(body)) failed = 1;
+        f = plat_fopen(path,"wb");
+        if (!f) return -1;
+        if (fwrite(body,1,(size_t)n,f)!=(size_t)n) failed = 1;
+        if (fclose(f)) failed = 1;
+    }
+    wos_log_event("hero_bio_save","name=%s serial=%08x",g_hero.name,(unsigned)g_hero.serial);
+    return failed ? -1 : 0;
+}
+
+char *hero_bio_text(size_t *size)
+{
+    char path[1024]; FILE *f; char *buf; size_t n;
+    if (size) *size = 0;
+    if (!g_hero.valid || bio_text_path(path,sizeof(path),g_hero.serial)) return NULL;
+    f = plat_fopen(path,"rb"); if (!f) return NULL;
+    buf = (char *)malloc(HERO_BIO_TEXT_MAX);
+    if (!buf) { fclose(f); return NULL; }
+    n = fread(buf,1,HERO_BIO_TEXT_MAX-1,f);
+    if (ferror(f)) n = 0;
+    fclose(f);
+    buf[n]=0;
+    if (size) *size = n;
+    return buf;
+}

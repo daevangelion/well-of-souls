@@ -402,6 +402,21 @@ void battle_begin_ex(const int *ids, int count, int difficulty, int distance_pct
     enc_put(&hero->enc_max_hp,&hero->max_hp,g_hero.max_hp);
     enc_put(&hero->enc_mp,&hero->mp,g_hero.mp);
     enc_put(&hero->enc_level,&hero->level,clamp(g_hero.level,1,65535));
+    /* FUN_00449006 is the hero-stats-into-the-live-combatant push and it has FIVE seals, not the
+     * two I first placed - and it runs when the hero's stats are pushed, NOT every frame, so it
+     * belongs here and not in battle_update. Ghidra drops the this-pointer on a FUN_0049B71B
+     * call, so its decomp reads these as seals on the hero record, which is wrong: the hero
+     * record has no EncInt. Each is really enc_set(&combatant_field, <value from the hero>):
+     *   & 1:  seal(HP) hero+0x70, then rec[0x2A8] = hero+0x74  (maxHP, plain)
+     *         seal(maxHP) hero+0x78, then rec[0x2AC] = hero+0x7C  (maxMP, plain)
+     *   & 2:  five FUN_00416c60(hero+0x680..0x690, 0xFF) reads land in rec[0x42C..0x43C] PLAIN,
+     *         then seal(hero+0x84 = attack), seal(hero+0x80 = defence), then seal(hero+0x64 =
+     *         the level), with rec[0x440]/[0x444]/[0x2F8]/[0x2B4] plain copies around them.
+     * hero+0x84 and +0x80 are surfaced by hero_offense()/hero_defense(). Order is the contract. */
+    enc_put(&hero->enc_hp,&hero->hp,g_hero.max_hp);
+    enc_put(&hero->enc_max_hp,&hero->max_hp,g_hero.max_mp);
+    enc_put(&hero->enc_mp,&hero->mp,hero_offense(&g_hero));
+    enc_put(&hero->enc_offense,&hero->offense,hero_defense(&g_hero));
     for (i = 0; i < HERO_ABILITIES; ++i) hero->ability[i] = hero_ability(&g_hero,i);
     hero->ailments = g_hero.ailments;
     hero->x = 80; hero->y = 204;
@@ -1260,30 +1275,6 @@ BattleResult battle_update(const Input *in)
     if (fight.spell_menu) { spell_menu_update(in); return fight.result; }
     if (in && in->pressed['s']) { battle_open_spells(); return fight.result; }
     fight.tick = tick_now();
-    /* FUN_00449006 is the hero-stats-into-the-live-combatant push, and it has FIVE seals, not the
-     * two I first placed. Ghidra drops the this-pointer on a FUN_0049B71B call, so the decomp
-     * reads them as seals on the hero record - which is wrong, the hero record has no EncInt.
-     * Each is really `enc_set(&combatant_field, <value loaded from the hero>)`:
-     *   & 1:  seal(HP)   hero+0x70 -> rec[0x2A8] = hero+0x74   (maxHP, plain)
-     *         seal(maxHP) hero+0x78 -> rec[0x2AC] = hero+0x7C   (maxMP, plain)
-     *   & 2:  five FUN_00416c60(hero+0x680..0x690, 0xFF) reads land in rec[0x42C..0x43C] PLAIN,
-     *         then seal(hero+0x84), seal(hero+0x80), and finally seal(hero+0x64 = the level),
-     *         with rec[0x440]/[0x444]/[0x2F8]/[0x2B4] as plain copies around them.
-     * The order of the five is the contract, so it is reproduced exactly. */
-    enc_put(&fight.actors[0].enc_hp,&fight.actors[0].hp,g_hero.max_hp);
-    enc_put(&fight.actors[0].enc_max_hp,&fight.actors[0].max_hp,g_hero.max_mp);
-    /* The three seals in the & 2 arm are re-seals of values the hero holds at +0x84 and +0x80,
-     * which are not fields the port carries, so each re-seals the combatant's own value. That
-     * spends the same 12 draws in the same order without inventing data; when the port grows the
-     * real hero fields these three become copies of them. */
-#ifdef HERO_HAS_ATTACK_DEFENCE
-    enc_put(&fight.actors[0].enc_mp,&fight.actors[0].mp,g_hero.attack);
-    enc_put(&fight.actors[0].enc_offense,&fight.actors[0].offense,g_hero.defense);
-#else
-    enc_put(&fight.actors[0].enc_mp,&fight.actors[0].mp,fight.actors[0].mp);
-    enc_put(&fight.actors[0].enc_offense,&fight.actors[0].offense,fight.actors[0].offense);
-#endif
-    enc_put(&fight.actors[0].enc_level,&fight.actors[0].level,g_hero.level);
     fight.actors[0].hp = g_hero.hp; fight.actors[0].mp = g_hero.mp;
     fight.actors[0].ailments = g_hero.ailments;
     if (outcome()) return fight.result;

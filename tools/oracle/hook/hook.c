@@ -249,7 +249,7 @@ static void *enc_make_thunk(void)
 static void enc_log(const void *ret, const void *self)   /* cdecl, in the thunk's push order */
 {
     unsigned *sp;
-    char line[192];
+    char line[320];
     int n, i, got;
     if (!g_enc_trace) return;
     n = snprintf(line, sizeof line, "enc %ld this=%08X ret=%08X chain",
@@ -262,7 +262,7 @@ static void enc_log(const void *ret, const void *self)   /* cdecl, in the thunk'
         if (v >= 0x00401000u && v < 0x00500000u) {
             if (v == (unsigned)(uintptr_t)ret) continue;
             n += snprintf(line + n, sizeof line - n, " %08X", v);
-            if (++got == 4) break;
+            if (++got == 8) break;
         }
     }
     trace_line("%s", line);
@@ -333,7 +333,7 @@ static int __cdecl hook_rand(void)
                 !site_seen(v)) {
                 site_seen(v);
                 cn += snprintf(chain + cn, sizeof chain - cn, " %08X", v);
-                if (++got == 4) break;
+                if (++got == 8) break;
             }
         }
         trace_line("%d %08X%s", (int)g_rand_calls, (unsigned)(uintptr_t)ra, chain);

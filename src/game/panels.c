@@ -20,10 +20,11 @@ static const char *const titles[] = {"", "Items", "Spells", "Equipment", "Statis
                                      "Training", "Shop", "Trophy Bag", "Pet Pen"};
 static const char *const ability_names[] = {"STR","WIS","STA","AGI","DEX"};
 static const int slots[] = {HERO_SLOT_HELMET,HERO_SLOT_ARMOR,HERO_SLOT_BOOTS,HERO_SLOT_SHIELD,HERO_SLOT_RING,HERO_SLOT_AMULET,HERO_SLOT_RIGHT_HAND};
-/* Slot order matches the original's equip ids (0,1,10,11,12,13); the names come
- * from the +EQUIP table, FUN_004823C4 / FUN_00482431. */
-static const int slot_ids[] = {EQUIP_SLOT_HELMET,EQUIP_SLOT_ARMOR,EQUIP_SLOT_BOOTS,
-                               EQUIP_SLOT_SHIELD,EQUIP_SLOT_RING,EQUIP_SLOT_AMULET,-1};
+/* The item class each of the seven displayed slots holds; -1 is the right hand,
+ * which the original does not label (FUN_00482431 forwards classes 2..9 to the
+ * HANDS names and the paper doll leaves the slot blank). */
+static const int slot_classes[] = {ITEM_HELMET,ITEM_ARMOR,ITEM_BOOTS,ITEM_SHIELD,
+                                   ITEM_RING,ITEM_AMULET,-1};
 static struct {
     PanelKind kind;
     int selected, first, count, ids[WORLD_MAX_ITEMS];
@@ -549,7 +550,7 @@ void panel_render(Framebuffer *fb)
             if(id) icon(fb,id,r.x,r.y);
             else if(panel.equip_icons.pixels) fb_blit_sub(fb,&panel.equip_icons,(Rect){glyphs[i]*16,0,16,16},r.x+16,r.y+16,0,panel.equip_icons.pixels[0]);
             /* FUN_00482431: the +EQUIP name for this slot, right hands unnamed. */
-            font_draw(fb,r.x,r.y+50,slot_ids[i]<0?"Hand":world_equip_slot_name(slot_ids[i]),INK);
+            font_draw(fb,r.x,r.y+50,slot_classes[i]<0?"Hand":items_class_slot_name(slot_classes[i]),INK);
         }
         for(i=0;i<page_size() && panel.first+i<panel.count;i++) {
             int id=panel.ids[panel.first+i];

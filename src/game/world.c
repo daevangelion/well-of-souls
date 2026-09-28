@@ -6,7 +6,6 @@
 #include "../engine/text.h"
 #include "../engine/rng.h"
 #include "../platform/platform.h"
-#include "items.h"
 #include <ctype.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -189,15 +188,15 @@ static int read_quest(const char *path, int depth, char **text, size_t *size, si
     while (next < file + file_size) {
         const char *term, *arg, *nl;
         char *p;
-        size_t len;
+        size_t len, span;
         nl = memchr(next, '\n', (size_t)(file + file_size - next));
         term = (!nl) ? "" : (nl > next && nl[-1] == '\r') ? "\r\n" : "\n";
-        line = next;
+        line = (char *)next; /* the buffer is ours; the terminator is removed below */
         next = nl ? nl + 1 : file + file_size;
         /* fgets keeps the terminator, so terminate in place and remember it separately. */
-        len = strlen(line);
-        if (len >= strlen(term)) len -= strlen(term);
-        line[len] = 0;
+        span = nl ? (size_t)((const char *)nl - line) : (size_t)(file + file_size - line);
+        if (span && line[span-1] == '\r') --span;
+        line[span] = 0;
         p = line;
         while (*p && (unsigned char)*p <= ' ') ++p;
         len = strlen(p) + strlen(term);
@@ -223,8 +222,11 @@ static int read_quest(const char *path, int depth, char **text, size_t *size, si
             if (append_line(text, size, capacity, "")) { result = -1; break; }
             continue;
         }
+        /* A blank line still lands in the CRC stream ("\r\n\0"), but FUN_004798a9's splitter
+         * never produces a line pointer for it, so the line array must not gain an entry. */
         if (raw_append(raw, p, strlen(p)) || raw_append(raw, term, strlen(term)) ||
             raw_append(raw, "", 1)) { result = -1; break; }
+        if (!*p) continue;
         if (append_line(text, size, capacity, p)) { result = -1; break; }
     }
     free(file);
@@ -361,17 +363,12 @@ static int parse_row(int section, char t[][256], int n, int *current_class)
     }
     if (section==SEC_EQUIP) {
         /* FUN_004824b4: id 0..13, name truncated to 39 chars, no duplicate check. Ids 2..9 are
-         * the eight hand classes and never appear here. Panels' items.c keeps its own
-         * EQUIP_SLOT_* order, so translate the six real slots on the way out. */
-        static const int slot_of[WORLD_MAX_EQUIP]={
-            EQUIP_SLOT_HELMET,EQUIP_SLOT_ARMOR,-1,-1,-1,-1,-1,-1,-1,-1,
-            EQUIP_SLOT_BOOTS,EQUIP_SLOT_SHIELD,EQUIP_SLOT_RING,EQUIP_SLOT_AMULET
-        };
+         * the eight hand classes and are never named here - FUN_00482431 forwards them to
+         * FUN_004825bf, which is what world_equip_name() does. */
         if (n<2 || !isdigit((unsigned char)t[0][0])) return -1;
         id=number(t[0]);
         if (id<0 || id>=WORLD_MAX_EQUIP) return -1;
         copy_string(g_world.equip_names[id],sizeof(g_world.equip_names[id]),t[1]);
-        if (slot_of[id]>=0) world_equip_slot_set_name(slot_of[id],t[1]);
         return 0;
     }
     if (!isdigit((unsigned char)t[0][0])) return -1;

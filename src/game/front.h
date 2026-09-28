@@ -55,6 +55,24 @@ void front_dialog_register(FrontDialogFn fn);
 /* What Core's `dialog` op calls for the ids front.c owns. Forwards to the
  * registered handler when there is one, otherwise to front.c's own. */
 int  front_dialog_op(int dialog_id, const char *const *kv, int n, int ok);
+/* --- the personal BIO panel ------------------------------------------------
+ * FUN_00452107 (0x452107) is the bio editor's commit handler, reached from
+ * FUN_00450E94, FUN_00450DBC and FUN_00452DF0. It is a custom CWnd, not a
+ * dialog resource - the same shape as the Pick-a-Soul window - so there is no
+ * resource ID and no control-ID table to copy; the original's controls are the
+ * bio edit at CWnd+0x338 and the home/guild URL edit at +0x3F8, and the button
+ * that opens it is labelled "Edits" (0x4F02C4) and sits on the "Where would you
+ * like to play" screen, i.e. the world-select state.
+ *
+ * front_bio_op() is the semantic dialog op for it. Because the original has no
+ * dialog resource the port uses its own pseudo-id and its own control names; a
+ * .dsc that drives the original's BIO has to click the same pixels instead.
+ * `text` is the body; ok commits through hero_bio_save() and cancel discards. */
+#define FRONT_DIALOG_BIO 215   /* the port's own id; the original has no resource */
+int  front_bio_op(const char *text, int ok);
+/* 1 while the BIO panel is up. */
+int  front_bio_active(void);
+
 
 /* --- Death bridge --------------------------------------------------------
  * Battle-2 calls this when the local hero dies (FUN_00494FCD, all.c:109303).

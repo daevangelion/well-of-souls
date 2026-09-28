@@ -20,7 +20,7 @@
  *   pet EncInt construction          FUN_00413181 (10 x FUN_0049B75D then 6 x FUN_0049B71B)
  *   pet pen file                     FUN_0040FBFD (0xC5A4 bytes, 32 slots of 0x608)
  *   pet pen dialog art               FUN_00412716 (petButtons.bmp, petPen.jpg)
- *   equip slot names                 FUN_004823C4 / FUN_00482431 / FUN_004824B4
+ *   equip slot names                 FUN_004823C4 / FUN_00482431 / FUN_004824B4 (world.c)
  * Docs: docs/re/script.md 6.2 and 6.6, docs/re/formats_online.md 6.7,
  *       docs/re/boot_flow.md 3 (hero record field table).
  * Owner: items.c.
@@ -61,14 +61,11 @@ enum {
     ITEM_HTML          = 201  /* arg15 is the URL */
 };
 
-/* Equipment slot names, +EQUIP section (FUN_004824B4). Slot ids are the ones the
- * section uses, NOT the display order; right hands 2..9 are not in this table
- * (FUN_00482431 forwards them to the HANDS names, FUN_004825BF). */
-enum { EQUIP_SLOT_HELMET, EQUIP_SLOT_ARMOR, EQUIP_SLOT_BOOTS, EQUIP_SLOT_SHIELD,
-       EQUIP_SLOT_RING, EQUIP_SLOT_AMULET, EQUIP_SLOT_COUNT };
-const char *world_equip_slot_name(int slot);
-void world_equip_slot_set_name(int slot, const char *name);
-/* Name for an item class 10..23, or NULL when the class is not equipment. */
+/* The name for an item class 10..23 (FUN_00482431), or NULL when the class is
+ * not equipment. Classes 12..19 are the hand classes and are named from the
+ * +HANDS table via world_hand_name() (FUN_004825BF); the rest come from
+ * world_equip_name() (+EQUIP, FUN_004824B4). Both tables live in world.c, so
+ * items.c keeps no second copy. */
 const char *items_class_slot_name(int item_class);
 
 /* FUN_0040D6B4: level + equip token + hand proficiency. 1 = usable. */
