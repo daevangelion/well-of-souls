@@ -1,13 +1,15 @@
 package org.syntheticreality.wos;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
-import android.text.InputType;
 import android.util.Log;
+import android.view.View;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
@@ -17,38 +19,68 @@ import java.io.OutputStream;
 import java.net.URL;
 
 /**
- * Game-data supply (launcher entry "WoS Install").
+ * Game-data supply — a real form screen (not popups).
  *
- * Lets the user supply the original WellOfSouls.exe installer at any time — pick it via
- * the Storage Access Framework, or download it from a URL — and stores it as
- * installer-supplied.bin in internal storage. On the next launch of the game, the native
- * boot decodes it in place with the bundled CIC decoder and plays. After supplying, the
- * game is launched automatically.
+ * Lets the user supply the original WellOfSouls.exe installer at any time: pick it via
+ * the Storage Access Framework, or paste a URL and download it. The installer is stored
+ * as installer-supplied.bin in internal storage; the game (WosActivity) decodes it
+ * on-device with the bundled CIC decoder and boots. If the game is already running and
+ * waiting, "Continue to game" brings it forward so it picks the installer up.
  */
 public final class SupplyActivity extends Activity {
     private static final String TAG = "SupplyActivity";
     private static final int REQUEST_PICK = 0x5703;
     private static final String SUPPLIED = "installer-supplied.bin";
 
+    private TextView status;
+    private ProgressBar progress;
+
     private File target() {
         return new File(getFilesDir(), SUPPLIED);
+    }
+
+    private boolean dataReady() {
+        return new File(getFilesDir(), "data/Souls.exe").isFile() || target().isFile();
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        String[] options = { "Choose installer file…", "Download from URL…", "Cancel" };
-        new AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert)
-                .setTitle("Well of Souls — supply the installer")
-                .setMessage("Supply the original WellOfSouls.exe installer to install the game. "
-                        + "It is unpacked on-device; the game data is never bundled in the app.")
-                .setItems(options, (d, which) -> {
-                    if (which == 0) launchPicker();
-                    else if (which == 1) promptForUrl();
-                    else finish();
-                })
-                .setOnCancelListener(d -> finish())
-                .show();
+        setContentView(R.layout.activity_supply);
+
+        status = findViewById(R.id.status);
+        progress = findViewById(R.id.progress);
+        Button pick = findViewById(R.id.pickButton);
+        Button download = findViewById(R.id.downloadButton);
+        Button game = findViewById(R.id.gameButton);
+        EditText url = findViewById(R.id.urlField);
+
+        pick.setOnClickListener(v -> launchPicker());
+        download.setOnClickListener(v -> {
+            String u = url.getText().toString().trim();
+            if (u.isEmpty()) { setStatus("Enter a URL first.", false); return; }
+            downloadInBackground(u);
+        });
+        game.setOnClickListener(v -> openGame());
+        refresh();
+    }
+
+    private void refresh() {
+        if (dataReady()) {
+            setStatus("Installer ready. Tap Continue to game.", false);
+        } else {
+            setStatus("Waiting for the installer…", true);
+        }
+    }
+
+    private void setStatus(String msg, boolean busy) {
+        status.setText(msg);
+        progress.setVisibility(busy ? View.VISIBLE : View.GONE);
+    }
+
+    private void openGame() {
+        startActivity(new Intent(this, WosActivity.class));
+        finish();
     }
 
     private void launchPicker() {
@@ -60,21 +92,8 @@ public final class SupplyActivity extends Activity {
             startActivityForResult(pick, REQUEST_PICK);
         } catch (Exception e) {
             Log.w(TAG, "no document picker", e);
-            toast("No file picker available.");
+            setStatus("No file picker available; use the URL field instead.", false);
         }
-    }
-
-    private void promptForUrl() {
-        final EditText field = new EditText(this);
-        field.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
-        field.setHint("https://…/WellOfSouls.exe");
-        new AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert)
-                .setTitle("Installer URL")
-                .setView(field)
-                .setPositiveButton("Download", (d, which) ->
-                        download(field.getText().toString().trim()))
-                .setNegativeButton("Cancel", null)
-                .show();
     }
 
     @Override
@@ -84,11 +103,12 @@ public final class SupplyActivity extends Activity {
         if (resultCode == RESULT_OK && data != null && data.getData() != null) {
             final Uri uri = data.getData();
             new Thread(() -> done(write(() -> getContentResolver().openInputStream(uri)))).start();
+        } else {
+            setStatus("No file selected.", false);
         }
     }
 
-    private void download(String url) {
-        if (url.isEmpty()) { toast("Enter a URL."); return; }
+    private void downloadInBackground(String url) {
         new Thread(() -> done(write(() -> new URL(url).openStream()))).start();
     }
 
@@ -114,15 +134,12 @@ public final class SupplyActivity extends Activity {
     private void done(boolean ok) {
         runOnUiThread(() -> {
             if (ok) {
-                startActivity(new Intent(this, WosActivity.class));
-                finish();
+                setStatus("Installer saved. Decoding…", true);
+                Toast.makeText(this, "Installer saved.", Toast.LENGTH_LONG).show();
+                openGame();
             } else {
-                toast("Could not read the installer. Try again.");
+                setStatus("Could not read the installer. Try again.", false);
             }
         });
-    }
-
-    private void toast(String msg) {
-        Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
     }
 }

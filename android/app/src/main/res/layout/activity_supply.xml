@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Well of Souls — install the game"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:paddingBottom="8dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="The game data is copyrighted and is not bundled in this app. Supply the original WellOfSouls.exe installer below; it is unpacked on this device and the game will start automatically."
+            android:textSize="14sp"
+            android:paddingBottom="16dp" />
+
+        <ProgressBar
+            android:id="@+id/progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:indeterminate="true"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Waiting for the installer…"
+            android:textSize="14sp"
+            android:paddingTop="8dp"
+            android:paddingBottom="16dp" />
+
+        <Button
+            android:id="@+id/pickButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Choose installer file…" />
+
+        <EditText
+            android:id="@+id/urlField"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="https://…/WellOfSouls.exe"
+            android:inputType="textUri"
+            android:maxLines="1"
+            android:importantForAutofill="no" />
+
+        <Button
+            android:id="@+id/downloadButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Download from URL" />
+
+        <Button
+            android:id="@+id/gameButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Continue to game" />
+    </LinearLayout>
+</ScrollView>

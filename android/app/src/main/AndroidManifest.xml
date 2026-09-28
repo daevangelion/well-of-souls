@@ -18,7 +18,7 @@
         <!-- Game-data supply: pick/download the installer and unpack it on-device. -->
         <activity android:name=".SupplyActivity" android:exported="true"
             android:label="WoS Install"
-            android:theme="@android:style/Theme.DeviceDefault.Dialog">
+            android:theme="@android:style/Theme.DeviceDefault.Light">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
