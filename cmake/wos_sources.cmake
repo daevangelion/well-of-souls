@@ -6,4 +6,8 @@ file(GLOB WOS_GAME_SOURCES CONFIGURE_DEPENDS "${WOS_ROOT}/src/game/*.c")
 file(GLOB WOS_PLATFORM_SOURCES CONFIGURE_DEPENDS "${WOS_ROOT}/src/platform/sdl2/*.c")
 # The game entry point is src/game_main.c (game_main()); main_sdl2.c forwards SDL startup to it.
 set(WOS_SOURCES ${WOS_ENGINE_SOURCES} ${WOS_GAME_SOURCES} ${WOS_PLATFORM_SOURCES})
-file(GLOB_RECURSE WOS_THIRD_PARTY CONFIGURE_DEPENDS "${WOS_ROOT}/src/third_party/*.c")
+# The game links only the root third-party sources (stb_image, TinySoundFont). The
+# Clickteam-packer codecs (miniz deflate + bzip2) live in third_party/codec and are
+# linked only by the runtime installer decoder, never by the game.
+file(GLOB WOS_THIRD_PARTY CONFIGURE_DEPENDS "${WOS_ROOT}/src/third_party/*.c")
+file(GLOB WOS_CODEC_SOURCES CONFIGURE_DEPENDS "${WOS_ROOT}/src/third_party/codec/*.c")

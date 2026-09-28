@@ -85,3 +85,26 @@ if(WOS_BUILD_TESTS)
         message(STATUS "wos: no retail data at ${WOS_DATA_DIR}; self-tests built but not registered")
     endif()
 endif()
+
+# --- Runtime installer decoder ------------------------------------------------
+# The native Clickteam-packer decoder (cic_unpack.c) links the vendored miniz +
+# bzip2 codecs. It is NOT part of the game: the game binary stays codec-free, and
+# this decoder backs the on-device "supply the installer" flow (and its host test).
+if(WOS_BUILD_TESTS)
+    add_executable(cic_unpack_selftest tests/cic_unpack_selftest.c
+        src/platform/sdl2/cic_unpack.c src/platform/sdl2/files_sdl2.c ${WOS_CODEC_SOURCES})
+    target_include_directories(cic_unpack_selftest PRIVATE
+        src src/platform/sdl2 src/third_party/codec)
+    foreach(source src/platform/sdl2/cic_unpack.c src/platform/sdl2/files_sdl2.c tests/cic_unpack_selftest.c)
+        # miniz.h exposes unused static compress helpers into the decoder TU.
+        set_property(SOURCE ${source} APPEND PROPERTY COMPILE_OPTIONS -Wall -Wextra -Wno-unused-function)
+        if(WOS_WERROR)
+            set_property(SOURCE ${source} APPEND PROPERTY COMPILE_OPTIONS -Werror)
+        endif()
+    endforeach()
+    # The vendored bzip2 sources use their own conventions and POSIX APIs (fdopen);
+    # expose POSIX and silence their warnings so they build under our strict C99.
+    foreach(source ${WOS_CODEC_SOURCES})
+        set_property(SOURCE ${source} APPEND PROPERTY COMPILE_OPTIONS -w -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE)
+    endforeach()
+endif()
