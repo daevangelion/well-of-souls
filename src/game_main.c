@@ -28,6 +28,7 @@ __attribute__((weak)) void scene_tick(void);
 
 __attribute__((weak)) int front_dialog_op(int dialog_id, const char *const *kv, int n, int ok);
 #include "game/options.h"
+#include "game/sched.h"
 static void scene_tick_if_any(void) { if (scene_tick) scene_tick(); }
 #include <errno.h>
 #include <stdlib.h>
@@ -413,6 +414,13 @@ int game_main(int argc, char **argv)
     if(have_epoch) clock_set_time_base(epoch);
     seed_crt(seed,have_seed);
     options_load();
+    /* FUN_00456C51's four appends and FUN_0042B4E0's mixer both run in offline solo
+     * play, so the port has them: four crt_rand() from the table, and the mixer's
+     * five-per-iteration fold. The order between them is the original's, which is
+     * FUN_004096E7 (the mixer) relative to the first FUN_00456D2F -- not yet
+     * established; see docs/re/timing.md section 8.2b. */
+    sched_boot();
+    srn_mix();
     if (!clock_date_check(clock_time_s())) {
         /* The original blocks here on a modal MessageBoxA and then continues into the
          * same init path, so the port shows the same box and does the same. */

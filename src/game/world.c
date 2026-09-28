@@ -104,6 +104,11 @@ static int dotted(const char *s, int part)
     }
     return number(s);
 }
+
+/* FUN_00479594: leading whitespace is skipped; a line starting with ';' or shorter than two
+ * characters (terminator included) is dropped; an "#include " line splices the named file and
+ * leaves "\r\n" behind. Comments are whole-line only - FUN_0047a0e4 keeps ';' as an ordinary
+ * token character, so `SAY "a;b"` keeps its semicolon. */
 static int arg(char t[][256], int n, int i) { return i < n ? number(t[i]) : 0; }
 
 static int clamp(int value, int low, int high)
@@ -144,24 +149,59 @@ static int prefix_ci(const char *s, const char *prefix, size_t n)
     return 1;
 }
 
-/* FUN_00479594: leading whitespace is skipped, a line starting with ';' or shorter than two
- * characters is dropped, and a line whose first nine characters match "#include " (case
- * insensitively) is replaced by the included file, then by an empty line. Comments are
- * whole-line only: FUN_0047a0e4 keeps ';' as an ordinary token character. */
-static int read_quest(const char *path, int depth, char **text, size_t *size, size_t *capacity)
+/* The two world CRCs are taken over FUN_0047977a's raw buffer, which is NOT the line array:
+ * fgets keeps the line terminator, so a kept line lands as "<trimmed>\r\n\0", and an #include
+ * line is overwritten with the literal "\r\n" (0x4EBC50) so it lands as "\r\n\0" whatever its
+ * own terminator was. FUN_004798a9 turns those control bytes into NULs only afterwards, so
+ * the CRCs see the terminators. `raw` reproduces that stream; `text` is the clean line array. */
+typedef struct { char *data; size_t size, capacity; } RawBuf;
+
+static int raw_append(RawBuf *raw, const char *bytes, size_t n)
 {
-    char *file, *cursor, *line;
+    char *grown;
+    size_t needed;
+    if (raw->size + n >= QUEST_BYTES_MAX) return -1;
+    needed = raw->size + n;
+    if (needed + 1 > raw->capacity) {
+        size_t cap = raw->capacity ? raw->capacity : 16384;
+        while (cap < needed + 1) cap = cap > QUEST_BYTES_MAX / 2 ? QUEST_BYTES_MAX : cap * 2;
+        grown = realloc(raw->data, cap);
+        if (!grown) return -1;
+        raw->data = grown; raw->capacity = cap;
+    }
+    memcpy(raw->data + raw->size, bytes, n);
+    raw->size = needed;
+    raw->data[raw->size] = 0;
+    return 0;
+}
+
+static int read_quest(const char *path, int depth, char **text, size_t *size, size_t *capacity,
+                      RawBuf *raw)
+{
+    char *file, *line;
+    const char *next;
     size_t file_size;
     int result = 0;
     if (depth == INCLUDE_DEPTH_MAX) return -1;
     file = text_read_file(path, &file_size);
     if (!file || file_size > QUEST_BYTES_MAX) { free(file); return -1; }
-    cursor = file;
-    while ((line = text_next_line(&cursor)) != NULL) {
-        char *p = line;
-        const char *arg;
+    next = file;
+    while (next < file + file_size) {
+        const char *term, *arg, *nl;
+        char *p;
+        size_t len;
+        nl = memchr(next, '\n', (size_t)(file + file_size - next));
+        term = (!nl) ? "" : (nl > next && nl[-1] == '\r') ? "\r\n" : "\n";
+        line = next;
+        next = nl ? nl + 1 : file + file_size;
+        /* fgets keeps the terminator, so terminate in place and remember it separately. */
+        len = strlen(line);
+        if (len >= strlen(term)) len -= strlen(term);
+        line[len] = 0;
+        p = line;
         while (*p && (unsigned char)*p <= ' ') ++p;
-        if (!*p || *p == ';' || !p[1]) continue;
+        len = strlen(p) + strlen(term);
+        if (len < 2 || *p == ';') continue;   /* the original's (1 < strlen) && line[0] != ';' */
         if (include_line(p)) {
             char child[1024];
             size_t base, k;
@@ -178,10 +218,13 @@ static int read_quest(const char *path, int depth, char **text, size_t *size, si
              * every remaining control character into a NUL. */
             if ((q = strrchr(child + base, '"')) != NULL) *q = 0;
             for (q = child + base; *q; ++q) if ((unsigned char)*q < ' ') *q = 0;
-            if (read_quest(child, depth + 1, text, size, capacity)) { result = -1; break; }
+            if (read_quest(child, depth + 1, text, size, capacity, raw)) { result = -1; break; }
+            if (raw_append(raw, "\r\n", 3)) { result = -1; break; }
             if (append_line(text, size, capacity, "")) { result = -1; break; }
             continue;
         }
+        if (raw_append(raw, p, strlen(p)) || raw_append(raw, term, strlen(term)) ||
+            raw_append(raw, "", 1)) { result = -1; break; }
         if (append_line(text, size, capacity, p)) { result = -1; break; }
     }
     free(file);
@@ -291,18 +334,17 @@ static int parse_chapter(char t[][256], int n)
     return 0;
 }
 
-/* FUN_004814d2 / FUN_00481654: the +TOKENS table row is "<id>,<text>"; the +SCENES form is
- * "TOKEN <id> <text>" and that parser passes t+1, so the keyword is not part of the row.
- * 0..4095, 128 chars, duplicate ids rejected. */
-static int set_token(char (*t)[256], int n)
+/* FUN_004814d2 / FUN_00481654: "n,text" for a token id 0..4095, text truncated to 128 chars. */
+static int set_token(char t[][256], int n)
 {
     TokenDef *v;
     int id;
-    if (n < 2 || !isdigit((unsigned char)t[0][0])) return -1;
+    if (n < 2) return -1;
+    if (!isdigit((unsigned char)t[0][0])) return -1;
     id = number(t[0]);
     if (id < 0 || id >= WORLD_MAX_TOKENS) return -1;
     v = &g_world.tokens[id];
-    if (v->used) return -1;
+    if (v->used) return -1;                    /* duplicate token id: the original errors out */
     v->used = 1;
     copy_string(v->text, sizeof v->text, t[1]);
     return 0;
@@ -337,12 +379,15 @@ static int parse_row(int section, char t[][256], int n, int *current_class)
     switch(section) {
     case SEC_MAPS: {
         MapDef *m;
-        if(id>=WORLD_MAX_MAPS || n<5) return -1;
+        /* FUN_00482c54 wants four tokens (id, image, root, name); the flag word and the theme
+         * are only read when the row actually has them. */
+        if(id>=WORLD_MAX_MAPS || n<4) return -1;
         m=&g_world.maps[id]; m->used=1;
         copy_string(m->image,sizeof(m->image),t[1]);
         copy_string(m->root,sizeof(m->root),t[2]);
         copy_string(m->name,sizeof(m->name),t[3]);
-        m->flags=(uint32_t)strtoul(t[4],NULL,0); m->theme=arg(t,n,5);
+        if(n>4) m->flags=(uint32_t)strtoul(t[4],NULL,0);
+        m->theme=arg(t,n,5);
         break;
     }
     case SEC_TERRAINS: {
@@ -674,14 +719,14 @@ static uint32_t quest_crc1(const char *text, size_t size)
     uint32_t crc=0x175a3e2du;
     size_t i;
     for(i=0;i<size;++i) {
+        uint32_t old=crc;
         crc<<=1;
-        if(crc==0) crc=1;          /* the old bit 31 survives the shift only in bit 0 */
+        if(old&0x80000000u) crc|=1u;   /* FUN_0047977a: the bit shifted out of 31 folds back in */
         crc^=(unsigned char)text[i];
     }
     return crc;
 }
-
-/* FUN_00437b15: plain additive sum of every byte; a missing file contributes 0. */
+/* FUN_00437b15: a plain additive sum of every byte; a missing file contributes 0. */
 static uint32_t file_byte_sum(const char *path)
 {
     unsigned char buffer[8192];
@@ -792,9 +837,10 @@ static void read_config(void)
         "worldHomeUrl","tacticsSourceUrl"
     };
     /* The DEFAULT column is the string each call site pushes, which is not always the
-     * InitInstance pre-init value at 0x41E300. */
+     * InitInstance pre-init value at 0x41E300. spellSuccessPercent defaults to "0", NOT
+     * the 100 written at 0x41E315: 0x41E922 pushes ebx = 0x4DCAF4 = "0". */
     static const char *const fallback[CONFIG_KEYS]={
-        "GP","100","100","100","0","0","0","0","0","0","1","1000000","80","1000","",""
+        "GP","100","100","0","0","0","0","0","0","0","1","1000000","80","1000","",""
     };
     const char *value[CONFIG_KEYS];
     char path[1024], *text;
@@ -829,12 +875,14 @@ int world_load(const char *data_dir, const char *name)
     char path[1024], *p;
     size_t size=0, capacity=0, offset;
     int count=0, n, i, elements=0, hands=0;
+    RawBuf raw={0};
     world_free();
     if(!data_dir || !name || strlen(data_dir)>=sizeof(data_root) || strlen(name)>=sizeof(g_world.name)) return -1;
     copy_string(data_root,sizeof(data_root),data_dir); copy_string(g_world.name,sizeof(g_world.name),name);
     n=snprintf(g_world.dir,sizeof(g_world.dir),"%s/worlds/%s",data_dir,name);
     if(n<0 || (size_t)n>=sizeof(g_world.dir)) goto fail;
-    if(!world_path(path,sizeof(path),"quest.txt") || read_quest(path,0,&g_world.text,&size,&capacity)) goto fail;
+    if(!world_path(path,sizeof(path),"quest.txt") ||
+       read_quest(path,0,&g_world.text,&size,&capacity,&raw)) goto fail;
     for(offset=0;offset<size;offset+=strlen(g_world.text+offset)+1)
         if(++count>QUEST_LINES_MAX) goto fail;
     if(!count) goto fail;
@@ -851,9 +899,10 @@ int world_load(const char *data_dir, const char *name)
     complete_spells();
     read_config();
     build_credits();
-    g_world.crc1=quest_crc1(g_world.text,size);
-    g_world.crc2=quest_crc2(g_world.text,size);
+    g_world.crc1=quest_crc1(raw.data,raw.size);
+    g_world.crc2=quest_crc2(raw.data,raw.size);
     g_world.crc1^=world_file_sum();
+    free(raw.data);
     if(!world_path(path,sizeof(path),"music.ini")) goto fail;
     music_text=text_read_file(path,NULL);
     if(music_text && ini_parse(&music_ini,music_text)) goto fail;

@@ -141,6 +141,28 @@ int  hero_record_decode(const uint8_t in[HERO_RECORD_SIZE], Hero *out);
  * bare seed 0x379ADE because the original has no branch for it. */
 uint32_t hero_record_checksum(const uint8_t in[HERO_RECORD_SIZE], int mode);
 
+/* --- the personal BIO (FUN_00452107 / FUN_00438C05) -----------------------
+ * Two files per soul, both under the port's save root in a "bio" directory, the
+ * way the original writes them under its install root:
+ *   <save>/bio/%08X-<Name>.ini   the structured record  (0x4EB544, uppercase as
+ *                                %s\BIO\%08X-%s.ini at 0x4EEE6C - the original's filesystem
+ *                                was case-insensitive and both spellings are the
+ *                                same directory, so the port uses the lower-case
+ *                                one and documents the mapping here)
+ *   <save>/bio/%08X.txt          the free text body     (0x4F02D8; the sibling
+ *                                form %s\BIO\%s.txt is 0x4F02C8)
+ * %08X is the hero's serial, which is what the original keys them on. The INI's
+ * section is "Bio" (0x4EB538) and its keys are serNum, className, levelName,
+ * worldLocation and skin; the text file is the bio edit's contents verbatim.
+ * hero_bio_save writes both and unlinks the name-only siblings, which is what
+ * FUN_00452107 does on its +0x94 == 0 path. Returns 0 on success. */
+int   hero_bio_save(void);
+/* The bio text into a malloc'd NUL-terminated buffer the caller frees, or NULL
+ * when no bio exists. *size, when given, receives the length. */
+char *hero_bio_text(size_t *size);
+/* The hero's current bio text, in the same form, without touching the disk. */
+const char *hero_bio_current(void);
+
 /* Per-hero INI, "<save>/<world>/savedHeroes/<Name>" (FUN_00460962 with the
  * empty extension in DAT_004DCBAC). Section "cookies" is the quest SET store
  * (FUN_0047A9F5 reads, FUN_0047AB07 writes, both case-insensitive on the key,

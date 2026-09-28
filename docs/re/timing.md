@@ -401,7 +401,7 @@ included. Every call in a run of `tests/replay/offline_probe.dsc`, by caller VA:
 |---|---|---|---|
 | 1408 | `0x0049B6F7` `0x0049B6FC` `0x0049B701` `0x0049B706` | `FUN_0049B6C7` — 4 `rand()` per call, **352 calls** | one boot-constant table: 352 objects x 4 draws, in the order int[+4], int[+16], int[+32], int[+48], after three scaled-double writes |
 | 13 | `0x00428996` | `FUN_0042895C` | the 20/25 ms idle path, above |
-| 4 | `0x00456BCC` | `FUN_00456B87` | **a timed schedule**: appends into a 0x80-entry table at `+0x08`, stamps `GetTickCount()` at `+0x20C`, stores `(rand() % (param_3*2)) * 1000` at `+0x60C` — a random delay in whole seconds, so it can consume RNG again *during play* |
+| 4 | `0x00456BCC` (call at `0x00456BC6`) | `FUN_00456B87(obj, id, count)` | a **128-entry scheduled-event table**: appends at `obj+8`, cap `0x80`, **0x610 bytes per entry**. Writes `id` at `+0x0C`, `GetTickCount()` at `+0x20C`, `count` at `+0x40C`, `(rand() % (count*2)) * 1000` at `+0x60C` — a random delay in whole seconds; returns -1 when full, so it saturates and stops consuming. **The offline seeder is `FUN_00456C51`: exactly four appends, ids 0x0E..0x11 = 14..17, count 0x1E = 30.** Driven by `FUN_00456D2F`, which early-returns unless the enableSFX / enableEnvironmentalSounds / enableSoundCard options are all non-zero -- all default 1, so it runs | **implemented: src/game/sched.c** |
 | 1 | `0x0048E1CF` | — | singleton |
 | 4 | `0x0042B4EA` `0x0042B4F5` `0x0042B4FC` `0x0042B50E` | one function | same 4-rands-per-object shape at n=1 |
 | 1 | `0x00426B27` | the `0x00426xxx` global-ctor neighbourhood | seed neighbourhood, next to `FUN_004269AF` |
@@ -539,30 +539,55 @@ second is the cheap one:
 sequence I would be guessing at.** I would rather record that than ship a boot loop that draws
 1408 numbers in an invented order and then reads as a match.
 
-### 8.2b Boot rands with no identified owner
+### 8.2b Boot rands: implemented, and what is still open
 
-Recorded as **unowned** as of 2026-09-28; none of these VAs belongs to any module or to the
+`src/game/sched.c` now carries two of them, because both run in offline solo play and
+identical behaviour is the goal whatever the code was written for:
+`sched_boot()` / `sched_append()` (the 128-entry table and the four boot appends, ids
+14..17, count 30) and `srn_mix()` (the five-draw fold, looping while the fold is zero).
+Verified in the log: `EVT sched_boot entries=4` and `EVT srn_mix draws=5`.
+
+**Open, and I am not going to close it by guessing:**
+* `FUN_00456D2F` calls `FUN_00456BE1` (0x00456BE1) immediately after `FUN_00456C51` — eight
+  more appends, ids 5..12, same count 30. The offline trace shows **four** calls, not
+  twelve, so either `FUN_00456BE1` did not run in that run or the trace predates it. Adding
+  the eight would break rng parity; omitting them would break it the other way. I implemented
+  the four the trace proves and flagged the eight rather than pick.
+* `FUN_00456EC1` (0x00456EC1), the consumer reached from `FUN_00456D2F`, is **not read**.
+  `sched_due()` implements the shape the writer implies — an entry is due when
+  `clock_ms() - tick_ms` has passed `delay_ms` — and that is labelled as a known-open item,
+  not a parity claim. The global table is `DAT_00CE2C54`, indexed `[DAT_004e0ddc * 0x40]`.
+* The boot ORDER between `srn_mix()` (called from `0x004096E7`) and the first
+  `FUN_00456D2F` is not established, so the port's two calls are adjacent rather than
+  correctly interleaved.
+
+The remaining table; none of these VAs belongs to any module or to the
 harness (`tools/oracle/**` has never touched a game VA in `src/`).
 
 | calls | caller | what it is | owner |
 |---|---|---|---|
-| 4 | `0x00456BCC` (`FUN_00456B87`) | a **timed schedule**: appends into a 0x80-entry table at `+0x08`, stamps `GetTickCount()` at `+0x20C`, stores `(rand() % (param_3*2)) * 1000` at `+0x60C` — a random delay in whole seconds, so the one bucket that can consume RNG again *during* play | **unowned** |
+| 5+ | `0x0042B4EA` `0x0042B4F5` `0x0042B4FC` `0x0042B50E` (+1) | `FUN_0042B4E0` | the **SRN warm-up mixer**: `do { 5 x rand(); GetTickCount(); } while (fold == 0)`, `fold = ((((iVar1<<4 ^ uVar2)<<4 ^ uVar3)<<4 ^ iVar4<<16 ^ GetTickCount() ^ uVar6) & 0x3FFFFFFF)`. 5 draws per iteration, repeating while the fold is exactly zero -- almost always once, **not a fixed count**. One caller, `0x004096E7`. It mixes the clock and the RNG, so it must fold `clock_ms()`, not the host clock | **implemented: `srn_mix()` in src/game/sched.c** |
 | 4 | `0x0042B4EA` `0x0042B4F5` `0x0042B4FC` `0x0042B50E` | one function, four `rand()` in a row — the same 4-rands-per-object shape as the EncInt seal at n=1 | **unowned** |
 | 1 | `0x0048E1CF` | singleton | **unowned** |
-| 1 | `0x00426B27` | the `0x00426xxx` global-constructor neighbourhood, next to both `srand` sites | **unowned** |
+| 1 | `0x00426B27` | `FUN_004269AF`, the same function as **both** `srand` sites, so the seed neighbourhood | **mine, placed** |
 | 99 | the 288-byte-element array at `0x0052C978` | stride `0x120`, count `0x63` | **unowned** |
 | 14 / 10 / 7 / 1 | `FUN_00444D64` / `FUN_00413181` / `FUN_0043BBD1` / `FUN_0043380F` | unrolled EncInt construction groups | `FUN_00413181` is Panels-2's; the rest **unowned** |
 
-**Caveat on that table, from Panels-2's read of `FUN_00413181`'s body** (all.c:13558-13630):
-the 10 `FUN_0049B75D` constructions are only half the cost. There are also **six
-`FUN_0049B71B` sets**, interleaved with the monster-field loads at record indices
-0x47/0x43/0x44/0x45/0x46, 0x41/0x3C/0x3A, 0x3D and 0x3E, so a pet spawn is
-**10 + 6 = 64 draws, not 40**. The pet holds six EncInt fields — level, hp, max_hp, str,
-sta, agi — and dex/wis are plain ints because they are loaded rather than sealed. The 64 are
-spent **unconditionally, before the monster-id validation**, so a rejected pet still burns
-them. So the 33-site count of direct constructors is a correct count of *constructors* and
-was the wrong basis for a per-invocation total; the same error will apply to the other
-unrolled groups until their bodies are read the same way.
+**Caveat on that table, from Panels-2's disassembly of `FUN_00413181` (0x00413181).** The 10
+`FUN_0049B75D` constructions are only part of the cost. There are also **five
+`FUN_0049B71B` sets**, so a pet spawn is **10 + 5 = 60 draws, not 40 and not 64**. The first
+five ctors (`0x413191`-`0x4131BD`) seal the stack slots `EBP-0x128`, `EBP-0xF0`, `EBP-0xB8`,
+`EBP-0x80`, `EBP-0x48`, and the five sets (`0x4132A7`-`0x41331D`) have ECX pointing at exactly
+those same five slots, loading `[EDI+0xEC]`, `[EDI+0xF4]`, `[EDI+0xF8]`, `[EDI+0xFC]`,
+`[EDI+0x100]` — the monster's five stat fields. **So the sealed set is `str`, `sta`, `agi`,
+`dex`, `wis`; `level`, `hp` and `max_hp` are plain ints.** (I had it as the other way round
+and was wrong; sealing the three plain ones would have cost 12 extra draws per pet and pushed
+`rng.calls` away from the original.) The 40 unconditional draws happen **before** the
+monster-id validation, so a rejected pet still burns them.
+
+**Consequence for the 33-site table:** it counts *constructors* correctly but is the wrong
+basis for any per-invocation total, because SET sites are not in it. The same error will
+apply to the other unrolled groups until their bodies are read the same way.
 
 **Not EncInt**, recorded as a negative result so nobody re-checks them: the trophy bag words
 (`FUN_0046F726` / `FUN_0046F779`) are a plain XOR `0x1D43E217`, and items.txt plus heroes'
@@ -577,6 +602,19 @@ integer arithmetic, is 13 ints with three checksum doubles interleaved:
     +4  int32 k0     rand draw 1        +32 int32  k2  draw 3
     +8  double d0 = v * 2.1459 (_DAT_004d0d38)   +40 double d2 = v * 0.0123 (_DAT_004d0d48)
     +16 int32 k1     rand draw 2        +48 int32  k3  draw 4
+
+**`sizeof(EncInt)` is 56, not 52** (FrontHero-2 measured it): the doubles make the struct
+8-aligned, so the last field ends at byte 52 and the tail pads to 56. The stride between the
+ten sealed objects in `FUN_00413181` is `0x38` = 56, which confirms it against the binary. Any
+offset table computed by summing the field offsets is 4 bytes short per object, and any struct
+embedding several EncInts carries the same padding. `encint.h` has a `_Static_assert` on it.
+
+**Construction direction is a property of the site, not a universal rule.** The boot array
+thunk `FUN_00401101` walks ASCENDING. But `FUN_00413181` walks each of its two five-object
+groups from the **highest offset downwards**: ECX runs `-0x128, -0xF0, -0xB8, -0x80, -0x48`,
+then `-0x808, -0x7D0, -0x798, -0x760, -0x728`, stride `0x38` inside each group. Getting it
+wrong shifts the whole session's stream, so `enc_construct_array()` now takes an explicit
+`EncOrder` and the direction is not assumed.
 
 `FUN_0049B665` is the verify half: it re-derives all three doubles from `v` and compares
 them, and on a mismatch sets `DAT_004E709C`, calls `FUN_004A8664(0x424)` and `FUN_00449A17`.

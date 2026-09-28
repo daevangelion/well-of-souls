@@ -2,6 +2,7 @@
  * Every rule below cites the original; see src/game/missions.h for the module contract. */
 #include "missions.h"
 #include "hero.h"
+#include "battle.h"
 #include "items.h"
 #include "world.h"
 #include "../engine/font.h"
@@ -21,6 +22,11 @@
 #define MIS_VALUE_MAX     1024
 #define MIS_SECTION_MAX   16
 #define MIS_PATH_MAX      1024
+
+/* Battle-2 exports this from battle.c: FUN_00484D52's last act is an EncInt set of the local
+ * combatant's level (combatant + 0x628 from + 0x64, VA 0x484e0b), four crt_rand(). Declared
+ * here so missions.c does not depend on battle.h being extended first. */
+void battle_hero_reseal_level(void);
 
 /* Status strings, FUN_00458D1E (VA 0x458d1e): 0x4f12bc, 0x4f12b0, 0x4f12a4, 0x4f129c. */
 static const char *const status_names[4] = { "Available", "In Progress", "Complete", "Done" };
@@ -518,14 +524,19 @@ static void reward(int job)
             int64_t want = hero_xp_for_level(&g_hero, level);
             int64_t cap = hero_xp_for_level(&g_hero, (g_hero.level + 2) * 10) - g_hero.xp;
             if (cap < want) want = cap;
-            if (want > 0 && want < 0xf3b9b) (void)hero_award(&g_hero, want, 0);
+            if (want > 0 && want < 0xf3b9b) {
+                (void)hero_award(&g_hero, want, 0);
+                /* FUN_00484D52's last act, VA 0x484e0b: re-seal the local combatant's level. */
+                battle_hero_reseal_level();
+            }
         }
     }
     pp = number(missions_field(job, "RewardPP"));
     if (pp > 0 && pp < 100000) (void)hero_add_pp(&g_hero, pp);
     wp = number(missions_field(job, "RewardWP"));
     (void)wp;  /* FUN_00401460 is war points: online-only, no offline effect. */
-    foot = missions_field(job, "FootNote");
+    /* The original logs the mission NAME here (FUN_00458CF0 reads the "Name" key, not FootNote). */
+    foot = missions_field(job, "Name");
     if (*foot) say("You have been rewarded for completing mission: %s", foot);
     mission_set_status(job, MISSION_DONE);
     wos_log_event("mission_reward", "job=%d name=%s", job, missions_field(job, "Name"));
@@ -595,6 +606,11 @@ static void picker_rebuild(void)
     if (p->selected < 0) p->selected = 0;
     p->first = p->selected / LIST_PAGE * LIST_PAGE;
     p->detail = p->count ? p->jobs[p->selected] : -1;
+    /* FUN_004597F5 (VA 0x4597f5) advances In Progress to Complete as soon as the required
+     * trophies are all held; it does this on every selection change. */
+    if (p->detail >= 0 && mission_status(p->detail) == MISSION_PROGRESS &&
+        mission_trophies_met(p->detail))
+        mission_set_status(p->detail, MISSION_COMPLETE);
 }
 
 void missions_open_picker(void)
@@ -748,11 +764,31 @@ void missions_panel_render(Framebuffer *fb)
     }
     if (!p->count) font_draw(fb, list_rect.x + 6, list_rect.y + 6, "No missions", 0x00404040u);
     fb_clip(fb, detail_rect);
-    if (p->detail >= 0)
-        font_wrap(fb, (Rect){detail_rect.x + 4, detail_rect.y + 4, detail_rect.w - 8, detail_rect.h - 8},
-                  missions_field(p->detail, "Desc"), 0x00202020u);
-    else
+    if (p->detail >= 0) {
+        /* The original's detail text (FUN_0049D3AF chain, VA 0x459d3a): name, description,
+         * the "all expectations" line once Complete, and the FootNote once Done. */
+        int status = status_clamped(mission_status(p->detail));
+        const char *name = missions_field(p->detail, "Name");
+        const char *foot = missions_field(p->detail, "FootNote");
+        Rect r = {detail_rect.x + 4, detail_rect.y + 4, detail_rect.w - 8, detail_rect.h - 8};
+        y = r.y + font_wrap(fb, r, name, 0x00202020u) + 2;
+        r.y = y;
+        y += font_wrap(fb, r, missions_field(p->detail, "Desc"), 0x00202020u) + 2;
+        r.y = y;
+        if (status == MISSION_COMPLETE) {
+            y += font_wrap(fb, r, "You have met all expectations, you may claim your reward.",
+                           0x00404040u) + 2;
+            r.y = y;
+        }
+        if (status == MISSION_DONE && *foot) {
+            char text[MIS_VALUE_MAX];
+            snprintf(text, sizeof text, "Footnote: %s", foot);
+            r.y = y;
+            (void)font_wrap(fb, r, text, 0x00404040u);
+        }
+    } else {
         font_draw(fb, detail_rect.x + 6, detail_rect.y + 6, "No Mission Selected", 0x00404040u);
+    }
     fb_clip(fb, trophy_rect);
     if (p->detail >= 0) {
         int ids[MISSIONS_TROPHIES], counts[MISSIONS_TROPHIES];

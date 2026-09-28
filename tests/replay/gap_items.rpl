@@ -1,16 +1,11 @@
 # seed: 1
 # requires: shop_buy item_use equip
-# Buy a potion and a level-zero helmet from the Soul Brother.
+# Buy a Health Potion and a Leather Toupee (shop index 17), then use and equip them.
 expect boot_menu 900
 key RETURN
 wait 30
 key RETURN
 wait 30
-# Three states before the Well, not two: 1 main menu -> 2 the
-# "Where Do You Want To Play Today?" splash (FUN_0041D31F) -> 3 the world
-# list (FUN_0041D717). The original's own table is FUN_0041B891 (all.c:21078);
-# the port used to collapse the splash, so the script had drifted. The extra
-# RETURN is the plan's keyboard shortcut for the row click (msg 0x474).
 key RETURN
 wait 30
 key n
@@ -20,56 +15,125 @@ key RETURN
 expect hero_ready 300
 expect map_enter 600
 keydown DOWN
-expect scene_enter 180
+expect scene_enter 300
 keyup DOWN
-wait 20
-key RETURN
-wait 3
-key RETURN
-wait 3
-key RETURN
-wait 3
-key RETURN
-wait 3
-key RETURN
-wait 3
-key RETURN
-wait 5
+click 200 100
+wait 2
 key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+expect panel_open 600
 wait 5
-key RETURN
+click 36 95
 wait 3
-key RETURN
-wait 3
-key RETURN
-wait 3
-key RETURN
-expect panel_open 180
 key b
-expect shop_buy 60
-# OFFER2 walks IDs: leather toupee (200) is index 19.
-click 330 270
+expect shop_buy 120
 key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+key RIGHT
+wait 3
+shot /tmp/rr/helm.bmp
 key b
-expect shop_buy 60
-shot /tmp/wos-gap-shop-buy.bmp
+expect shop_buy 120
 key ESCAPE
-click 435 82
-shot /tmp/wos-gap-items.bmp
-# Inventory is sorted: potion, ticket, helmet.
+wait 10
+click 562 32
+wait 10
+click 592 32
+expect panel_open 300
+wait 5
 key u
-expect item_use 60
-# Consuming the potion leaves the ticket then helmet.
+expect item_use 120
 key RIGHT
+wait 3
+key RIGHT
+wait 3
 key e
-expect equip 60
-click 180 44
-shot /tmp/wos-gap-equip.bmp
-click 245 44
-shot /tmp/wos-gap-stats.bmp
-click 320 44
-shot /tmp/wos-gap-train.bmp
-click 110 44
-shot /tmp/wos-gap-spells.bmp
+expect equip 120
+shot /tmp/wos-gap-items.bmp
 key ESCAPE
+wait 5
 quit

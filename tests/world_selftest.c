@@ -145,8 +145,10 @@ static void check_new_sections(void)
     assert(!world_story_line(-1) && !world_story_line(world_story_count()));
     assert(!strncmp(world_credits_text(),"Evergreen\r\nStory by Dan Samuel\r\n",31));
     assert(strstr(world_credits_text(),"Contact us on the web at:\r\nhttp://www.synthetic-reality.com"));
-    /* config.ini [General]: the retail file comments spellSuccessPercent out, so it is 100. */
-    assert(!strcmp(world_gold_name(),"GP") && g_world.spell_success_percent==100);
+    /* config.ini [General]: the retail file comments spellSuccessPercent out, so the call
+     * falls back to the string 0x41E922 pushes - "0" (0x4DCAF4) - not the 100 that 0x41E315
+     * pre-inits DAT_004e0ff8 to. */
+    assert(!strcmp(world_gold_name(),"GP") && g_world.spell_success_percent==0);
     assert(g_world.starting_gp==500 && g_world.max_unspent_pp==100000);
     assert(g_world.pk_hand_percent==100 && g_world.pk_magic_percent==100);
     assert(g_world.cookie_protection==1 && !g_world.no_giving_gp && !g_world.pets_can_bite_people);

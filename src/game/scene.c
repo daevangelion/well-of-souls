@@ -241,6 +241,13 @@ static void cookie_set(const char *key,const char *value)
     if(eq(key,"monster.id")) { vm.monster_id=number(value); return; }
     cookie_remember(key);
     hero_cookie_set(key,value);
+    /* FUN_0047AB07's common tail, 0x47AE85-0x47AEA1: the derived-stat recomputation ends by
+     * re-sealing the local player's COMBATANT level EncInt from the hero's level field --
+     * `rec = FUN_0048AE32(hero_serial); if (rec) enc_set(&rec[0x628], rec[0x64]);`. It sits
+     * AFTER the g.num / item_id / spell_id / num_hostClass early returns above, so those
+     * four names spend no draws, and it costs 4 crt_rand() when the serial lookup hits.
+     * The empty-value delete path also reaches this tail, so one call covers both. */
+    battle_hero_reseal_level();
 }
 static const char *cookie_raw(const char *key)
 {

@@ -212,7 +212,7 @@ static void transact(int id)
         if(gifts_forbidden()) {message("Your class may not give items away.");return;}
         if(!hero_take_item(&g_hero,id,1)) {message("You do not own that item.");return;}
         hero_add_gold(&g_hero,price);
-        wos_log_event("shop_sell","item=%d gold=%lld",id,(long long)g_hero.gold);
+        wos_log_event("shop_sell","item=%d gold=%lld %s",id,(long long)g_hero.gold,world_gold_name());
         message("Sold one item.");
     } else {
         /* FUN_0042BAF3(hero,0) < price is the original's "not enough gold". */
@@ -220,7 +220,7 @@ static void transact(int id)
         /* FUN_00403349: the carry limit is level+1 (capped 100) or maxCount. */
         if(!hero_give_item(&g_hero,id,1)) {message("You cannot carry another of this item.");return;}
         hero_add_gold(&g_hero,-price);
-        wos_log_event("shop_buy","item=%d gold=%lld",id,(long long)g_hero.gold);
+        wos_log_event("shop_buy","item=%d gold=%lld %s",id,(long long)g_hero.gold,world_gold_name());
         message("Bought one item.");
     }
     rebuild();
@@ -349,7 +349,7 @@ static void pen_render(Framebuffer *fb)
             fb_fill(fb,r,i==panel.pen_selected?0x57482b:0x18191c);
             fb_rect(fb,r,i==panel.pen_selected?0xffd477:0x74613e);
             snprintf(text,sizeof text,"%s  L%d  %d/%d",g_world.monsters[p->monster_id].name,
-                     enc_get(&p->level),enc_get(&p->hp),enc_get(&p->max_hp));
+                     p->level,p->hp,p->max_hp);
             font_draw(fb,r.x+8,r.y+14,text,INK);
             ++n;
         }
@@ -461,7 +461,7 @@ static void stats_render(Framebuffer *fb)
     char text[256];int i;
     int64_t tnl=hero_xp_for_level(&g_hero,g_hero.level+1)-g_hero.xp;
     if(tnl<0 || g_hero.level>=100) tnl=0;
-    snprintf(text,sizeof text,"%.30s\n\n%.30s  Level %d\n\nHP %d / %d     MP %d / %d\n\nXP %lld   TNL %lld\n\nGold %lld   PP %lld",g_hero.name,g_world.classes[g_hero.klass].name,g_hero.level,g_hero.hp,g_hero.max_hp,g_hero.mp,g_hero.max_mp,(long long)g_hero.xp,(long long)tnl,(long long)g_hero.gold,(long long)g_hero.pp);
+    snprintf(text,sizeof text,"%.30s\n\n%.30s  Level %d\n\nHP %d / %d     MP %d / %d\n\nXP %lld   TNL %lld\n\n%s %lld   PP %lld",g_hero.name,g_world.classes[g_hero.klass].name,g_hero.level,g_hero.hp,g_hero.max_hp,g_hero.mp,g_hero.max_mp,(long long)g_hero.xp,(long long)tnl,world_gold_name(),(long long)g_hero.gold,(long long)g_hero.pp);
     font_wrap(fb,(Rect){16,72,332,128},text,INK);
     for(i=0;i<HERO_ABILITIES;i++) {
         snprintf(text,sizeof text,"%s  %3d / %3d",ability_names[i],hero_ability(&g_hero,i),g_world.classes[g_hero.klass].max_ability[i]);
@@ -529,7 +529,7 @@ void panel_render(Framebuffer *fb)
     if(panel.kind==PANEL_TROPHY) {bag_render(fb);}
     else if(panel.kind==PANEL_PET) {pen_render(fb);}
     else if(panel.kind==PANEL_SHOP) {
-        snprintf(text,sizeof text,"Gold: %lld",(long long)g_hero.gold);font_draw(fb,164,14,text,INK);
+        snprintf(text,sizeof text,"%s: %lld",world_gold_name(),(long long)g_hero.gold);font_draw(fb,164,14,text,INK);
         button(fb,(Rect){8,32,100,24},"Buy",!panel.selling);button(fb,(Rect){112,32,100,24},"Sell",panel.selling);
     } else {
         static const char *const tabs[]={"Items","Spells","Equip","Stats","Train"};

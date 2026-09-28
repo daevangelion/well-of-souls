@@ -55,6 +55,12 @@ int battle_click_actor(int slot);
  * the scene to run that label. battle.c calls it at the original's broadcast points. */
 typedef int (*BattleSceneEvent)(const char *kind, int slot, int code);
 void battle_set_scene_event(BattleSceneEvent fn);
+/* FUN_0047AB07 at 0x47AEA1 and FUN_00484D52 at 0x484E0B both do, after their own work:
+ *     rec = FUN_0048AE32(hero_serial);   if (rec) enc_set(&rec[0x628], rec[0x64]);
+ * i.e. the local player's COMBATANT level seal is re-derived from hero[0x64]. Call this at
+ * those sites. It is a no-op when no fight is running, which is what the original does offline:
+ * FUN_0048AE32 returns NULL unless FUN_0041bd7b() is set. */
+void battle_hero_reseal_level(void);
 /* Draw the fight (combatants, effects, damage numbers) into the scene view rect, which maps the
  * 360x256 logical scene space. */
 void battle_render(Framebuffer *fb, Rect view);

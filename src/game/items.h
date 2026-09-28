@@ -127,14 +127,18 @@ int  trophy_bag_award_kill(int monster_id);
 typedef struct {
     int used;
     int monster_id;             /* the MONSTER row the pet was cloned from */
-    /* The pet's sealed stat block. FUN_00413181 costs 10 EncInt constructions
-     * (FUN_0049B75D, unconditional, before the monster lookup is validated) and
-     * then 6 sealed stores (FUN_0049B71B): 10*4 + 6*4 = 64 crt_rand(). Exactly
-     * six fields are EncInt because exactly six stores are sealed. */
-    EncInt level, hp, max_hp, str, sta, agi;
-    int dex, wis;                 /* loaded from the monster row, not sealed */
-    int owner_class;            /* 0x224, the class that owns the pen slot */
-    int token;                  /* 0x228, negative hero serial by default */
+    /* The pet's sealed stat block. Disassembling FUN_00413181
+     * (tools/ghidra/query.sh disasm 0x413181) shows exactly FIVE EncInts: the
+     * first five FUN_0049B75D ctors build the stack slots at EBP-0x128,
+     * EBP-0xF0, EBP-0xB8, EBP-0x80 and EBP-0x48, and the five FUN_0049B71B sets
+     * fill those same five, in that order, from monster-record offsets +0xEC,
+     * +0xF4, +0xF8, +0xFC and +0x100 - the monster's five stat fields. The
+     * remaining five ctors build slots nothing later seals.
+     * Cost: 10 ctors + 5 sets = 10*4 + 5*4 = 60 crt_rand(). */
+    EncInt str, sta, agi, dex, wis;
+    int level, hp, max_hp;        /* plain: set outside the sealed block */
+    int owner_class;              /* 0x224, the class that owns the pen slot */
+    int token;                    /* 0x228, negative hero serial by default */
     int flags;
 } Pet;
 

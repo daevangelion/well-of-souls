@@ -173,54 +173,72 @@ static void trace_line(const char *fmt, ...)
  * 32-bit stack in that range are the vtable pointers and constants the game pushes.
  */
 #define VA_ENC_SEAL  0x0049B6C7u
-#define ENC_SEAL_RESUME 0x0049B6CCu
+#define ENC_SEAL_RESUME 0x0049B6CEu
 static volatile LONG g_enc_trace;
 static volatile LONG g_enc_n;
 
 static void enc_log(const void *self, const void *ret);
 extern uintptr_t g_base;
 
-/* The thunk is emitted rather than written in a top-level asm block: it is nine
- * instructions, two of which carry a rel32 that is only known once the image base and
- * the compiled addresses are, and building it here keeps the displacement honest without
- * a separate .s file.  Layout:
+/* The thunk is emitted rather than written in a top-level asm block: two of its
+ * instructions carry a rel32 that is only known once the image base and the compiled
+ * addresses are, and building it here keeps the displacement honest without a separate
+ * .s file.  Layout, with E the stack pointer on entry (so [E] is the return address the
+ * original would have returned to):
  *
- *   83 EC 04            subl   $4,%esp        <- the first displaced instruction, and
- *                                              the 4-byte alignment the call needs
- *   8B 44 24 04         movl   4(%esp),%eax   <- the caller's return address
- *   50                  pushl  %eax
- *   51                  pushl  %ecx           <- `this`
- *   E8 <rel32>          call   enc_log
- *   83 C4 08            addl   $8,%esp
- *   56                  pushl  %esi           <- the other two displaced instructions
- *   57                  pushl  %edi
- *   E9 <rel32>          jmp    0x0049B6CC     <- back into the real body, ESP exact
+ *   83 EC 04            subl   $4,%esp        (E-4)  <- displaced instruction 1, and
+ *                                                     the 4-byte alignment the call needs
+ *   8B 44 24 04         movl   4(%esp),%eax          the caller's return address
+ *   51                  pushl  %ecx          (E-8)  <- `this`, parked where the call
+ *                                                     below can still reach it
+ *   50                  pushl  %eax          (E-12)
+ *   E8 <rel32>          call   enc_log                (cdecl: the ret, then the this)
+ *   83 C4 04            addl   $4,%esp        (E-8)
+ *   59                  popl   %ecx          (E-4)  <- `this` back: enc_log is ordinary
+ *                                                     C, so ECX is caller-saved, and
+ *                                                     without this pop the `fild` below
+ *                                                     dereferences a garbage pointer and
+ *                                                     the game dies at the first seal
+ *   56                  pushl  %esi          (E-8)  <- displaced instructions 2 and 3
+ *   57                  pushl  %edi          (E-12)
+ *   DB 09               fild   (%ecx)                 <- displaced instruction 4
+ *   E9 <rel32>          jmp    0x0049B6CE             <- ESP is now exactly what the
+ *                                                     original had at 0x0049B6CE
+ *
+ * The patch is SEVEN bytes, not six.  The push-imm32/ret trampoline is six, and six
+ * would end at 0x0049B6CC -- which is the first byte of the `fild`, and therefore the
+ * instruction the thunk is about to jump back to.  Displacing the `fild` too and
+ * replaying it here costs two bytes and removes the possibility entirely.
  */
 static void *enc_make_thunk(void)
 {
     static const unsigned char head[] = {
         0x83, 0xEC, 0x04,             /* subl  $4,%esp   */
         0x8B, 0x44, 0x24, 0x04,       /* movl  4(%esp),%eax */
-        0x50,                         /* pushl %eax      */
-        0x51,                         /* pushl %ecx      */
+        0x51,                         /* pushl %ecx      -- `this`, saved across the call */
+        0x50,                         /* pushl %eax      -- the caller's return address */
         0xE8, 0, 0, 0, 0,             /* call  enc_log   */
-        0x83, 0xC4, 0x08,             /* addl  $8,%esp   */
+        0x83, 0xC4, 0x04,             /* addl  $4,%esp   */
+        0x59,                         /* popl  %ecx      -- `this` back in ECX */
         0x56,                         /* pushl %esi      */
         0x57,                         /* pushl %edi      */
+        0xDB, 0x09,                   /* fild  (%ecx)    */
         0xE9, 0, 0, 0, 0              /* jmp   resume    */
     };
     unsigned char *p;
-    /* the rel32 fields start one past their E8/E9 opcode: call at index 9, jmp at 19 */
-    int call_at = 10, jmp_at = 20;
+    /* the rel32 fields start one past their E8/E9 opcode: call at index 9, jmp at 22 */
+    int call_at = 10, jmp_at = 23;
     intptr_t here, target;
     p = (unsigned char *)VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE,
                                       PAGE_EXECUTE_READWRITE);
     if (!p) return NULL;
     memcpy(p, head, sizeof head);
-    here   = (intptr_t)(p + call_at);
+    /* the rel32 is measured from the END of the call/jmp, i.e. four bytes past the
+     * field's own offset, so `here` is field+4 and not field */
+    here   = (intptr_t)(p + call_at + 4);
     target = (intptr_t)enc_log;
     memcpy(p + call_at, &(int32_t){ (int32_t)(target - here) }, 4);
-    here   = (intptr_t)(p + jmp_at);
+    here   = (intptr_t)(p + jmp_at + 4);
     target = (intptr_t)(g_base + (ENC_SEAL_RESUME - IMAGE_BASE));
     memcpy(p + jmp_at, &(int32_t){ (int32_t)(target - here) }, 4);
     tr("enc: thunk at %p, enc_log=%p, resume=%08lX", (void *)p, (void *)enc_log,
@@ -228,7 +246,7 @@ static void *enc_make_thunk(void)
     return p;
 }
 
-static void enc_log(const void *self, const void *ret)
+static void enc_log(const void *ret, const void *self)   /* cdecl, in the thunk's push order */
 {
     unsigned *sp;
     char line[192];
@@ -250,21 +268,25 @@ static void enc_log(const void *self, const void *ret)
     trace_line("%s", line);
 }
 
-/* The six-byte trampoline: push <addr> ; ret.  Nothing of the original prologue runs at
- * the patch site, so there is no length disassembler and no copied code. */
-static int patch_text(uintptr_t va, void *target)
+/* push <addr> ; ret at a .text entry point.  The same shape as the IAT trampoline, but
+ * the number of bytes displaced is a parameter, because the six-byte form only lands
+ * on an instruction boundary when the caller picked the displacement length to match
+ * (see enc_make_thunk: six would overwrite the `fild` the thunk jumps back to). */
+static int patch_text(uintptr_t va, void *target, int len)
 {
     unsigned char *p = (unsigned char *)va;
     DWORD old = 0;
-    if (!VirtualProtect(p, 8, PAGE_EXECUTE_READWRITE, &old)) {
+    if (len < 6) return 0;
+    if (!VirtualProtect(p, len + 8, PAGE_EXECUTE_READWRITE, &old)) {
         tr("enc: VirtualProtect(%08lX) failed, err=%lu", (unsigned long)va, GetLastError());
         return 0;
     }
     p[0] = 0x68;                                  /* push imm32 */
     memcpy(p + 1, &target, 4);
     p[5] = 0xC3;                                  /* ret */
-    VirtualProtect(p, 8, old, &old);
-    tr("enc: FUN_0049B6C7 at %08lX -> %p", (unsigned long)va, target);
+    if (len > 6) memset(p + 6, 0x90, (size_t)(len - 6));   /* nop the rest */
+    VirtualProtect(p, len + 8, old, &old);
+    tr("enc: %08lX -> %p, %d bytes displaced", (unsigned long)va, target, len);
     return 1;
 }
 
@@ -276,7 +298,7 @@ extern uintptr_t g_base;
 static void install_enc_trace(void)
 {
     uintptr_t va = (uintptr_t)(g_base + (VA_ENC_SEAL - IMAGE_BASE));
-    if (patch_text(va, enc_make_thunk())) g_enc_trace = 1;
+    if (patch_text(va, enc_make_thunk(), 7)) g_enc_trace = 1;
 }
 
 /* A bounded set of "already reported" return addresses, so the chain scan reports each

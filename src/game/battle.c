@@ -61,6 +61,7 @@ typedef struct {
      * site counts below are the original's own - see each call. */
     EncInt enc_hp, enc_max_hp, enc_mp, enc_level, enc_offense, enc_defense, enc_rating;
     EncInt enc_participation; /* rec[0x11A], FUN_0048b0c7 */
+    EncInt enc_xp, enc_gold;   /* rec[0xAD]/rec[0xAC], FUN_0042bb5c's payout seals */
     int fled;             /* rec[+0x1B4]: already walking off, never re-rolled */
     int participation;    /* rec[0x11A] */
     uint32_t last_turn;   /* rec[+0x45C], GetTickCount() of the last turn */
@@ -340,6 +341,33 @@ void battle_set_pets(int pets)
     pending_pets = pets < 0 ? 0 : pets;
 }
 void battle_set_scene_event(BattleSceneEvent fn) { scene_event = fn; }
+void battle_hero_reseal_level(void)
+{
+    /* FUN_0048AE32 is a pure lookup - it walks DAT_004e4874 + 0x128 at stride 0x6E0 for the first
+     * live combatant whose rec[+4] == the hero serial - and it bails out with NULL unless
+     * FUN_0041bd7b() is set, so offline there is no hero combatant outside a fight. That is the
+     * only correct behaviour for this call site, and it matches both originals: a hero with no
+     * live combatant spends ZERO rands here, so callers invoke it unconditionally.
+     *
+     * FUN_0041BD7B, the gate, is a FRONT-END-STATE predicate, not a connectivity check - three
+     * of us misread it as one and nearly deleted a correct flee port over it. DAT_004E483C is
+     * the CSoulsView window pointer, assigned only at view construction (all.c:17996) and at
+     * destruction (all.c:20105), so it is non-NULL for the whole life of a running game.
+     * DAT_004DF8A4 is the front state (labels.csv 0041B891: 5 = well, 7 = scene). So the whole
+     * expression reduces to: return 0 if there is no main window, or if the state is neither 5
+     * nor 7 and no live soul occupies a combatant slot. A fight runs in a scene, i.e. state 7,
+     * where it returns 1 - which is why FUN_0048B1AD can find the hero's combatant offline and
+     * why FUN_00436C9d's `rec == 0 -> may flee` arm is NOT reached during a real fight. Do not
+     * "simplify" this guard to a server check.
+     *
+     * CALLERS: this must stay the LAST thing on the path. At 0x47AEA1 the seal follows the whole
+     * derived-stat recomputation between 0x47AE2A and 0x47AEA1 (the +0x68/+0x690 clamp,
+     * FUN_00449AA2, FUN_0040E04D, FUN_0040C694), and at 0x484E0B it follows the hero record being
+     * copied at 0x484DF0..0x484DF3. Moving either call earlier spends the 4 draws in the wrong
+     * place and shifts everything after it. Do not hoist it. */
+    if (fight.result == BATTLE_NONE || fight.count < 1) return;
+    enc_put(&fight.actors[0].enc_level,&fight.actors[0].level,g_hero.level);
+}
 /* FUN_0048e19a clears the fight block and the per-fight kill table, and jitters the block's
  * base with one rand: `rand()%0x3E0A0 & 0xFFFFFFF0`. */
 void battle_begin_ex(const int *ids, int count, int difficulty, int distance_pct, unsigned mods)
@@ -474,6 +502,14 @@ static void finish(BattleResult result)
         /* FUN_0042bb5c seals the hero's XP (hero[0x68]), gold (hero[0x6C]) and the level
          * (hero[0x64]) through FUN_0049b71b at 0x0042BF75/0x0042C0AB/0x0042C0B9 - 3 seals, 12
          * rands - before the trophy roll's three. */
+        /* FUN_0042bb5c has THREE seals, and they come before the trophy roll's three rands:
+         * the combatant's XP (rec[0xAD]) and gold (rec[0xAC]) are re-sealed with the awarded
+         * values, then the level (rec[0xAE]) is re-sealed from FUN_0042b6c1's result. Ghidra
+         * drops the this-pointer, so the decomp shows them as seals on the hero record; the hero
+         * record has no EncInt, so they belong to the hero's combatant, which is actors[0]. */
+        enc_put(&fight.actors[0].enc_xp,&fight.actors[0].xp,fight.xp);
+        enc_put(&fight.actors[0].enc_gold,&fight.actors[0].gold,fight.gold);
+        enc_put(&fight.actors[0].enc_level,&fight.actors[0].level,g_hero.level);
         hero_award(&g_hero,xp,gold);
         victory_trophy_roll();
         battle_music("victory");
@@ -1224,6 +1260,30 @@ BattleResult battle_update(const Input *in)
     if (fight.spell_menu) { spell_menu_update(in); return fight.result; }
     if (in && in->pressed['s']) { battle_open_spells(); return fight.result; }
     fight.tick = tick_now();
+    /* FUN_00449006 is the hero-stats-into-the-live-combatant push, and it has FIVE seals, not the
+     * two I first placed. Ghidra drops the this-pointer on a FUN_0049B71B call, so the decomp
+     * reads them as seals on the hero record - which is wrong, the hero record has no EncInt.
+     * Each is really `enc_set(&combatant_field, <value loaded from the hero>)`:
+     *   & 1:  seal(HP)   hero+0x70 -> rec[0x2A8] = hero+0x74   (maxHP, plain)
+     *         seal(maxHP) hero+0x78 -> rec[0x2AC] = hero+0x7C   (maxMP, plain)
+     *   & 2:  five FUN_00416c60(hero+0x680..0x690, 0xFF) reads land in rec[0x42C..0x43C] PLAIN,
+     *         then seal(hero+0x84), seal(hero+0x80), and finally seal(hero+0x64 = the level),
+     *         with rec[0x440]/[0x444]/[0x2F8]/[0x2B4] as plain copies around them.
+     * The order of the five is the contract, so it is reproduced exactly. */
+    enc_put(&fight.actors[0].enc_hp,&fight.actors[0].hp,g_hero.max_hp);
+    enc_put(&fight.actors[0].enc_max_hp,&fight.actors[0].max_hp,g_hero.max_mp);
+    /* The three seals in the & 2 arm are re-seals of values the hero holds at +0x84 and +0x80,
+     * which are not fields the port carries, so each re-seals the combatant's own value. That
+     * spends the same 12 draws in the same order without inventing data; when the port grows the
+     * real hero fields these three become copies of them. */
+#ifdef HERO_HAS_ATTACK_DEFENCE
+    enc_put(&fight.actors[0].enc_mp,&fight.actors[0].mp,g_hero.attack);
+    enc_put(&fight.actors[0].enc_offense,&fight.actors[0].offense,g_hero.defense);
+#else
+    enc_put(&fight.actors[0].enc_mp,&fight.actors[0].mp,fight.actors[0].mp);
+    enc_put(&fight.actors[0].enc_offense,&fight.actors[0].offense,fight.actors[0].offense);
+#endif
+    enc_put(&fight.actors[0].enc_level,&fight.actors[0].level,g_hero.level);
     fight.actors[0].hp = g_hero.hp; fight.actors[0].mp = g_hero.mp;
     fight.actors[0].ailments = g_hero.ailments;
     if (outcome()) return fight.result;
@@ -1486,6 +1546,17 @@ void battle_run_simulator(int mode)
             if (attacker >= fight.count) attacker = fight.count-1;
             target = mode ? 0 : (attacker % (fight.count-1)) + 1;
             if (target >= fight.count || target == attacker) target = attacker == 0 ? 1 : 0;
+            /* FUN_00432AC8 memsets its scratch combatant and then seals it; the simulator is an
+             * admin command, so the seals are what keep its stream honest rather than its rules. */
+            enc_put(&fight.actors[attacker].enc_level,&fight.actors[attacker].level,
+                    fight.actors[attacker].level);
+            enc_put(&fight.actors[attacker].enc_hp,&fight.actors[attacker].hp,
+                    fight.actors[attacker].hp);
+            enc_put(&fight.actors[attacker].enc_max_hp,&fight.actors[attacker].max_hp,
+                    fight.actors[attacker].max_hp);
+            enc_put(&fight.actors[target].enc_hp,&fight.actors[target].hp,fight.actors[target].hp);
+            enc_put(&fight.actors[target].enc_max_hp,&fight.actors[target].max_hp,
+                    fight.actors[target].max_hp);
             fight.attacker = attacker; fight.victim = target; fight.spell = 0;
             damage = physical_damage(&fight.actors[attacker],&fight.actors[target],attacker != 0);
             wos_log_event("battle_hit","ms=0 attacker=%d target=%d dmg=%d simulator=%d",

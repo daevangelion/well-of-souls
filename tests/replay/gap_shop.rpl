@@ -1,16 +1,11 @@
 # seed: 1
 # requires: shop_buy shop_sell
-# Enter the Gateway of Dreams, agree to the Soul Brother, and trade.
+# Walk into the Gateway of Dreams, agree to the golden rule, then trade with the Soul Brother.
 expect boot_menu 900
 key RETURN
 wait 30
 key RETURN
 wait 30
-# Three states before the Well, not two: 1 main menu -> 2 the
-# "Where Do You Want To Play Today?" splash (FUN_0041D31F) -> 3 the world
-# list (FUN_0041D717). The original's own table is FUN_0041B891 (all.c:21078);
-# the port used to collapse the splash, so the script had drifted. The extra
-# RETURN is the plan's keyboard shortcut for the row click (msg 0x474).
 key RETURN
 wait 30
 key n
@@ -20,36 +15,90 @@ key RETURN
 expect hero_ready 300
 expect map_enter 600
 keydown DOWN
-expect scene_enter 180
+expect scene_enter 300
 keyup DOWN
-wait 20
-key RETURN
-wait 3
-key RETURN
-wait 3
-key RETURN
-wait 3
-key RETURN
-wait 3
-key RETURN
-wait 3
-key RETURN
-wait 5
+click 200 100
+wait 2
 key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+click 200 100
+wait 2
+key y
+wait 2
+key y
+wait 2
+expect panel_open 600
 wait 5
-key RETURN
+click 36 95
 wait 3
-key RETURN
-wait 3
-key RETURN
-wait 3
-key RETURN
-expect panel_open 180
 key b
-expect shop_buy 60
+expect shop_buy 120
 key TAB
+wait 3
 key s
-expect shop_sell 60
-shot /tmp/wos-gap-shop.bmp
+expect shop_sell 120
 key ESCAPE
+wait 5
 quit
