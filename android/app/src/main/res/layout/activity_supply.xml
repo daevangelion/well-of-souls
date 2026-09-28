@@ -13,20 +13,30 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Well of Souls — install the game"
+            android:text="Well of Souls — setup"
             android:textSize="22sp"
             android:textStyle="bold"
-            android:paddingBottom="8dp" />
+            android:paddingBottom="4dp" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="The game data is copyrighted and is not bundled in this app. Supply the original WellOfSouls.exe installer below; it is unpacked on this device and the game will start automatically."
+            android:text="The game data is copyrighted and is not bundled in this app. Supply the original installer to install the game. A soundfont is optional (without one the game runs silently)."
             android:textSize="14sp"
             android:paddingBottom="16dp" />
 
+        <!-- ===== Game data ===== -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Game data"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingTop="8dp"
+            android:paddingBottom="4dp" />
+
         <ProgressBar
-            android:id="@+id/progress"
+            android:id="@+id/dataProgress"
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -34,42 +44,83 @@
             android:visibility="gone" />
 
         <TextView
-            android:id="@+id/status"
+            android:id="@+id/dataStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Waiting for the installer…"
             android:textSize="14sp"
-            android:paddingTop="8dp"
-            android:paddingBottom="16dp" />
+            android:paddingTop="4dp"
+            android:paddingBottom="8dp" />
 
         <Button
-            android:id="@+id/pickButton"
+            android:id="@+id/pickInstallerButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Choose installer file…" />
 
         <EditText
-            android:id="@+id/urlField"
+            android:id="@+id/installerUrl"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:hint="https://…/WellOfSouls.exe"
+            android:layout_marginTop="8dp"
+            android:hint="Installer URL (optional)"
             android:inputType="textUri"
             android:maxLines="1"
             android:importantForAutofill="no" />
 
         <Button
-            android:id="@+id/downloadButton"
+            android:id="@+id/downloadInstallerButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Download installer from URL" />
+
+        <!-- ===== Soundfont ===== -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Soundfont (optional)"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingTop="24dp"
+            android:paddingBottom="4dp" />
+
+        <TextView
+            android:id="@+id/soundStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Using the built-in soundfont."
+            android:textSize="14sp"
+            android:paddingBottom="8dp" />
+
+        <Button
+            android:id="@+id/pickSoundfontButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Choose soundfont file…" />
+
+        <EditText
+            android:id="@+id/soundfontUrl"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Download from URL" />
+            android:hint="Soundfont URL"
+            android:inputType="textUri"
+            android:maxLines="1"
+            android:importantForAutofill="no" />
+
+        <Button
+            android:id="@+id/downloadSoundfontButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Download soundfont from URL" />
 
         <Button
             android:id="@+id/gameButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="28dp"
             android:text="Continue to game" />
     </LinearLayout>
 </ScrollView>

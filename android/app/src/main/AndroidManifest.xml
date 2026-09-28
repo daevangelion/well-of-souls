@@ -15,19 +15,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <!-- Game-data supply: pick/download the installer and unpack it on-device. -->
+        <!-- Single setup form: game installer + optional soundfont. -->
         <activity android:name=".SupplyActivity" android:exported="true"
-            android:label="WoS Install"
+            android:label="WoS Setup"
             android:theme="@android:style/Theme.DeviceDefault.Light">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-        <!-- Optional soundfont supply: pick/download a SoundFont2 bank without a rebuild. -->
-        <activity android:name=".SoundfontActivity" android:exported="true"
-            android:label="WoS Soundfont"
-            android:theme="@android:style/Theme.DeviceDefault.Dialog">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

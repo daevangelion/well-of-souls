@@ -68,11 +68,13 @@ byte-exact against cicdec). The decoded game is stored in internal storage and
 reused on later launches. The desktop build keeps the same decoder for host-side
 unpacking but never links the codecs into the game binary.
 
-**Soundfont at runtime (optional).** MIDI needs a SoundFont2 bank; without one
-the game runs silently. A "WoS Soundfont" launcher icon lets you pick or
-download any bank, stored as `user-soundfont.sf2`; `find_soundfont()` checks it
-before the bundled TimGM6mb, so a supplied bank wins without a rebuild. (The
-TimGM6mb bank is still bundled by default as a fallback.)
+**Runtime setup (one form).** A single "WoS Setup" launcher screen handles both inputs:
+the game installer (pick or download a URL; stored as `installer-supplied.bin` and
+decoded on-device) and, optionally, a soundfont (pick or download; stored as
+`user-soundfont.sf2`). The soundfont URL is pre-filled with the official upstream
+TimGM6mb bank. `find_soundfont()` prefers the supplied bank over the bundled one. The
+game installer is a commercial title with no official free-download URL, so that field
+is left for you to fill with a source you have the right to use.
 
 ## Tests
 

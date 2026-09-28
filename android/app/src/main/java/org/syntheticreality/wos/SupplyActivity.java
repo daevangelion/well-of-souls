@@ -19,28 +19,37 @@ import java.io.OutputStream;
 import java.net.URL;
 
 /**
- * Game-data supply — a real form screen (not popups).
+ * Setup form (single launcher entry "WoS Setup").
  *
- * Lets the user supply the original WellOfSouls.exe installer at any time: pick it via
- * the Storage Access Framework, or paste a URL and download it. The installer is stored
- * as installer-supplied.bin in internal storage; the game (WosActivity) decodes it
- * on-device with the bundled CIC decoder and boots. If the game is already running and
- * waiting, "Continue to game" brings it forward so it picks the installer up.
+ * Handles both runtime inputs in one screen:
+ *   - Game data: pick the original WellOfSouls.exe installer (SAF) or download it from a
+ *     URL, stored as installer-supplied.bin; the game decodes it on-device with the
+ *     bundled CIC decoder and boots.
+ *   - Soundfont (optional): pick or download a SoundFont2 bank, stored as
+ *     user-soundfont.sf2; find_soundfont() prefers it over the built-in bank.
+ *
+ * The soundfont URL is pre-filled with the official upstream TimGM6mb bank. The game
+ * installer is a commercial title with no official free-download URL, so that field is
+ * left empty for the user to paste a source they have the right to use.
  */
 public final class SupplyActivity extends Activity {
     private static final String TAG = "SupplyActivity";
-    private static final int REQUEST_PICK = 0x5703;
+    private static final int REQUEST_PICK_INSTALLER = 0x5703;
+    private static final int REQUEST_PICK_SOUNDFONT = 0x5704;
     private static final String SUPPLIED = "installer-supplied.bin";
+    private static final String USER_BANK = "user-soundfont.sf2";
+    private static final String TIMGM6MB_URL =
+        "https://raw.githubusercontent.com/arbruijn/TimGM6mb/"
+        + "d6ad4ed72dce1fd3d67f17b74e08cd7ae7941a96/TimGM6mb.sf2";
 
-    private TextView status;
-    private ProgressBar progress;
+    private TextView dataStatus, soundStatus;
+    private ProgressBar dataProgress;
+    private Button gameButton;
 
-    private File target() {
-        return new File(getFilesDir(), SUPPLIED);
-    }
-
+    private File installerFile() { return new File(getFilesDir(), SUPPLIED); }
+    private File soundfontFile() { return new File(getFilesDir(), USER_BANK); }
     private boolean dataReady() {
-        return new File(getFilesDir(), "data/Souls.exe").isFile() || target().isFile();
+        return new File(getFilesDir(), "data/Souls.exe").isFile() || installerFile().isFile();
     }
 
     @Override
@@ -48,83 +57,89 @@ public final class SupplyActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_supply);
 
-        status = findViewById(R.id.status);
-        progress = findViewById(R.id.progress);
-        Button pick = findViewById(R.id.pickButton);
-        Button download = findViewById(R.id.downloadButton);
+        dataStatus = findViewById(R.id.dataStatus);
+        soundStatus = findViewById(R.id.soundStatus);
+        dataProgress = findViewById(R.id.dataProgress);
         gameButton = findViewById(R.id.gameButton);
-        EditText url = findViewById(R.id.urlField);
+        final EditText installerUrl = findViewById(R.id.installerUrl);
+        final EditText soundfontUrl = findViewById(R.id.soundfontUrl);
+        soundfontUrl.setText(TIMGM6MB_URL);   // official upstream bank, pre-filled
 
-        pick.setOnClickListener(v -> launchPicker());
-        download.setOnClickListener(v -> {
-            String u = url.getText().toString().trim();
-            if (u.isEmpty()) { setStatus("Enter a URL first.", false); return; }
-            downloadInBackground(u);
+        findViewById(R.id.pickInstallerButton).setOnClickListener(v -> pick(REQUEST_PICK_INSTALLER));
+        findViewById(R.id.downloadInstallerButton).setOnClickListener(v -> {
+            String u = installerUrl.getText().toString().trim();
+            if (u.isEmpty()) { setDataStatus("Paste an installer URL first.", false); return; }
+            download(u, true);
+        });
+        findViewById(R.id.pickSoundfontButton).setOnClickListener(v -> pick(REQUEST_PICK_SOUNDFONT));
+        findViewById(R.id.downloadSoundfontButton).setOnClickListener(v -> {
+            String u = soundfontUrl.getText().toString().trim();
+            if (u.isEmpty()) { setSoundStatus("Paste a soundfont URL first."); return; }
+            download(u, false);
         });
         gameButton.setOnClickListener(v -> openGame());
         refresh();
     }
 
-    private Button gameButton;
-
     private void refresh() {
         boolean ready = dataReady();
-        if (gameButton != null) gameButton.setEnabled(ready);
-        if (ready) {
-            setStatus("Installer ready. Tap Continue to game.", false);
-        } else {
-            setStatus("Waiting for the installer…", true);
-        }
+        gameButton.setEnabled(ready);
+        if (ready) setDataStatus("Installer ready. Tap Continue to game.", false);
+        else setDataStatus("Waiting for the installer…", true);
+        setSoundStatus(soundfontFile().isFile()
+                ? "Custom soundfont installed." : "Using the built-in soundfont.");
     }
 
-    private void setStatus(String msg, boolean busy) {
-        status.setText(msg);
-        progress.setVisibility(busy ? View.VISIBLE : View.GONE);
+    private void setDataStatus(String msg, boolean busy) {
+        dataStatus.setText(msg);
+        dataProgress.setVisibility(busy ? View.VISIBLE : View.GONE);
     }
+    private void setSoundStatus(String msg) { soundStatus.setText(msg); }
 
     private void openGame() {
-        // Guard: launching the game with no data just triggers the 5-minute wait and
-        // the failure box. Only proceed once the installer is present.
-        if (!dataReady()) { setStatus("Supply the installer first.", false); refresh(); return; }
+        if (!dataReady()) { setDataStatus("Supply the installer first.", false); refresh(); return; }
         startActivity(new Intent(this, WosActivity.class));
         finish();
     }
 
-
-
-    private void launchPicker() {
-        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        pick.addCategory(Intent.CATEGORY_OPENABLE);
-        pick.setType("*/*");
-        pick.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        try {
-            startActivityForResult(pick, REQUEST_PICK);
-        } catch (Exception e) {
+    private void pick(int request) {
+        Intent p = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        p.addCategory(Intent.CATEGORY_OPENABLE);
+        p.setType("*/*");
+        p.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try { startActivityForResult(p, request); }
+        catch (Exception e) {
             Log.w(TAG, "no document picker", e);
-            setStatus("No file picker available; use the URL field instead.", false);
+            if (request == REQUEST_PICK_INSTALLER) setDataStatus("No file picker; use the URL field.", false);
+            else setSoundStatus("No file picker; use the URL field.");
         }
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQUEST_PICK) return;
-        if (resultCode == RESULT_OK && data != null && data.getData() != null) {
-            final Uri uri = data.getData();
-            new Thread(() -> done(write(() -> getContentResolver().openInputStream(uri)))).start();
-        } else {
-            setStatus("No file selected.", false);
-        }
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        final Uri uri = data.getData();
+        final boolean isInstaller = requestCode == REQUEST_PICK_INSTALLER;
+        new Thread(() -> {
+            boolean ok = write(isInstaller ? installerFile() : soundfontFile(),
+                               () -> getContentResolver().openInputStream(uri));
+            runOnUiThread(() -> finishWrite(ok, isInstaller));
+        }).start();
     }
 
-    private void downloadInBackground(String url) {
-        new Thread(() -> done(write(() -> new URL(url).openStream()))).start();
+    private void download(String url, boolean isInstaller) {
+        new Thread(() -> {
+            boolean ok = write(isInstaller ? installerFile() : soundfontFile(), () -> new URL(url).openStream());
+            runOnUiThread(() -> finishWrite(ok, isInstaller));
+        }).start();
     }
 
     private interface StreamOp { InputStream open() throws Exception; }
 
-    private boolean write(StreamOp src) {
-        File tmp = new File(getFilesDir(), SUPPLIED + ".part");
+    /** Streams src into dest atomically (temp file + rename). */
+    private boolean write(File dest, StreamOp src) {
+        File tmp = new File(dest.getParentFile(), dest.getName() + ".part");
         try (InputStream in = src.open(); OutputStream out = new FileOutputStream(tmp)) {
             if (in == null) return false;
             byte[] buf = new byte[65536];
@@ -132,23 +147,24 @@ public final class SupplyActivity extends Activity {
             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
             out.flush();
         } catch (Exception e) {
-            Log.e(TAG, "supply failed", e);
+            Log.e(TAG, "write failed", e);
             tmp.delete();
             return false;
         }
-        if (!tmp.renameTo(target())) { tmp.delete(); return false; }
+        if (!tmp.renameTo(dest)) { tmp.delete(); return false; }
         return true;
     }
 
-    private void done(boolean ok) {
-        runOnUiThread(() -> {
-            if (ok) {
-                setStatus("Installer saved. Decoding…", true);
-                Toast.makeText(this, "Installer saved.", Toast.LENGTH_LONG).show();
-                openGame();
-            } else {
-                setStatus("Could not read the installer. Try again.", false);
-            }
-        });
+    private void finishWrite(boolean ok, boolean isInstaller) {
+        if (ok) {
+            if (isInstaller) setDataStatus("Installer saved. Decoding…", true);
+            else setSoundStatus("Soundfont saved.");
+            Toast.makeText(this, isInstaller ? "Installer saved." : "Soundfont saved.", Toast.LENGTH_LONG).show();
+        } else {
+            if (isInstaller) setDataStatus("Could not read the file. Try again.", false);
+            else setSoundStatus("Could not read the soundfont.");
+        }
+        refresh();
+        if (isInstaller && ok) openGame();
     }
 }
