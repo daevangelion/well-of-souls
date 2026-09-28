@@ -77,9 +77,13 @@ public final class WosActivity extends SDLActivity {
                     else if (which == 1) promptForUrl();
                 })
                 .create();
-        // On cancel, just leave the game waiting (native times out); do NOT finish(),
-        // which would tear down SDL while the native thread is still waiting.
-        dlg.setOnCancelListener(d -> toast("Waiting for the installer; you can supply it from the launcher."));
+        // On cancel, open the dedicated "WoS Install" supply screen (do NOT finish(),
+        // which would tear down SDL while the native thread is still waiting). The game
+        // keeps waiting in the background; supplying the installer there boots it.
+        dlg.setOnCancelListener(d -> {
+            try { startActivity(new Intent(this, SupplyActivity.class)); }
+            catch (Exception e) { toast("Waiting for the installer…"); }
+        });
         supplyDialog = dlg;
         dlg.show();
     }
