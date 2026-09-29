@@ -1,4 +1,4 @@
-# seed: 1
+# seed: 2
 # requires: shop_buy item_use equip
 # Buy a Health Potion and a Leather Toupee (shop index 17), then use and equip them.
 expect boot_menu 900

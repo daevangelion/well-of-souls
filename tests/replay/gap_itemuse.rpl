@@ -1,4 +1,4 @@
-# seed: 1
+# seed: 2
 # requires: shop_buy item_use travel panel_open trophy_bag_resize
 # requires-match: panel_open kind=Trophy\ Bag
 #

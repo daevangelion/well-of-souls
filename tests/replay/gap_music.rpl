@@ -1,4 +1,4 @@
-# seed: 1
+# seed: 2
 # requires: boot_menu hero_ready map_enter music_play hero_move encounter battle_start
 # Map entry resolves music.ini [evergreen] midi1=scrn_overworld, and the walk out of the
 # Gateway into open country is what fires the retail 2 %-per-tick random encounter roll

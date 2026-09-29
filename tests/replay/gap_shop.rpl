@@ -1,4 +1,4 @@
-# seed: 1
+# seed: 2
 # requires: shop_buy shop_sell
 # Walk into the Gateway of Dreams, agree to the golden rule, then trade with the Soul Brother.
 expect boot_menu 900

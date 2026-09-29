@@ -1,4 +1,4 @@
-# seed: 1
+# seed: 2
 # requires: boot_menu hero_ready map_enter path_found hero_move
 # Option 7, "Enable automatic Way Point calculations", gates the pathfinder. Its DEFAULT is
 # 1 -- it is ON in retail, straight out of the table at DAT_004F2A58 (record 27:
