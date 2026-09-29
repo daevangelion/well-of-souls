@@ -7,10 +7,21 @@ expect boot_menu 900
 # tos_accept = (356,371,75,23), so its centre is (393,382).
 click 393 382
 expect tos_accept 300
+# State 2 is where FUN_0041F699 makes its synchronous 0x46F call, which raises
+# SRNet's modal (0x42AA10). 1005 "Solo Game" is (250,313,299,23) -> centre
+# (399,324); control 1 "Play Game" is (250,380,75,23) -> centre (287,391).
+# 1005 then 1 closes it, 0x46F returns 1, FUN_0041D374 registers
+# "--- Scanning ---", and the stepper FUN_00438E8E runs ~30 calls (6140 to
+# 8340 ms) before FUN_0041B891(3) draws the world list.
+# Main menu: RETURN is the Play-now shortcut (0x46B) into state 2.
 key RETURN
 wait 30
-key RETURN
-wait 30
+click 399 324
+wait 10
+click 630 309
+wait 240
+# State 3 is the world list; RETURN takes the highlighted row
+# (msg 0x474), which is the keyboard shortcut for the row's click.
 key RETURN
 wait 30
 key n

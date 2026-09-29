@@ -76,7 +76,9 @@ void boot_seed_step(void)
      * pin and must NOT override this: with --seed 1 --time 1234567890 the port was
      * seeding from 1 while the oracle seeded from 1234567890, which is why the boot
      * COUNT matched and the state did not. */
-    uint32_t t = clock_time_s();
+    /* The legacy .rpl replays pass --seed N without --time; for them N stands in
+     * for time(NULL) here so a replay run is deterministic. --time wins when given. */
+    uint32_t t = boot_seed_have_pin ? boot_seed_pin : clock_time_s();
     crt_srand(t);
     /* 1409: 0x00426B27, the base-offset draw. abs(draw) & 0x3FFF & ~15 is 0..0x3FF0;
      * DAT_004E4870 adds a malloc block and DAT_0067FBF8 is that + 0x1560A5C. Only
@@ -104,10 +106,6 @@ static void srn_mix_step(void *u) { (void)u; if (srn_mix) srn_mix(); }
  * DAT_004E4870 = (draw & 0x3FFF & ~15) + <malloc block>, DAT_0067FBF8 = that + 0x1560A5C.
  * The masked draw is what is published, since the block is a heap address. */
 static void seed_step(void *u) { (void)u; boot_seed_step(); }
-
-/* --seed pins the time() value the seed step uses; it does NOT move the step. */
-uint32_t boot_seed_pin;
-int boot_seed_have_pin;
 
 void boot_register_core(void)
 {

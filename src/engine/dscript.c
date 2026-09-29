@@ -44,7 +44,9 @@ static int parse_pair(DscriptOp *c, const char *tok)
     *eq = 0;
     if (number(buf, &n)) return -1;
     c->control[c->control_count] = (int)n;
-    if (number(eq + 1, &n)) return -1;
+    /* `click` is the oracle's button press; as a value it is 1. */
+    if (!strcmp(eq + 1, "click")) n = 1;
+    else if (number(eq + 1, &n)) return -1;
     c->value[c->control_count] = (int)n;
     ++c->control_count;
     return 0;
@@ -117,13 +119,25 @@ int dscript_parse(Dscript *ds, char *text, size_t *error_line)
             if (strlen(args) >= DSCRIPT_TEXT_MAX) goto bad;
             memcpy(c.text, args, strlen(args) + 1);
         } else if (!strcmp(verb, "dialog")) {
+            /* Two spellings: `dialog <id> k=v ... ok|cancel`, and the oracle's
+             * `dialog <ctrl>=click ...` for a modal with no WoS resource id (the
+             * SRNet dialog): the id is 0 and the terminator is optional (ok). */
+            int bare;
             c.kind = DS_DIALOG;
             t = token(&args);
-            if (!t || number(t, &n)) goto bad;
-            c.id = (int)n;
+            if (!t) goto bad;
+            bare = strchr(t, '=') != NULL;
+            if (bare) {
+                c.id = 0;
+                c.ok = 1;
+                if (parse_pair(&c, t)) goto bad;
+            } else {
+                if (number(t, &n)) goto bad;
+                c.id = (int)n;
+            }
             for (;;) {
                 t = token(&args);
-                if (!t) goto bad;
+                if (!t) { if (bare) break; goto bad; }
                 if (!strcmp(t, "ok")) { c.ok = 1; break; }
                 if (!strcmp(t, "cancel")) { c.ok = 0; break; }
                 if (parse_pair(&c, t)) goto bad;

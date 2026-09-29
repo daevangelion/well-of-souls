@@ -339,13 +339,12 @@ static int dialog_retry_pending(void)
     int i = 0, accepted = 0;
     while (i < g_pending_count) {
         const DscriptOp *op = &g_pending[i];
-        char keys[DSCRIPT_KV_MAX][32], values[DSCRIPT_KV_MAX][32];
-        const char *kp[DSCRIPT_KV_MAX];
+        char keys[DSCRIPT_KV_MAX + 1][32];
+        const char *kp[DSCRIPT_KV_MAX + 1];
         DialogOp d;
         int k, n = op->control_count, took = 0;
         for (k = 0; k < n; ++k) {
-            snprintf(keys[k], sizeof(keys[k]), "%d", op->control[k]);
-            snprintf(values[k], sizeof(values[k]), "%d", op->value[k]);
+            snprintf(keys[k], sizeof(keys[k]), "%d=%d", op->control[k], op->value[k]);
             kp[k] = keys[k];
         }
         snprintf(keys[n], sizeof(keys[n]), "ok");
@@ -538,13 +537,8 @@ int game_main(int argc, char **argv)
      * this runs the _initterm steps, table A first. */
     boot_register_core();
     scene_boot_register();
-    if (have_seed) crt_srand(seed);   /* --seed pins the value, not the position */
+    if (have_seed && !have_epoch) { boot_seed_pin = seed; boot_seed_have_pin = 1; }
     boot_run();
-    if (!clock_date_check(clock_time_s())) {
-        /* The original blocks here on a modal MessageBoxA and then continues into
-         * the same init path, so the port shows the same box and does the same. */
-        clock_box_modal(&fb);
-    }
     /* FUN_00428360, the main frame's id-0x16 100 ms timer, armed at the original's
      * point. It is what actually drives FUN_0040A7C7's gate. */
     frame_timer_owner = 0;

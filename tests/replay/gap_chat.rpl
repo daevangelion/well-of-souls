@@ -16,6 +16,11 @@ click 393 382
 expect tos_accept 300
 key RETURN
 wait 30
+# SRNet modal (0x46F): 1005 Solo Game, then 1 Play Game, then the ~2.2 s stepper.
+click 399 324
+wait 10
+click 630 309
+wait 240
 # Three states before the Well, not two: 1 main menu -> 2 the
 # "Where Do You Want To Play Today?" splash (FUN_0041D31F) -> 3 the world
 # list (FUN_0041D717). The original's own table is FUN_0041B891 (all.c:21078);
@@ -27,7 +32,7 @@ wait 40
 # Choose Your World: the world rows are FUN_0041D3CC's list, x = 2*((W+7)>>3) = 160,
 # y = H/20 + ((H+3)>>2) = 144, step 0 at 640x480; FUN_00405153 then scales by client/1000,
 # so the Evergreen row rect is (102,69)-(174,77).
-click 120 73
+click 180 147
 expect world_chosen 300
 key n
 wait 5

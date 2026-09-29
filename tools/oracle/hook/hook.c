@@ -984,16 +984,29 @@ static void wintree_walk(HWND w, int depth)
         GetWindowTextA(ch, txt, sizeof txt);
         GetClientRect(ch, &rc);
         GetClientRect(g_main, &mc);
-        POINT o; o.x = 0; o.y = 0;
+        POINT o, s; o.x = 0; o.y = 0;
         ClientToScreen(ch, &o);
+        s = o;                                   /* the SCREEN origin, kept before the
+                                                  * conversion below mutates o into
+                                                  * main-client coordinates */
         ScreenToClient(g_main, &o);
         pc.left = o.x; pc.top = o.y; pc.right = o.x + rc.right; pc.bottom = o.y + rc.bottom;
         vis = IsWindowVisible(ch);
-        tr("wintree d=%d hwnd=%p class=%s text=%s vis=%d mainclient=(%ld,%ld)-(%ld,%ld)",
-           depth, (void *)ch, cls, txt, vis,
-           (long)(pc.left - mc.left), (long)(pc.top - mc.top),
-           (long)(pc.right - mc.left), (long)(pc.bottom - mc.top));
         for (k = 0; k < (int)sizeof txt - 1 && txt[k]; k++) if (txt[k] < 32) txt[k] = '.';
+        /* `id` and the SCREEN rect are both emitted, and both are needed.  The
+         * main-client rect above is meaningless for a control belonging to a TOP-LEVEL
+         * window: a modal is not positioned relative to the main window's client, so a
+         * `.dsc click` -- which takes SCREEN coordinates, because that is what
+         * WindowFromPoint hit-tests -- cannot be aimed from it.  And `id` is what the
+         * `dialog <id> click` op keys on, so it is the only stable way to name a
+         * control whose caption may repeat across dialogs. */
+        tr("wintree d=%d hwnd=%p id=%d class=%s text=%s vis=%d mainclient=(%ld,%ld)-(%ld,%ld)"
+           " screen=(%ld,%ld)-(%ld,%ld)",
+           depth, (void *)ch, GetDlgCtrlID(ch), cls, txt, vis,
+           (long)(pc.left - mc.left), (long)(pc.top - mc.top),
+           (long)(pc.right - mc.left), (long)(pc.bottom - mc.top),
+           (long)(s.x + rc.left), (long)(s.y + rc.top),
+           (long)(s.x + rc.right), (long)(s.y + rc.bottom));
         wintree_walk(ch, depth + 1);
         ch = (HWND)GetWindow(ch, GW_HWNDNEXT);
     }
@@ -2032,12 +2045,39 @@ static BOOL WINAPI hook_PostMessageA(HWND h, UINT msg, WPARAM w, LPARAM l)
            (unsigned long)w, (unsigned long)l);
     return real_PostMessageA(h, msg, w, l);
 }
+/* `0x46F` IS LOGGED WITH ITS RETURN VALUE, ALWAYS, because it is the one call whose outcome
+ * decides the front end's state 2 and nobody has measured it.
+ *
+ * `FUN_0041F699` (the `0x46B` "Play now" handler) does
+ * `SendMessageA(*(HWND*)(DAT_004E4840 + 0x20), 0x46F, 0, 0)` at 0x41F6DC, and `0x46F`'s handler is
+ * the SRNet open. The `if` after that call selects between staying in state 2 and going back to
+ * state 1, and TWO runs of the same binary on the same script have been reported as behaving
+ * differently -- one parked in the call for the rest of the run, one apparently not -- with
+ * nobody having observed what it RETURNED. Guessing at that from the surrounding code is what
+ * produced three wrong readings in a row, so the return value is written down.
+ *
+ * Both the call and the return are logged, because the two are different facts: the call being
+ * made says the branch was reached, and the return says which way it went. A trace that recorded
+ * only the call would be satisfied by a call that never came back. */
+static uint32_t g_q46f_at;
 static BOOL WINAPI hook_SendMessageA(HWND h, UINT msg, WPARAM w, LPARAM l)
 {
     if (g_msglog)
         tr("post now=%u ra=%08lX Send id=%04X hwnd=%p w=%08lX l=%08lX",
            vnow(), (unsigned long)(uintptr_t)__builtin_return_address(0), msg, (void *)h,
            (unsigned long)w, (unsigned long)l);
+    if (msg == 0x46F) {
+        uintptr_t ra = (uintptr_t)__builtin_return_address(0);
+        tr("query 0x46F: calling at now=%u ra=%08lX hwnd=%p", vnow(),
+           (unsigned long)ra, (void *)h);
+        g_q46f_at = vnow();
+        {
+            BOOL r = real_SendMessageA(h, msg, w, l);
+            tr("query 0x46F: RETURNED %d at now=%u (elapsed %lu ms)", (int)r, vnow(),
+               (unsigned long)(vnow() - g_q46f_at));
+            return r;
+        }
+    }
     return real_SendMessageA(h, msg, w, l);
 }
 
@@ -2854,35 +2894,51 @@ static void *front_make_thunk(int idx, uintptr_t resume, unsigned char *prologue
     here   = (intptr_t)(p + call_at + 4);
     target = (intptr_t)front_log_asm;
     memcpy(p + call_at, &(int32_t){ (int32_t)(target - here) }, 4);
-    /* the displaced prologue, RELOCATED, then a jump back into the rest of the
-     * function.  It has to be copied: patch_text() overwrites the bytes it is copied
-     * from, and the thunk is built before patch_text() runs, so the copy is intact. */
-    memcpy(p + base, prologue, (size_t)plen);
-    memcpy(p + base + plen, "\xE9\0\0\0\0", 5);
-    /* A rel32 field starts ONE PAST its opcode, and `here` is the END of the whole
-     * instruction, i.e. field+4.  Writing the field AT the opcode offset instead
-     * overwrites the opcode and leaves the trailing displacement as whatever the
-     * template held -- which is a jump into the middle of nowhere, and the game dies
-     * at the first call instead of logging anything. */
-    jmp_at = base + plen + 1;
-    here   = (intptr_t)(p + jmp_at + 4);
-    target = (intptr_t)resume;
-    memcpy(p + jmp_at, &(int32_t){ (int32_t)(target - here) }, 4);
-    /* the jmp at offset 15 is the LAST thing head[] does: it goes to base, which is 24
-     * so it clears head[]'s own rel32 field at 16..19. */
-    here   = (intptr_t)(p + out_at + 1 + 4);
-    target = (intptr_t)(p + base);
-    memcpy(p + out_at + 1, &(int32_t){ (int32_t)(target - here) }, 4);
-    tr("front: thunk[%d] at %p prologue=%d bytes resume=%08lX", idx, (void *)p, plen,
-       (unsigned long)resume);
+    /* The displaced prologue is COPIED here and replayed by the thunk, then a jump back
+     * into the rest of the function.  It has to be copied: patch_text() overwrites the
+     * bytes it is copied from, and the thunk is built before patch_text() runs, so the
+     * copy is the original code.
+     *
+     * patch_text() ALWAYS writes six bytes (`push imm32; ret`), so a prologue shorter
+     * than six cannot be replayed from a copy of `plen` bytes and resumed at p+plen: the
+     * sixth byte of the function has been overwritten with the trampoline's own `ret`,
+     * and resuming there re-executes a `ret` in the middle of a prologue -- which is
+     * silent until the function is actually called, and then the run simply stops with
+     * no further trace lines.  The copy is therefore `plen` rounded UP to the patch
+     * width, and the resume is p+that width, so the extra bytes are replayed rather
+     * than skipped.  (An earlier version of this also had the rel32 fields one byte
+     * low, which is a second, independent way to build a thunk that jumps nowhere.)
+     *
+     * A rel32 field starts ONE PAST its opcode and `here` is the END of the whole
+     * instruction, i.e. field+4. */
+    {
+        int wide = (plen < 6) ? 6 : plen;
+        memcpy(p + base, prologue, (size_t)wide);
+        memcpy(p + base + wide, "\xE9\0\0\0\0", 5);
+        jmp_at = base + wide + 1;
+        here   = (intptr_t)(p + jmp_at + 4);
+        target = (intptr_t)(resume + (uintptr_t)(wide - plen));
+        memcpy(p + jmp_at, &(int32_t){ (int32_t)(target - here) }, 4);
+        /* the jmp at offset 15 is the LAST thing head[] does: it goes to base, which is
+         * 24 so it clears head[]'s own rel32 field at 16..19. */
+        here   = (intptr_t)(p + out_at + 1 + 4);
+        target = (intptr_t)(p + base);
+        memcpy(p + out_at + 1, &(int32_t){ (int32_t)(target - here) }, 4);
+    }
     return p;
 }
 
 static void install_front_trace(void)
 {
-    /* (VA, name, prologue length) -- the length is a whole number of instructions and
-     * is read off the file, not guessed: overrunning one would replay part of the
-     * next instruction inside the trampoline. */
+    /* (VA, name, prologue length).  THE LENGTH MUST BE A WHOLE NUMBER OF INSTRUCTIONS
+     * AND AT LEAST SIX, because patch_text() always writes six bytes and the thunk
+     * replays the copy and resumes at p+length.  Two ways to get that wrong, both of
+     * which look like a game that blocks: a length of 5 leaves the sixth byte
+     * overwritten by the trampoline's own `ret`, so the replayed prologue executes a
+     * `ret` mid-function; and a length that stops mid-instruction (the first 5 bytes of
+     * a 10-byte `mov eax,imm32 / call chkstk`) replays half an opcode.  Either produces
+     * a run that installs its patches, logs a few lines, and then stops -- which is
+     * indistinguishable from a hang unless you know to check this table first. */
     static const struct { unsigned va; const char *name; int plen; } T[] = {
         { 0x0041B891u, "front_state_set", 12 },  /* sub esp,104h / push ebx,esi,edi / mov ecx,ebx / push ebp */
         { 0x0041D31Fu, "state2_label",     7 },  /* sub esp,10h / lea eax,[esp] */
@@ -2890,10 +2946,17 @@ static void install_front_trace(void)
         { 0x0041D3CCu, "worldlist_rows",   7 },  /* push ebp / mov eax,[esp+0Ch] / mov ebp,esp */
         { 0x0041D717u, "worldlist_init",   6 },  /* push ebp / mov eax,11C0h */
         { 0x00438E8Eu, "solo_stepper",     6 },  /* push ebp / mov eax,1FBCh */
-        { 0x0042AA10u, "srnet_open_46F",   5 },  /* mov eax,1F50h */
-        { 0x0046CE24u, "network_info",      5 },  /* push esi / mov esi,[esp+8] */
-        { 0x0042B06Au, "quit_game",         5 },  /* push ebx / push esi / push edi / mov ebx,ecx */
-        { 0x0042AF38u, "channel_close",    5 },  /* sub esp,FA0h / push ebx */
+        /* 0x0042AA10 is deliberately NOT traced here.  Its first ten bytes are
+         * `mov eax,1F50h / call chkstk`, and `call rel32` is POSITION DEPENDENT: the
+         * trampoline replays those bytes at a VirtualAlloc address, so the copy's
+         * displacement lands somewhere else and the replayed prologue calls garbage.
+         * The run then stops dead right after this entry, which reads exactly like
+         * "0x46F blocks" and is how that conclusion was reached twice.  The same
+         * applies to 0x0042B06A (`call FUN_00427d89` at +6).  0x46F's entry and RETURN
+         * are traced instead in hook_SendMessageA, an IAT detour, which has no
+         * relocation problem at all. */
+        { 0x0046CE24u, "network_info",     7 },  /* push esi / mov esi,[esp+8] / test esi,esi */
+        { 0x0042AF38u, "channel_close",   6 },  /* sub esp,FA0h */
     };
     unsigned i;
     for (i = 0; i < sizeof T / sizeof T[0] && i < 16; i++) {

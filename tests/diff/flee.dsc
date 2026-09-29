@@ -32,7 +32,7 @@ at 1200 dump front@title
 at 1400 click 393 382
 at 1800 dump front@tos
 at 2400 dump front@menu
-at 2800 click 215 141
+at 2800 click 150 124
 at 3200 dump front@entered
 at 4000 dump battle@start
 at 4500 key f

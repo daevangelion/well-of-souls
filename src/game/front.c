@@ -158,6 +158,7 @@ static void spot_layout(void)
         y = (int)((int64_t)lerp(s->y0,s->y1,s->t_start,s->t_len,tick)*H/1000);
         w = font_width(s->text); h = FONT_H;
         if (s->flags & 0x40) dx = -w/2;
+        else if (s->flags & 0x20) dx = -w;
         if (s->flags & 0x80) dy = -h/2;
         if (s->flags & 2) dy += 2; /* the shadow pass sits 2 px low */
         s->rect.x = x+dx; s->rect.y = y+dy;
@@ -202,8 +203,7 @@ enum {
     MSG_MAP         = 0x487,
     MSG_HAUNT       = 0x48F,
     MSG_ONLINE      = 0x498,
-    MSG_CREATE_WORLD= 0x620, /* solo: "--- or Create Your Own World ---"    */
-    MSG_BIO          = 0x63B  /* the "Edits" button, FUN_00452107               */
+    MSG_CREATE_WORLD= 0x470  /* solo: "... or Create Your Own World." (0x41D8C0) */
 };
 
 /* ----------------------------------------------------------------- state --- */
@@ -223,6 +223,32 @@ static int show_credits;
  * The button rects are Oracle4's live measurement of the original's #32770 at
  * a 640x480 client. */
 static int tos_open;
+/* The SRNet modal, 0x42AA10, reached from FUN_0041F699's synchronous
+ * SendMessage(frame, 0x46F, 0, 0) at 0x41F6DC. Oracle5 measured the dialog and
+ * Main the button rects. COORDINATES: the dialog's own frame is (221,256)-
+ * (688,473) in Wine DESKTOP coordinates, which is outside a 640x480 client; the
+ * button rects below are the ones Main gave for the 640x480 framebuffer and the
+ * port places the panel inside it. That remapping is presentation only and is
+ * recorded as such in docs/re/boot_flow.md.
+ *
+ * The 1005-then-1 rule is SRNet's own dialog proc and its source is not in
+ * Souls.exe: Oracle5 measured that 1005 ALONE leaves the dialog up and 1 ALONE is
+ * a no-op with nothing selected, and only 1005 followed by 1 closes it. The port
+ * models exactly that, and says so rather than pretending to know why. */
+static int srnet_open;        /* 0x46F's modal is up */
+static int srnet_solo;        /* control 1005 chosen */
+static int stepper_active;    /* FUN_00438E8E is polling, driven from 0x428B89 */
+static uint32_t stepper_start;
+#define STEPPER_CALLS 30      /* measured: 30 calls, 6140 -> 8340 ms */
+/* FUN_0042895C calls FUN_00438E8E at 0x428B89 gated on
+ * *(this+0x73C4) && *(this+0xD1C), both set to 1 by 0x42AA10 on its
+ * _SRNOpenChannel success branch (all.c:31859-31860). */
+static int srnet_channel_open;
+static const Rect srnet_solo_r  = { 250, 313, 299, 23 }; /* 1005 Solo Game       */
+static const Rect srnet_multi_r = { 250, 340, 318, 18 }; /* 1007 Multiplayer     */
+static const Rect srnet_play_r  = { 587, 296,  87, 26 }; /* 1    Play Game        */
+static const Rect srnet_cancel_r= { 587, 332,  87, 26 }; /* 2    Cancel           */
+static const Rect srnet_bio_r   = { 587, 388,  87, 20 }; /* 1042 Bio (port placement) */
 static const Rect tos_accept = { 356, 371, 75, 23 };
 static const Rect tos_cancel = { 442, 371, 75, 23 };
 /* The BIO editor. FUN_00452107 is a custom CWnd whose commit handler reads the
@@ -306,11 +332,19 @@ static void art_title(void)
  * the decomp symbol names were not evidence against it. */
 static const char *golden_soul_string(void)
 {
-    static const char *const table[] = {
-        "Thank you, Golden Soul!"
+    /* FUN_0041D121 (0x41D121): i = rand() % DAT_004DF928 (12); then
+     *   if (FUN_004194BB(DAT_004DD20C) == 0) { if (i == 0) i = 1; } else i = 0;
+     * FUN_004194BB is "serial >= 1 and bit 0x40000000 clear". An unregistered
+     * player's serial is the FUN_0042B4E0 fold | 0x40000000 (all.c:6503-6507),
+     * so offline play is never golden and index 0 is never taken. The table is
+     * the pointer array at 0x4DF8F8, strings read from .data. */
+    static const char *const table[12] = {
+        "Thank you, Golden Soul!", "Buy a Golden Soul!", "Donate $10 Today!",
+        "Give until it hurts!", "Buy a T-Shirt!", "Buy a Mug!", "Buy a Mousepad!",
+        "Click Here, Please!", "Thanks for Playing!", "Your Golden Reward!",
+        "WoS Appreciation Society", "WoS Fan Club"
     };
-    int n = (int)(sizeof(table)/sizeof(table[0]));
-    int i = crt_rand() % n;
+    int i = crt_rand() % 12;
     if (i == 0) i = 1;
     return table[i];
 }
@@ -410,43 +444,34 @@ static void art_where(void)
 static void art_choose(void)
 {
     art_background("chapter.jpg");
-    spot_add(0,0x200, 750,"Choose Your World...",0x00ffff,500, 62,125,500, 62,125,0,0);
-    /* FUN_0041D3CC, all.c:22112. Layer 1, flags 0x600 (clickable, no
-     * centring). fontSize = h*2/w, x = 2*((w+7)>>3) for every row, and the
-     * row's y comes from the per-row lerp that starts at h/20 + (h+3)/4. */
+    /* FUN_0041D717: the title slides in from x 1062 to 62 at y 125 (0x426/0x3E/0x7D). */
+    spot_add(0,0x200, 750,"Choose Your World...",0x00ffff,500,1062,125,500,62,125,0,0);
+    /* FUN_0041D3CC, all.c:22112, called at 0x41D8AB as (this, 1000, 1000, first, 5):
+     * per-mille w = h = 1000 and five rows per page. fontSize = h*2/rows, row
+     * x = 2*((w+7)>>3), row y = (i-first)*(h/-20 + ((h+3)>>2)*-2 + h)/rows
+     * + h/20 + ((h+3)>>2), sliding up from + (h/(rows+4))*this[0x13DC]. */
     {
-        int W = PLAT_SCREEN_W, H = PLAT_SCREEN_H;
-        int fs = (H*2)/W;
-        int x  = 2*((W+7)>>3);
-        int step = (H/-20 + ((H+3)>>2)*-2 + H)/W;
-        int y0  = H/20 + ((H+3)>>2);
+        const int w = 1000, h = 1000, rows = 5;
+        int fs = (h*2)/rows;
+        int q8 = (w+7)>>3, q16 = (w+15)>>4, q4 = (h+3)>>2;
+        int x  = 2*q8;
         if (world_first>0)
-            spot_add(1,0x600, 250,"< Previous",0x00ff00,fs,
-                     x+((W+15)>>4)+((W+7)>>3), ((H+3)>>2), fs,
-                     x+((W+15)>>4)+((W+7)>>3), ((H+3)>>2), MSG_WORLDS_PREV,0);
+            spot_add(1,0x600, 250,"< Previous",0x00ff00,fs, q8+q16+w, q4, fs, q8+q16, q4, MSG_WORLDS_PREV,0);
         if (world_first+4 < world_count)
-            spot_add(1,0x600, 250,"Next >",0x00ff00,fs,
-                     x+((W+15)>>4)+((W+7)>>3)-(W/W)*x, H-((H+3)>>2), fs,
-                     x+((W+15)>>4)+((W+7)>>3)-(W/W)*x, H-((H+3)>>2), MSG_WORLDS_NEXT,0);
+            spot_add(1,0x600, 250,"Next >",0x00ff00,fs, q8+q16-w, h-q4, fs, q8+q16, h-q4, MSG_WORLDS_NEXT,0);
         {
-            int n = world_count, last = world_first+4;
-            int i;
-            if (last>n) last=n;
+            int last = world_first+rows, i;
+            if (last>world_count) last=world_count;
             for (i=world_first;i<last;++i) {
-                int row = (i-world_first)*step + y0 + (H/(W+4))*world_anim;
-                spot_add(1,0x600, 250,worlds[i], i==selected_world?0x00ff80:0x00ff00,
-                         fs, x, row, fs, x, row, MSG_WORLD_ROW, i);
+                int row = ((i-world_first)*(h/-20 + q4*-2 + h))/rows + h/20 + q4;
+                spot_add(1,0x600, 250,worlds[i], 0x00ff00,
+                         fs, x, row + (h/(rows+4))*world_anim, fs, x, row, MSG_WORLD_ROW, i);
             }
         }
     }
-    /* The "Edits" button (0x4F02C4) that opens the personal BIO editor,
-     * FUN_00452107. It lives on this screen in the original, whose own prompt
-     * string says so: "Use the BIO button on the 'Where would you like to play'
-     * screen to set your personal BIO info." (0x4F0314). */
-    spot_add(1,0x620, 250,"Edits",0x00ff00,500,20,10,500,20,10, MSG_BIO,0);
-    /* DAT_004E6910 == 0 is the solo channel, so the link reads
-     * "--- or Create Your Own World ---" and hands over to the world editor. */
-    spot_add(1,0x620, 750,"... or Create Your Own World...",0x00ff00,500,1000,875,500,875,875,
+    /* DAT_004E6910 == 0 (solo): 0x41D8B8..0x41D8FD, layer 0, flags 0x620, 750 ms,
+     * from (-62,875) to (938,875), msg 0x470. Flag 0x20 right-aligns the text. */
+    spot_add(0,0x620, 750,"... or Create Your Own World.",0x00ff00,500,-62,875,500,938,875,
              MSG_CREATE_WORLD,0);
 }
 
@@ -516,6 +541,7 @@ int front_enter_title(void)
 {
     plat_text_input(0);
     state=FRONT_TITLE; message[0]=0; pending_death=0; place_prompt=0;
+    stepper_active=0; srnet_channel_open=0; srnet_open=0; srnet_solo=0;
     spot_free_all(); art_title();
     state_tick=clock_ms();
     screen_set(&front_screen);
@@ -538,7 +564,22 @@ static void front_goto(int next)
                        wos_log_event("boot_menu","");
                        if (tos_gate()==2) tos_open=1;    /* FUN_00402A73's modal */
                        break;
-    case FRONT_WHERE:  art_where(); game_music("MainMenu.wav"); break;
+    case FRONT_WHERE:
+        /* State 2 is where FUN_0041F699 makes its synchronous 0x46F call, so
+         * arriving here means the SRNet modal comes up. Nothing else advances
+         * this state: Oracle5 measured clicks at 240/200/300/400, RETURN, ESC,
+         * SPACE and idle all inert while the modal is up, and the previous
+         * advance-on-any-input here had no basis in the original.
+         *
+         * Measured route: 1005 then 1 closes the modal, 0x46F returns 1,
+         * FUN_0041D374 registers "--- Scanning ---", the stepper
+         * FUN_00438E8E runs ~30 calls from 6140 to 8340 ms, and FUN_0041B891(3)
+         * draws the world list. 2 (Cancel) makes 0x46F return 0 and
+         * FUN_0041B891(1) goes back to the menu. */
+        art_where();
+        srnet_open = 1; srnet_solo = 0;
+        wos_log_event("srnet_open","1");
+        break;
     case FRONT_CHOOSE: art_choose_world(); break;
     case FRONT_STORY:  art_story(); break;
     case FRONT_WELL:   pick_a_soul(); break;
@@ -767,6 +808,44 @@ static int front_bio_update(const Input *in)
 static void front_update(const Input *in)
 {
     int i, hit=-1, key=0; last_input=*in;
+    if (bio_open) { front_bio_update(in); return; }
+    if (srnet_open) {
+        if (clicked(in,srnet_bio_r)) { front_bio_open_panel(); return; }
+        if (clicked(in,srnet_solo_r)) { srnet_solo=1; wos_log_event("srnet_dialog","ctrl=1005"); return; }
+        if (clicked(in,srnet_multi_r)) {
+            wos_log_event("srnet_dialog","ctrl=1007");
+            snprintf(message,sizeof(message),"Multiplayer needs a network, which is not available.");
+            return;
+        }
+        if (clicked(in,srnet_play_r) || in->pressed[PLAT_KEY_RETURN]) {
+            /* Control 1 alone is a no-op unless 1005 is set. */
+            if (srnet_solo) {
+                srnet_open=0; srnet_channel_open=1;
+                stepper_active=1; stepper_start=clock_ms();
+                wos_log_event("srnet_dialog","ctrl=1 scanning=1");
+            }
+            return;
+        }
+        if (clicked(in,srnet_cancel_r) || in->pressed[PLAT_KEY_ESCAPE]) {
+            /* 0x46F returns 0, so FUN_0041F699 takes FUN_0041B891(1). */
+            srnet_open=0;
+            wos_log_event("srnet_dialog","ctrl=2");
+            front_goto(FRONT_MENU);
+            return;
+        }
+        return;
+    }
+    if (stepper_active && srnet_channel_open) {
+        /* FUN_00438E8E, polled from FUN_0042895C at 0x428B89 behind the
+         * *(this+0x73C4) && *(this+0xD1C) gate. Measured: 30 calls from 6140 to
+         * 8340 ms, then FUN_0041B891(3). */
+        if (clock_ms() - stepper_start >= (uint32_t)(STEPPER_CALLS * 73)) {
+            stepper_active = 0; srnet_channel_open = 0;
+            wos_log_event("stepper_done","calls=%d",STEPPER_CALLS);
+            front_goto(FRONT_CHOOSE);
+        }
+        return;
+    }
     if (tos_open) {
         if (clicked(in,tos_accept) || in->pressed[PLAT_KEY_RETURN]) {
             char id[64];
@@ -847,65 +926,90 @@ static void front_update(const Input *in)
          *    entry with pfn 0x41F699; 0x4C8A18 is the 0x205 / WM_RBUTTONDOWN
          *    entry whose pfn 0x424BB3 is where an earlier "dispatcher thunk" dead
          *    end came from. That misparse is retracted.
-         *  - State 2 is entered at 3220 ms and THE THREAD STAYS THERE. Oracle5's
-         *    trace has FUN_0041F699 parked at 0x41F6DC on
+         *  - State 2 is entered at 3160 ms. FUN_0041F699 then calls
          *        SendMessageA(*(HWND *)(DAT_004E4840 + 0x20), 0x46F, 0, 0)
-         *    which is SYNCHRONOUS, for the rest of a 300 s run: the clock reaches
-         *    300000 with 1389 pump_step entries past 3400 ms. 0x46F's pfn is
-         *    0x42AA10 (msgmap 0x4C9BC8) and it is the SRNet open —
-         *    _SRNOpenNetwork_12, _SRNGetNetworkType_0, then _SRNOpenChannel_8 +
-         *    _SRNGetMyNetworkInfo_20 + FUN_0046CE24 on the solo path — running a
-         *    NESTED PUMP, which is why the run keeps stepping and writing dumps
-         *    instead of appearing hung.
-         *    It does not return. Therefore neither FUN_0041D374 nor the
-         *        if (0x46F == 0) FUN_0041B891(1)
-         *    is ever reached, and the state stays 2 for good. Nobody is waiting
-         *    for input, in any run, on any machine.
+         *    at 0x41F6DC. That is SYNCHRONOUS, and 0x46F's pfn is 0x42AA10
+         *    (msgmap 0x4C9BC8) -- the SRNet open: _SRNOpenNetwork_12,
+         *    _SRNGetNetworkType_0, then _SRNOpenChannel_8 + _SRNGetMyNetworkInfo_20
+         *    + FUN_0046CE24 on the solo path. It runs a NESTED PUMP for the rest
+         *    of the script (260 pump_step entries and 647 timer deliveries inside
+         *    the call) and RETURNS 1 at the script's `end`, to the millisecond --
+         *    56690 ms elapsed on a 60 s script. Oracle4 and Oracle5 both measured
+         *    this on clean runs and agree.
          *
-         *    The two runs disagreed at first — Oracle5 saw a block, Oracle4 saw
-         *    dumps still being written — and both were right about their own run.
-         *    The nested pump is the reconciliation, not an environment-dependent
-         *    branch in 0x46F: Oracle4 has withdrawn that guess. There is one
-         *    behaviour and the pump is what it looks like from outside.
+         *    THE MECHANISM, and it is the part that was missing all night: because
+         *    0x46F returns NON-ZERO,
+         *        if (0x46F == 0) FUN_0041B891(1);
+         *    is FALSE, so FUN_0041B891(1) is never reached and the state does not
+         *    fall back to the main menu. That is why state 2 persists rather than
+         *    bouncing, and 1 means "a world is considered loaded". FUN_0041D374
+         *    registers the "--- Scanning ---" label immediately behind that
+         *    return, also at `end`, which is why a snapshot taken earlier in the
+         *    run correctly shows no Scanning entry: the call had not returned yet.
          *
-         *  - The "--- Scanning ---" label is NEVER REGISTERED, because
-         *    FUN_0041D374 is downstream of a call that does not return. Oracle5
-         *    sees it stamped with the script's `end` in every run (now=10000,
-         *    60000, 300000) — three values that all track `end`, which is the
-         *    signature of a trace line written at TEARDOWN. Oracle4's negative
-         *    (no entry at all, even at t=14000) was the correct reading and I
-         *    misread their teardown stamp as proof the call completed. Do not
-         *    read its presence as "the call returned": it is the opposite.
-         *  - RETRACTED, by Oracle4, in their own words and worth keeping: "no
-         *    Scanning entry, therefore FUN_0041D374 was never called, therefore
-         *    0x46F returned 0, therefore FUN_0041B891(1) should have set state 1
-         *    and the state is 2 — a contradiction". The inference of a BRANCH
-         *    from a SNAPSHOT is what produced it. The contradiction is real; the
-         *    resolution is most likely that 0x46F returned 0 and the transition
-         *    was undone or unobserved, not that the branch never ran.
-         *  - Also retracted, by Oracle5: the 0x424BB3 "MFC dispatcher thunk" dead
-         *    end. The msgmap stride is 24 bytes / 6 dwords, so 0x4C8A20 is the 0x46B
-         *    entry with pfn 0x41F699 — which is exactly the function Oracle5's
-         *    trace shows running. 0x4C8A18 is the 0x205 / WM_RBUTTONDOWN entry
-         *    whose pfn 0x424BB3 is where the misreading came from. Oracle4
-         *    reported that lead as a dead end and it was the answer.
+         *    So no input, key or timer moves state 2, on any machine, and the
+         *    port's advance-on-input below is the only route either.
+         *
+         *    RETRACTIONS, kept because each looked like a fact and each was mine
+         *    or reached me as one:
+         *      - the 0x424BB3 "MFC dispatcher thunk" dead end: the msgmap stride
+         *        is 24 bytes / 6 dwords, so 0x4C8A20 is the 0x46B entry with pfn
+         *        0x41F699; 0x4C8A18 is the 0x205 / WM_RBUTTONDOWN entry whose pfn
+         *        0x424BB3 is where the misreading came from. That lead was the
+         *        answer, read as a dead end.
+         *      - "the Scanning label fires at `end`, so the call completed": the
+         *        stamp was real but it registers DOWNSTREAM of the return, so it
+         *        appears at `end` in every run including the ones where the call
+         *        was still blocked. A value that tracks `end` is a teardown
+         *        signature, and that mistake was made twice in this thread.
+         *      - the "300 s / 1389 pump_step" figure and "0x46F returns
+         *        immediately": both from a tracer that wrote six bytes of
+         *        patch_text while copying five bytes of prologue, so a `ret`
+         *        executed mid-function, and later from one that relocated a
+         *        `call rel32` by position. The generalisable form, and the only
+         *        part worth keeping: on this front end a run that installs its
+         *        patches and then stops is far more often a broken instrument
+         *        than a blocked game, and the check is whether the tracer
+         *        relocates any rel32 branch.
+         *
          *  - The world list is FUN_0041D717, called only from FUN_0041B891's
          *    case 3, and the solo stepper FUN_00438E8E that sets state 3 never ran.
          *    Nobody is waiting for input in either run.
          *
-         * WHY THE PORT ADVANCES ANYWAY: the original's behaviour here is to block
-         * inside SRNet, which the port does not have. Advancing on input is the
-         * port's escape hatch and is NOT a claim about the original; it stays
-         * until someone decides the port's policy for a state the original cannot
-         * leave either. The click/key branch below is that policy and nothing
-         * more.
+         * WHY THE PORT ADVANCES ANYWAY, and the exact framing for it (Core).
+         * This is not "the port is more permissive than the original". Neither
+         * trace shows the original advancing on input at state 2 at all: the
+         * original's only route out runs through the SRNet open at 0x46F, which a
+         * harness cannot complete. So the port's handler is not a looser rule,
+         * it is the only route either — the original's runs through a call the
+         * harness cannot finish. Before Core fixed --script input delivery the
+         * harness could not even REACH the port's state 2, which is why the
+         * front@* labels were all 22 out for one reason all day.
+         *
+         * The consequence for the diff suite is a testability fact, not a defect:
+         * no script can be a parity comparison of the world-list transition,
+         * because the oracle's state 2 is not drivable to state 3 by input. Such
+         * labels measure the port's rule against nothing and belong under
+         * "unreachable in harness" (Oracle4's NO_SOURCE_PREFIXES mechanism), not
+         * in the mismatch tally. Counting them as failures inverts cause: a port
+         * that can be driven FURTHER than the original can be driven is a
+         * limitation of the harness, and reporting it as a port defect inverts
+         * cause again. That is the fifth instance of this session's one recurring
+         * error — treating an unreachable comparison as a failing one — in a new
+         * place, and I made the first four.
          *
          * NOTE for whoever reads front_state=0 in a diff: `--script` does not
          * deliver input to the front end while `--replay` does (Oracle4), so a
-         * stationary port in a .dsc run is a harness fact, not a front-end one. */
-        if ((in->mouse_pressed&2u) || key) front_goto(FRONT_CHOOSE);
+         * stationary port in a .dsc run is a harness fact, not a front-end one.
+         *
+         * There is deliberately NO advance-on-any-input here any more. The only
+         * ways out of state 2 are the modal's controls and the stepper, and the
+         * handler above returns before reaching this point whenever either is
+         * live. */
         break;
     case FRONT_CHOOSE:
+        /* FUN_0041B891 case 3 loads art\chapter.jpg and calls FUN_0041D717, which
+         * enumerates worlds and registers the rows FUN_0041D3CC draws. */
         if (in->pressed[PLAT_KEY_ESCAPE]) { front_goto(FRONT_MENU); return; }
         /* Arrow keys move the row cursor and RETURN takes it. The original has
          * no highlight -- its rows are plain clickable hotspots -- so this is
@@ -929,7 +1033,6 @@ static void front_update(const Input *in)
             int msg=spot_msg(hit), arg=spot_lparam(hit);
             if (msg==MSG_WORLDS_PREV) { world_first-=4; if(world_first<0) world_first=0; front_goto(FRONT_CHOOSE); return; }
             if (msg==MSG_WORLDS_NEXT) { world_first+=4; if(world_first+4>world_count) world_first=world_count>4?world_count-4:0; front_goto(FRONT_CHOOSE); return; }
-            if (msg==MSG_BIO) { front_bio_open_panel(); return; }
             if (msg==MSG_CREATE_WORLD) {
                 wos_log_event("front_state","state=%d",FRONT_WE_WORLD);
                 if (editors_enter(NULL)) snprintf(message,sizeof(message),"The world editor could not open.");
@@ -1063,6 +1166,9 @@ static int front_dialog_apply(int dialog_id, const char *const *kv, int n, int o
         create_soul(front_new_soul_pk);
         return 1;
     }
+    /* The SRNet modal has no WoS resource ID, so the control ids identify it
+     * and the dialog id is ignored: a .dsc may write `dialog 1005=click ok` or
+     * any other id and it still reaches the right control. */
     if (dialog_id==FRONT_DIALOG_BIO) {        /* the port's own pseudo-id */
         const char *text = NULL;
         int i2;
@@ -1071,6 +1177,48 @@ static int front_dialog_apply(int dialog_id, const char *const *kv, int n, int o
         front_bio_op(text,ok);
         return 1;
     }
+    { int i3, is_srnet = 0;
+      for (i3=0;i3<n;++i3) {
+          const char *eq = strchr(kv[i3],'=');
+          char key[16]; size_t kl;
+          if (!eq) continue;
+          kl = (size_t)(eq-kv[i3]); if (kl>=sizeof(key)) continue;
+          memcpy(key,kv[i3],kl); key[kl]=0;
+          if (!strcmp(key,"1005")||!strcmp(key,"1007")||!strcmp(key,"1")||!strcmp(key,"2")
+              ||!strcmp(key,"1000")||!strcmp(key,"1006")||!strcmp(key,"1008")
+              ||!strcmp(key,"1009")||!strcmp(key,"1042")) is_srnet = 1;
+      }
+      if (is_srnet) {
+          int want_solo=0, want_play=0, want_cancel=0, i4;
+          /* Leave the op queued until 0x46F's modal is actually up. */
+          if (!srnet_open) return 0;
+          for (i4=0;i4<n;++i4) {
+              const char *eq = strchr(kv[i4],'=');
+              if (!eq) continue;
+              if (!strncmp(kv[i4],"1005=",5)) want_solo = 1;
+              else if (!strncmp(kv[i4],"1=",2)) want_play = 1;
+              else if (!strncmp(kv[i4],"2=",2)) want_cancel = 1;
+              else if (!strncmp(kv[i4],"1042=",5)) { front_bio_open_panel(); return 1; }
+              else if (!strncmp(kv[i4],"1007=",5)) {
+                  wos_log_event("srnet_dialog","ctrl=1007");
+                  snprintf(message,sizeof(message),"Multiplayer needs a network, which is not available.");
+                  return 1; }
+          }
+          if (want_cancel) {
+              srnet_open = 0;
+              wos_log_event("srnet_dialog","ctrl=2");
+              front_goto(FRONT_MENU);
+              return 1;
+          }
+          if (want_solo) { srnet_solo = 1; wos_log_event("srnet_dialog","ctrl=1005"); return 1; }
+          if (want_play && srnet_solo) {
+              srnet_open = 0; srnet_channel_open = 1;
+              stepper_active = 1; stepper_start = clock_ms();
+              wos_log_event("srnet_dialog","ctrl=1 scanning=1");
+              return 1;
+          }
+          return 1;   /* 1 without 1005 is a no-op in the original */
+      } }
     if (dialog_id==149) {                     /* the post-creation follow-up */
         wos_log_event("new_soul_followup","ok=%d",ok?1:0);
         return 1;
@@ -1115,7 +1263,18 @@ static void front_render(Framebuffer *fb)
     spot_advance();
     spot_layout();
     fb_clear(fb,0x151322); fb_blit(fb,&background,0,0,-1);
-    if (tos_open) {
+    if (srnet_open && !bio_open) {
+        ui_panel(fb,(Rect){221,256,467,217},"Where would you like to play today? (tm)","");
+        label_button(fb,srnet_solo_r,  "Solo Game -- Play alone by yourself (no network required).");
+        label_button(fb,srnet_multi_r,"Multiplayer Game -- Play with others, using a network or modem.");
+        font_draw(fb,250,440,"Any Public MIX Game Server",0xffffff);
+        font_draw(fb,250,462,"Configure Network Options",0xffffff);
+        font_draw(fb,587,276,"Select Game Arena",0xffffff);
+        label_button(fb,srnet_bio_r,"Bio");
+        font_draw(fb,587,420,"Help",0xffffff);
+        label_button(fb,srnet_play_r,  "Play Game");
+        label_button(fb,srnet_cancel_r,"Cancel");
+    } else if (tos_open) {
         Rect body = { 272, 200, 356, 150 };
         ui_panel(fb,(Rect){260,180,380,220},"Terms of Service","");
         font_wrap(fb,body,"This program is provided as is, and you accept the terms shipped in tos.rtf. Decline and the program quits.",0xf0e0bd);
@@ -1232,7 +1391,8 @@ void front_dump(DumpEmit emit, void *user)
         snprintf(key,sizeof(key),"front.hotspot.%d.clickable",i);
         dump_emit_int(emit,key,(sp->flags & 0x400)?1:0,user);
         snprintf(key,sizeof(key),"front.hotspot.%d.msg",i);
-        dump_emit_int(emit,key,sp->msg,user);
+        { char hx[8]; snprintf(hx,sizeof(hx),"%04X",(unsigned)sp->msg&0xffffu);   /* the oracle prints the WM id in hex */
+          emit(key,hx,user); }
         snprintf(key,sizeof(key),"front.hotspot.%d.target",i);
         dump_emit_int(emit,key,sp->lparam,user);
         snprintf(key,sizeof(key),"front.hotspot.%d.rect",i);

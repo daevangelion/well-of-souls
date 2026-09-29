@@ -151,6 +151,7 @@ static struct {
     uint32_t cheat_mask;
     int pk_kills;
     int item_id, spell_id, monster_id;
+    unsigned long long reseal_draws;   /* rands actually spent by battle_hero_reseal_level() */
 } vm;
 static const Screen scene_screen;
 
@@ -277,7 +278,14 @@ static void cookie_set(const char *key,const char *value)
      * AFTER the g.num / item_id / spell_id / num_hostClass early returns above, so those
      * four names spend no draws, and it costs 4 crt_rand() when the serial lookup hits.
      * The empty-value delete path also reaches this tail, so one call covers both. */
-    battle_hero_reseal_level();
+    {   /* Measure rather than assume. FUN_0048AE32's guard is still unresolved, and if it is
+         * non-NULL offline then every cookie write in every scene costs 4 crt_rand through this
+         * seal. Counting the calls either side of it turns that from an assumption into a number,
+         * and costs nothing in battle.c. */
+        unsigned long long before=crt_rand_calls();
+        battle_hero_reseal_level();
+        vm.reseal_draws += (unsigned)(crt_rand_calls()-before);
+    }
 }
 static const char *cookie_raw(const char *key)
 {
@@ -1571,6 +1579,7 @@ void scene_dump(DumpEmit emit,void *user)
     dump_emit_int(emit,"scene.hideHero",vm.hide_hero,user);
     dump_emit_int(emit,"scene.conditionCode",(long long)vm.condition_code,user);
     dump_emit_int(emit,"scene.callDepth",vm.call_depth,user);
+    dump_emit_int(emit,"scene.reseal_draws",(long long)vm.reseal_draws,user);
     dump_emit_int(emit,"scene.pushDepth",vm.push_depth,user);
     dump_emit_int(emit,"scene.yes",vm.yes,user);
     dump_emit_int(emit,"scene.outcome",(int)vm.outcome,user);

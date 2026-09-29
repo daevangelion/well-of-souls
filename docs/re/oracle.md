@@ -741,7 +741,56 @@ the original cannot supply is not coverage. A missing label is visible; a port-o
 ignored is the same failure wearing a disguise, and a green tally that counts it flatters the
 suite. `options` passes that test; the `scene` labels do not.
 
-So the honest figure is **one real pass out of 97 labels**, not four. Quote that one.
+**Boot parity is EXACT (verified 2026-09-28, after Core's `--script` input fix).** `boot_only.dsc`
+has no input at all, so both sides are compared at a named seed and a named instant — the discipline
+needed before `rng.state` means anything, since it is a function of the seed and not of the draw
+count:
+
+| label | virtual ms | oracle | port |
+|---|---|---|---|
+| `clock@boot` | 150 | `rng.state=1275831606` `rng.calls=1414` | `rng.state=1275831606` `rng.calls=1414` |
+| `rng@boot` | 150 | `rng.state=1275831606` `rng.calls=1414` | `rng.state=1275831606` `rng.calls=1414` |
+| `rng@mid` | 800 | `rng.state=3953084122` `rng.calls=1418` | `rng.state=1973901911` `rng.calls=1421` |
+| `rng@late` | 1400 | `rng.state=1973901911` `rng.calls=1421` | `rng.state=4073594653` `rng.calls=1427` |
+
+`clock@boot` and `rng@boot` are genuine OK labels, 7 keys each, equal on `rng.state` and not only
+on `rng.calls`. **The divergence has also changed SIGN.** The port was 4–5 draws *behind* at boot
+and 8–11 behind at runtime; it is now 0 behind at boot and **3–6 ahead** at runtime (3 at t=800,
+6 at t=1400, i.e. ~3 per 600 ms window). That is the shape you would expect if a front-end
+transition that used to happen zero times now happens once and each transition costs a few draws —
+so the remaining gap is plausibly the fix *working*, not a defect. It is not established: nobody has
+counted what a state transition costs, and a number matching a guess is not evidence.
+
+**The idle cadence is CLOSED as to cause and UNLANDED as to fix (Core, 2026-09-28).** SceneVM-2
+measured `battle_hero_reseal_level()` at 99 cookie writes and **zero** rands, which excludes the
+reseal and leaves `main_frame_timer()` as the whole 2x. The ratio is port 10.8/10.0 against the
+original's 6.2/5.0 — almost exactly two.
+
+The mechanism: `clock_dispatch_timers()` already carries a `pending` flag modelling one outstanding
+`WM_TIMER`, but the port's loop **always** comes back, so every 100 ms period is delivered. The
+original only *takes* a `WM_TIMER` when it comes back to its pump with something to take, and its
+queue is busy, so it takes roughly half.
+
+**THE RULE, stated once:** a timer period counts as delivered when the loop actually did work that
+pass, not when the clock crossed its deadline. Concretely, `main_frame_timer()` should take its
+`crt_rand()` only if the iteration in which the timer fired also processed a message or a scheduled
+op — the `delivered` flag the loop already carries for the `--script` input fix. An idle script
+delivers nothing, so the count tracks the original's; a script that clicks delivers on the passes
+that matter.
+
+**It is one line and it is NOT LANDED** — `src/game_main.c` is not mine and the deadline had passed.
+Main has the ratio, the mechanism and the rule. If the patch is wanted it is: gate the `crt_rand()`
+in `main_frame_timer()` on the `delivered` flag.
+
+**SceneVM-2's caveat, kept intact because it is the part that should survive:** the zero covers "the
+reseal does not draw on cookie writes in a scene", not "it never draws". `FUN_0048AE32`'s guard is a
+state test, so a path that populates a combatant outside a fight could still draw. The assumption is
+retired for the offline solo path this port exercises, and not retired in general.
+
+
+The honest figure for the suite is therefore **three real passes out of 97** — `options` (34 keys),
+and now `clock@boot` and `rng@boot` (7 keys each) — and the three `scene@*` labels are WEAK OK.
+Quote those three and the WEAK OK marking together, not the raw `equal=` tally.
 
 **THE PORT'S `--script` PATH DOES NOT DELIVER INPUT (measured 2026-09-28, Core's to fix).** Until
 it does, every port-side number in this section is a measurement of a stationary port, and the
@@ -818,9 +867,33 @@ it separates boot from runtime:
 | 800 | 1415 | 1426 | 11 |
 | 1400 | 1415 | 1432 | 17 |
 
-The original takes **one** draw across 1250 ms of idle virtual time and then **zero** across the
-next 600. The port takes 7 and then 6. So there are two independent problems — a constant boot
-offset and a per-idle-window excess — and the original's steady state is *zero*, not a smaller
+**CORRECTED 2026-09-28 — the flat count above was my latched-timer bug, and the original DOES draw
+on an idle cadence.** With that fixed, the same no-input script gives:
+
+| window | original | port |
+|---|---|---|
+| 150 -> 800 ms | +4 (1414 -> 1418) | +7 (1414 -> 1421) |
+| 800 -> 1400 ms | +3 (1418 -> 1421) | +6 (1421 -> 1427) |
+| | **~3.5 per 600 ms** | **~6.5 per 600 ms** |
+
+So the original is not idle-draw-free: three to four draws per 600 ms of pure idle with no input,
+against the port's roughly twice that. The gap is **~3 draws per 600 ms window, a difference in
+idle CADENCE rather than in event handling** — a much narrower question than "the port draws too
+little", and the correct shape to hand to Core, whose `main_frame_timer()` takes one `crt_rand` per
+delivery and whose strict 100 ms period lets every period fire where the original's `WM_TIMER`
+coalesces under load.
+
+**And "the original's steady state is zero" was wrong**, and is withdrawn for good. It was read off
+the flat count produced by the `outstanding` bug above — an instrument artefact presented as a
+property of the game, which is the third such error in this file and the reason section 2.2 exists.
+
+The front end is excluded as the cause: its entire draw is the Golden-Soul string pick, one
+`crt_rand` per entry into the main menu, and `FUN_0041D155` makes exactly one matching call (the
+inlined `FUN_0041D121`). Both sides enter the menu once in these scripts, so a menu-entry count
+cannot produce a per-window difference. The remaining candidates are Core's timer cadence and
+SceneVM-2's `battle_hero_reseal_level()` (four draws per cookie write, if the `FUN_0048AE32` guard
+is non-zero offline) — and a counter settles the second in a minute where a derivation settles it
+once.
 constant, so the port's per-window draws have no counterpart to be tuned towards.
 
 ---
@@ -914,8 +987,86 @@ each looked reasonable:
   handler."* The msgmap stride is 24 bytes; I mis-strided. `0x4C8A20`'s pfn is `0x41F699` —
   `FUN_0041F699` itself, which is the function that parks. The lead was the answer, read as a
   dead end.
-* *"`0x46F`'s behaviour is environment-dependent."* Wrong. The nested pump explains both runs, and
-  the difference between them was only that one of them I had not understood.
+* *"`0x46F`'s behaviour is environment-dependent."* Wrong, twice over, and the second time by
+  measurement rather than by argument.
+* *"It parks for the rest of the run."* Wrong. It **returns**, and the return instant is the
+  script's `end`. The hook logs the call and the return for `0x46F` always, not under `WOS_MSGLOG`:
+
+      end 15000:  0x46F called at now=3110 (ra=0x41F6E2) -> RETURNED 1 at now=15000, elapsed 11890
+      end 60000:  0x46F called at now=3110 (ra=0x41F6E2) -> RETURNED 1 at now=60000, elapsed 56890
+
+  Elapsed inside the call is `end - ~3110` in both. So the nested pump inside `0x46F` **consumes
+  the script** — the harness's scheduled events keep firing during the call — and the call returns
+  when the script runs out. A 300 s run therefore shows the call "still parked" not because the
+  network is slow but because the script had 300 s left to consume. A value that tracks `end` is a
+  teardown signature, and that is the second one tonight after the "Scanning" stamp — the same
+  mistake twice: a number that moves with the harness's own schedule, read as a fact about the game.
+
+  **And it returns 1, not 0** — when it is allowed to. So `if (0x46F == 0) FUN_0041B891(1)` is
+  not taken, the `else` runs, and the state stays 2. That is the whole reason state 2 never
+  advances on its own.
+
+  ### 7.1 SOLVED: state 2 is left by SRNet's OWN modal, and the route is two button clicks
+
+  `0x46F` does not merely run a nested pump — **it puts up a modal dialog and waits for the
+  user.** The nested pump is the harness's own dialog loop (the hook owns
+  `CreateDialogIndirectParam` + `GetMessage`/`IsDialogMessage`, section 3), which is why the call
+  looks alive and why the script keeps being consumed while it is outstanding. `WOS_WINTREE=1`
+  during the call shows a **top-level** `#32770` that a child-only walk cannot see:
+
+      caption "Where would you like to play today? (tm)"   screen (221,256)-(688,473)
+        id 1005  Button "Solo Game -- Play alone by yourself (no network required)."  (250,313)-(549,336)
+        id 1007  Button "Multiplayer Game -- Play with others, using a network or modem." (250,340)-(568,358)
+        id 1000  ComboBox "Any Public MIX Game Server"                                (266,383)-(544,404)
+        id 1006  Button "Configure Network Options"   id 1008 "Select Game Arena"   id 1009 "Help"
+        id 1042  Button "Bio"                          id 1 "Play Game"  (587,296)-(674,322)
+                                                                id 2 "Cancel"   (587,332)-(674,358)
+
+  **The route past state 2 is `dialog 1005=click` then `dialog 1=click`, and BOTH are needed.**
+  `1005` alone leaves the dialog up; `1` alone is a no-op because nothing is selected. With the
+  pair, measured on one run:
+
+      0x46F called at now=3370 (ra=0x41F6E2) -> RETURNED 1 at now=6020, elapsed 2650
+      FUN_0041D374 registers "..Scanning..............."        6020
+      solo stepper FUN_00438E8E runs from 6140, ~30 times, via FUN_0042895C at 0x428B89
+      FUN_0041B891(3) -> state 3                              8340
+      FUN_0041D717 world-list init, FUN_0041D3CC rows          8490
+
+  and `front@worldlist` then reads `front_state=3` with three hotspots:
+  **"Choose Your World..." / "Evergreen" / "... or Create Your Own World."** — the `0x474` world
+  row, drawn by `FUN_0041D3CC` (`0x41D3CC`) from the `worlds\*` scan in `FUN_0041D717`
+  (`0x41D717`). Screenshot: `front@worldlist.bmp` in the run directory. This is the world list,
+  on the original, and `tests/diff/walk_path.dsc` now reaches it.
+
+  Two harness facts this needed, both now in the tree:
+
+  * **`WOS_WINTREE` emits each control's id and its true SCREEN rect.** The main-client rect it
+    already printed is meaningless for a control belonging to a top-level window — a modal is not
+    positioned relative to the main window's client — and a `.dsc click` takes SCREEN
+    coordinates, because that is what `WindowFromPoint` hit-tests. Two clicks at coordinates
+    derived from the main-client rect both missed the button and read as "the click did nothing".
+  * **The `dialog` op is `dialog <id>=click`, not `dialog <id> click`.** The space form parses as
+    a default OK/Cancel *verb* and the event is dropped at parse time (`e->ctl` stays -1), which
+    is again indistinguishable from a click that had no effect.
+
+  **What is still not reachable, and why it is not a hunt for a click.** Choosing a world (the
+  `0x474` row, `FUN_0041D635` at `0x41D635`) is the next step and is NOT yet scripted; past it
+  the `0x474` handler opens a `CListCtrl` "Pick a Soul" window whose ids are 0x531/0x464. So the
+  route is now *known* and short, not missing.
+
+  A fourth wrong reading is recorded because it is the one that cost the most time and it is the
+  same shape as the others — **an instrument that lies looks exactly like a game that has
+  decided to stop.** Two of my own tracer builds produced "0x46F returns immediately" and "the
+  300 s / 1389 pump_step nested pump"; both were the tracer, not the game. The cause in both: the
+  thunk relocates the traced function's prologue into `VirtualAlloc`'d memory, and `call rel32`
+  is **position dependent**, so the copy's displacement lands elsewhere. `0x42AA10`'s prologue is
+  `mov eax,1F50h / call chkstk` — exactly that shape. A second, independent defect in the same
+  code: `patch_text` always writes six bytes, so a five-byte prologue copy left the sixth byte as
+  the trampoline's own `ret`. Either produces a run that installs its patches, logs a few lines
+  and then stops. **The check is whether the tracer relocates a rel32 branch**, and it costs one
+  rebuild. The rule now recorded in `install_front_trace`: a traced prologue must be a whole
+  number of instructions, at least six bytes, and free of rel32 branches; `0x46F`'s entry and
+  return are traced at the `SendMessageA` IAT hook instead, which has no relocation problem.
 
 **State 2 persists, and the click path into it is proven correct.** With the TOS accepted
   and `WOS_MSGLOG=1`: `0x046B` — the message `FUN_00405765` posts for "Play now" — is posted
@@ -943,33 +1094,17 @@ each looked reasonable:
   offline" was wrong. The state persisting says nothing about which branch ran. A comment in
   `src/game/front.c` cited it; it has been retracted to its author.
 
-  **State 2 is still stuck, and now demonstrably so rather than mysteriously.** It registers
-  exactly one hotspot, `state=1 rect=39,60,533,102 clickable=0 msg=0000 hwnd=0`, label "Where Do
-  You Want To Play Today?" — a pure label with **no action, no message and no window**, so
-  `FUN_00405765` cannot fire for it. A click at (320,240), RETURN, ESCAPE and SPACE each leave
-  the state at 2, and it is still 2 after 17 seconds of virtual time. So the transition out of
-  state 2 is not a click, not a key, not the `FUN_004057D3` timed gate on any timescale this
-  suite can reach, and it is the single remaining blocker on the eleven translated scripts.
-
-  **Past the main menu the original cannot be driven at all by this suite's means.** The
-  "Where Do You Want To Play Today?" screen (state 2) registers exactly ONE hotspot, and it
-  is a non-clickable label — `state=1`, `rect=39,60,533,102`, `msg=0000`, `clickable=0`,
-  label "Where Do You Want To Play Today?". `FUN_00405765` skips any record without the
-  `0x400` bit, so there is nothing there to press, and `FUN_0041C1CD`'s dispatch switch
-  (`0`, `5`, `6`, `8`, `9`, `10`) has no case for state 2, so a mouse-down does not advance
-  it either. Three clicks at y=200, y=300 and y=400 all leave the front state at 1. The
-  transition out of state 2 is therefore reached by something this suite has not identified,
-  and until it is, the eleven translated scripts stop in the front end.
 
   Two further facts constrain the route and are worth not rediscovering: `key RETURN` is a
   **port-only** shortcut (four RETURNs leave the original at state 1,1,1,1 — the front
   view's message map has entries for `WM_LBUTTONDOWN`/`UP` and `WM_MOUSEMOVE` and nothing
   else), and `key SPACE` activates "Depart this realm" and **exits the process**.
 
-  So the scripts that exist are the ones the original can actually be driven through:
-  `boot_only`, `boot_click`, `boot_menu`, `front_hotspots`, and the pre-existing
-  `boot_newsoul`. The other eleven need the world list and the new-soul dialog, which are
-  behind this one.
+  So the scripts that exist are the ones the original can be driven through:
+  `boot_only`, `boot_click`, `boot_menu`, `front_hotspots`, `walk_path` (which now reaches the
+  world list in state 3, section 7.1), and the pre-existing `boot_newsoul`. The rest need the
+  world-list row click and the "Pick a Soul" dialog, which are the next two steps of a route that
+  is now known rather than missing.
 * `scene.*` and `panels.*` have **no oracle source at all**, and section 5.4.4 says why for
   each key: the original keeps that state in `CDialog` children at fixed offsets and in
   stack frames, not in globals. This is a real gap in coverage, not a naming problem.
