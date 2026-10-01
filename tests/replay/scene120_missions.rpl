@@ -69,6 +69,16 @@ key DOWN
 key DOWN
 text Piano
 key RETURN
+# The New Soul chain (NewSoulOnOK 0x460A7E, dialog 149, dialog 180): PK review Yes,
+# ability points OK, apply the rest randomly Yes, Use This Skin.
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
 expect hero_ready 600
 expect map_enter 600
 # scene 221 is the Piano Room: MUSIC "" / END, and the hero returns to map 2 immediately.

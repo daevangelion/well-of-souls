@@ -37,6 +37,9 @@ typedef struct {
     int control_count;
     int control[DSCRIPT_KV_MAX];   /* control ids, in script order */
     int value[DSCRIPT_KV_MAX];
+    /* A text value (`1043=Walker`, an edit control); empty for a numeric one. The oracle
+     * hook reads the same line, so `sel:N` and `check:N` are N here as they are there. */
+    char svalue[DSCRIPT_KV_MAX][32];
     int ok;                        /* dialog: 1 = ok, 0 = cancel */
     char text[DSCRIPT_TEXT_MAX];   /* text payload, or the dump label */
 } DscriptOp;

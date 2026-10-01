@@ -41,6 +41,16 @@ click 200 100
 wait 2
 text Tester
 key RETURN
+# The New Soul chain (NewSoulOnOK 0x460A7E, dialog 149, dialog 180): PK review Yes,
+# ability points OK, apply the rest randomly Yes, Use This Skin.
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
 expect hero_ready 300
 expect map_enter 600
 # Incarnating on link 0 puts the hero on the link, so the map walks into it (FUN_00462958).

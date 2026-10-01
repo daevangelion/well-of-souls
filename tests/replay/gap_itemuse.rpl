@@ -56,6 +56,16 @@ key n
 wait 5
 text Collector
 key RETURN
+# The New Soul chain (NewSoulOnOK 0x460A7E, dialog 149, dialog 180): PK review Yes,
+# ability points OK, apply the rest randomly Yes, Use This Skin.
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
 expect hero_ready 300
 expect map_enter 600
 keydown DOWN

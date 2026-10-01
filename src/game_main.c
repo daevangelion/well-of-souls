@@ -318,6 +318,8 @@ static void main_frame_timer(void *owner, void *user)
 }
 
 int g_pet_pen_up = 1;
+static int world_step_now = 1;
+int game_world_step(void) { return world_step_now; }
 #define OPTION_CUT_DIALOG_ANIMATIONS 10  /* "My computer is slow, cut animations during dialogs." */
 static unsigned half_rate_count;         /* DAT_00559628 */
 
@@ -362,12 +364,15 @@ static int dialog_retry_pending(void)
     int i = 0, accepted = 0;
     while (i < g_pending_count) {
         const DscriptOp *op = &g_pending[i];
-        char keys[DSCRIPT_KV_MAX + 1][32];
+        char keys[DSCRIPT_KV_MAX + 1][48];
         const char *kp[DSCRIPT_KV_MAX + 1];
         DialogOp d;
         int k, n = op->control_count, took = 0;
         for (k = 0; k < n; ++k) {
-            snprintf(keys[k], sizeof(keys[k]), "%d=%d", op->control[k], op->value[k]);
+            if (op->svalue[k][0])
+                snprintf(keys[k], sizeof(keys[k]), "%d=%s", op->control[k], op->svalue[k]);
+            else
+                snprintf(keys[k], sizeof(keys[k]), "%d=%d", op->control[k], op->value[k]);
             kp[k] = keys[k];
         }
         snprintf(keys[n], sizeof(keys[n]), "ok");
@@ -423,6 +428,11 @@ static void apply_script_op(const DscriptOp *op, Input *input)
         ev.type = op->kind == DS_UP ? PLAT_EV_MOUSE_UP : PLAT_EV_MOUSE_DOWN;
         ev.button = op->button ? op->button : 1;
         input_event(input, &ev);
+        /* `click` is a down AND an up, as the oracle hook posts it (do_mouse). */
+        if (op->kind == DS_CLICK || op->kind == DS_RCLICK) {
+            ev.type = PLAT_EV_MOUSE_UP;
+            input_event(input, &ev);
+        }
         break;
     case DS_KEY:
         ev.type = PLAT_EV_KEY_DOWN; ev.key = op->key; input_event(input, &ev);
@@ -662,6 +672,8 @@ int game_main(int argc, char **argv)
             if (!world_tick_pending) continue;
             world_tick_pending = 0;
         }
+        /* An iteration that only delivers input is a message handler, not FUN_0041BDB4. */
+        world_step_now = !(script && delivered);
         scene_tick_if_any();
         env_tick();                 /* FUN_00456AA1, on both arms of the world step FUN_0041BDB4 */
         screen=screen_current(); if(screen && screen->update) screen->update(&input);

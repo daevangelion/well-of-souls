@@ -46,6 +46,7 @@
 #include <time.h>
 #include <stdarg.h>
 #include <tlhelp32.h>
+#include <commctrl.h>
 
 #define IMAGE_BASE     0x00400000u
 #define VA_GATE_STAMP  0x004DD510u
@@ -97,11 +98,31 @@ static void civil_from_days(int64_t z, int *py, int *pm, int *pd)
     if (*pm <= 2) (*py)++;
 }
 static void tr(const char *fmt, ...);
+extern uintptr_t g_base;
 /* See the DETOUR below for why Sleep is virtual rather than real. */
 static VOID WINAPI hook_Sleep(DWORD ms)
 {
     if (!ms) { vadvance(vnow()); return; }     /* a yield, not a wait */
-    tr("sleep now=%u ms=%lu ra=%p", vnow(), (unsigned long)ms, __builtin_return_address(0));
+    {
+        /* the caller chain, by EBP, for telling apart the code paths that sleep */
+        void **fp = (void **)__builtin_frame_address(0);
+        if (fp && !IsBadReadPtr(fp, 8)) fp = (void **)fp[0];
+        void *r2 = 0, *r3 = 0;
+        if (fp && !IsBadReadPtr(fp, 8)) { r2 = fp[1]; fp = (void **)fp[0];
+            if (fp && !IsBadReadPtr(fp, 8)) r3 = fp[1]; }
+        tr("sleep now=%u ms=%lu ra=%p up=%p,%p", vnow(), (unsigned long)ms,
+           __builtin_return_address(0), r2, r3);
+    }
+    /* FUN_0046831C's wait for the music thread (FUN_00469229) to take its quit request:
+     * `DAT_004F416C = 1; while (DAT_004F416C && GetTickCount() - t0 < 3000) Sleep(100);`.
+     * The thread polls every 100 ms and clears the flag. Under Wine DirectSound init
+     * (FUN_004682CA) fails, the thread never starts, and every music shutdown cost the full
+     * 3000 ms. Emulate a live thread taking the request during the first Sleep: one 100 ms
+     * wait, which is what a machine with sound gets. The port's music_shutdown() matches. */
+    if ((uintptr_t)__builtin_return_address(0) - g_base + IMAGE_BASE == 0x004683CFu) {
+        *(volatile LONG *)(g_base + (0x004F416Cu - IMAGE_BASE)) = 0;
+        *(volatile LONG *)(g_base + (0x004F4154u - IMAGE_BASE)) = 0;
+    }
     vadvance(vnow() + ms);
 }
 
@@ -456,7 +477,18 @@ static BOOL __stdcall hook_KillTimer(HWND hwnd, UINT_PTR id)
 
 /* --------------------------------------------------------------- time hooks */
 
-static DWORD  __stdcall hook_GetTickCount(void) { return vnow(); }
+/* FUN_0042198F, the dissolve: `while (GetTickCount() - t0 < ms) { rand(); rand(); FillSolidRect(); }`
+ * with no message pump. Under a virtual clock that loop never ends, and on real hardware
+ * its rand() count is the CPU's speed. The harness fixes the rate: each of the two in-loop
+ * GetTickCount calls (0x4219EC, 0x421A5B; return addresses below) costs 1 ms, the start
+ * stamp at 0x42199A costs nothing, so a 1000 ms dissolve is 999 blocks. The port's
+ * front_dissolve() does the same arithmetic. */
+static DWORD __stdcall hook_GetTickCount(void)
+{
+    uintptr_t ra = (uintptr_t)__builtin_return_address(0) - g_base + IMAGE_BASE;
+    if (ra == 0x004219F2u || ra == 0x00421A61u) vadvance(vnow() + 1);
+    return vnow();
+}
 static void   __stdcall hook_GetSystemTime(LPSYSTEMTIME st) { vfill_systemtime(st); }
 static void   __stdcall hook_GetLocalTime(LPSYSTEMTIME st)  { vfill_systemtime(st); }
 static time_t __cdecl hook_time(time_t *t) { time_t v = (time_t)vtime_s(); if (t) *t = v; return v; }
@@ -731,6 +763,11 @@ typedef struct {
     int       ctl;        /* EV_DIALOG */
     int       val;        /* EV_DIALOG kind */
     char     *valstr;
+    /* EV_DIALOG in the port's full form, `dialog <id> <ctl>=<v>... ok|cancel`: every
+     * pair is applied in order, then the terminator button is pressed. */
+    int       npair;
+    struct { int ctl, val; char *valstr; } pair[12];
+    int       term;       /* 0 none, IDOK, IDCANCEL */
 } Event;
 
 static Event  g_ev[MAX_EVENTS];
@@ -862,6 +899,24 @@ static int parse_script(const char *path)
                 int i;
                 e->kind = EV_DIALOG;
                 e->ctl  = -1;
+                if (n > 4 && !strchr(tok[3], '=') && tok[3][0] >= '0' && tok[3][0] <= '9') {
+                    /* the port's form: `dialog <id> <ctl>=<v>... ok|cancel` */
+                    for (i = 4; i < n; i++) {
+                        if (strchr(tok[i], '=') && e->npair < 12) {
+                            Event tmp;
+                            memset(&tmp, 0, sizeof tmp);
+                            parse_dialog_value(&tmp, tok[i]);
+                            e->pair[e->npair].ctl = tmp.ctl;
+                            e->pair[e->npair].val = tmp.val;
+                            e->pair[e->npair].valstr = tmp.valstr;
+                            if (e->ctl < 0) e->ctl = tmp.ctl;
+                            e->npair++;
+                        } else if (!strcmp(tok[i], "ok"))     e->term = IDOK;
+                        else if (!strcmp(tok[i], "cancel")) e->term = IDCANCEL;
+                    }
+                    if (e->ctl < 0) continue;
+                    goto parsed_dialog;
+                }
                 for (i = 3; i < n; i++) {
                     if (strchr(tok[i], '=')) parse_dialog_value(e, tok[i]);
                     else {
@@ -870,6 +925,7 @@ static int parse_script(const char *path)
                     }
                 }
                 if (e->ctl < 0) continue;      /* nothing to key the dialog off */
+            parsed_dialog: ;
             } else if (!strcmp(tok[2], "dump")) {
                 e->kind = EV_DUMP;
                 e->text = xstrdup(n > 3 ? tok[3] : "dump", n > 3 ? strlen(tok[3]) : 4);
@@ -1203,35 +1259,62 @@ static HWND find_dialog_with(int ctl)
     return (HWND)(intptr_t)found[0];
 }
 
+static void dialog_apply(HWND dlg, int id, int val, const char *valstr);
 static void do_dialog(Event *e)
 {
     HWND dlg = find_dialog_with(e->ctl);
     HWND ctl;
     if (!dlg) return;
-    if (e->val == DT_DEFAULT) {
-        UINT id = (e->text && (e->text[0] == 'c' || e->text[0] == 'C')) ? IDCANCEL : IDOK;
-        ctl = GetDlgItem(dlg, id);
+    if (e->npair) {
+        int i;
+        for (i = 0; i < e->npair; i++) dialog_apply(dlg, e->pair[i].ctl, e->pair[i].val, e->pair[i].valstr);
+        /* Posted, as DT_CLICK below. */
+        if (e->term && (ctl = GetDlgItem(dlg, e->term)) != NULL) PostMessageA(ctl, BM_CLICK, 0, 0);
+        return;
+    }
+    dialog_apply(dlg, e->ctl, e->val, e->valstr ? e->valstr : (e->text ? e->text : ""));
+}
+static void dialog_apply(HWND dlg, int id, int val, const char *valstr)
+{
+    HWND ctl;
+    if (val == DT_DEFAULT) {
+        UINT bid = (valstr[0] == 'c' || valstr[0] == 'C') ? IDCANCEL : IDOK;
+        ctl = GetDlgItem(dlg, bid);
         if (ctl) SendMessageA(ctl, BM_CLICK, 0, 0);
         return;
     }
-    ctl = GetDlgItem(dlg, e->ctl);
-    if (!ctl) { HWND t = search_wnd(dlg, e->ctl, 0); ctl = t; }
+    ctl = GetDlgItem(dlg, id);
+    if (!ctl) { HWND t = search_wnd(dlg, id, 0); ctl = t; }
     if (!ctl) return;
-    switch (e->val) {
+    switch (val) {
     case DT_TEXT:
-        SendMessageA(ctl, WM_SETTEXT, 0, (LPARAM)(e->valstr ? e->valstr : ""));
+        SendMessageA(ctl, WM_SETTEXT, 0, (LPARAM)(valstr));
         break;
     case DT_SEL: {
-        int idx = atoi(e->valstr ? e->valstr : "0");
-        if (SendMessageA(ctl, CB_SETCURSEL, (WPARAM)idx, 0) == CB_ERR)
+        int idx = atoi(valstr[0] ? valstr : "0");
+        char cls[32];
+        GetClassNameA(ctl, cls, sizeof cls);
+        if (!strcmp(cls, "SysListView32")) {
+            /* A list-view row: select and focus it; comctl32 sends the parent its
+             * LVN_ITEMCHANGED, which is what the skin picker reacts to. */
+            LVITEMA it;
+            memset(&it, 0, sizeof it);
+            it.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+            it.state     = LVIS_SELECTED | LVIS_FOCUSED;
+            SendMessageA(ctl, LVM_SETITEMSTATE, (WPARAM)idx, (LPARAM)&it);
+        } else if (SendMessageA(ctl, CB_SETCURSEL, (WPARAM)idx, 0) == CB_ERR)
             SendMessageA(ctl, LB_SETCURSEL, (WPARAM)idx, 0);
         break;
     }
     case DT_CHECK:
         SendMessageA(ctl, BM_SETCHECK,
-                     (WPARAM)(atoi(e->valstr ? e->valstr : "0") ? BST_CHECKED : BST_UNCHECKED), 0);
+                     (WPARAM)(atoi(valstr[0] ? valstr : "0") ? BST_CHECKED : BST_UNCHECKED), 0);
         break;
-    case DT_CLICK: SendMessageA(ctl, BM_CLICK, 0, 0); break;
+    /* Posted: a click's handler can open the next modal (the Sage box after New Soul's
+     * OK, dialog 149 after that), whose loop must run in the app, not inside this pump
+     * step where the clock cannot move ("pump_step: re-entered ... refusing"). A posted
+     * BM_CLICK still toggles a check box and sends the parent its WM_COMMAND. */
+    case DT_CLICK: PostMessageA(ctl, BM_CLICK, 0, 0); break;
     case DT_FOCUS: SetFocus(ctl); break;
     }
 }

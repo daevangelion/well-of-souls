@@ -29,6 +29,7 @@
 #include "editors.h"
 #include "sched.h"
 #include "scenecache.h"
+#include "options.h"
 #include "../game_main.h"
 #include "../engine/screen.h"
 #include "../engine/clock.h"
@@ -148,6 +149,27 @@ static void spot_free_all(void) { spot_free_layer(0); spot_free_layer(1); }
 /* FUN_00405153: the pixel position and the rect. x_px = x*w/1000 and
  * y_px = y*h/1000, then the 0x40/0x80 flags pull the text back by half its
  * extent so the anchor is the CENTRE of the string. */
+/* The original's text extent. It measures Tempus Sans ITC through GDI (under the oracle,
+ * Wine's substitute for it) at a pixel size of min(0.8*client_w, client_h) * fs/1000
+ * (0x405194). The port has no TrueType, so the extent is a model fitted to the oracle's
+ * measured rects: height 0.174 * px, width height * the sum of per-class advances below
+ * (16 labels from 125 to 2500 per-mille, all within ~3% of the measurement). The
+ * extent decides what a click hits, so it has to be the original's, not the 8x8 font's. */
+static void spot_extent(const char *text, int fs, int *w, int *h)
+{
+    int W = PLAT_SCREEN_W*80/100, px, adv = 0;
+    const char *c;
+    if (W > PLAT_SCREEN_H) W = PLAT_SCREEN_H;
+    px = W*fs/1000;
+    *h = (px*174+500)/1000;
+    for (c = text; *c; ++c) {
+        if (*c == ' ') adv += 1916;
+        else if (strchr(".,'!:;|il()-", *c)) adv += 2096;
+        else if ((*c >= 'A' && *c <= 'Z') || *c == 'm' || *c == 'w') adv += 6956;
+        else adv += 3061;
+    }
+    *w = (int)(((int64_t)*h*adv + 5000)/10000);
+}
 static void spot_layout(void)
 {
     int i;
@@ -159,7 +181,7 @@ static void spot_layout(void)
         if (!s->state) continue;
         x = (int)((int64_t)lerp(s->x0,s->x1,s->t_start,s->t_len,tick)*W/1000);
         y = (int)((int64_t)lerp(s->y0,s->y1,s->t_start,s->t_len,tick)*H/1000);
-        w = font_width(s->text); h = FONT_H;
+        spot_extent(s->text, lerp(s->fs0,s->fs1,s->t_start,s->t_len,tick), &w, &h);
         if (s->flags & 0x40) dx = -w/2;
         else if (s->flags & 0x20) dx = -w;
         if (s->flags & 0x80) dy = -h/2;
@@ -174,8 +196,7 @@ static void spot_layout(void)
 static int spot_hit(int px, int py)
 {
     int i;
-    spot_layout();
-    for (i = 0; i < HOTSPOT_SLOTS; ++i) {
+    for (i = 0; i < HOTSPOT_SLOTS; ++i) {      /* the rect as last painted (+0x74) */
         Hotspot *s = &spots[i];
         if (s->state < 1 || s->state == 3 || !(s->flags & 0x400)) continue;
         if (px>=s->rect.x && py>=s->rect.y && px<s->rect.x+s->rect.w && py<s->rect.y+s->rect.h)
@@ -515,6 +536,7 @@ static void well_background(void)
     snprintf(rel,sizeof(rel),"scenes/%.220s%s",scene,strchr(scene,'.')?"":".jpg");
     world_path(path,sizeof(path),rel);
     if(load_background(path,364,416)) { world_data_path(path,sizeof(path),rel); load_background(path,364,416); }
+    scene_cache_load(361,280,path);   /* the scene pane's client, 361x280: 361_..._scenes_temple.jpg */
 }
 static void pick_a_soul(void)
 {
@@ -530,14 +552,43 @@ static void pick_a_soul(void)
     }
     load_selected();
 }
+static int story_live;        /* DAT_004DF8A8: the +STORY scroller is running */
 static void art_story(void)
 {
     /* State 4: the +STORY scroller. FUN_0041B891 case 4 stamps view+0x1388
      * with GetTickCount, sets DAT_004DF8A8 = 1 (the scroller is live) and plays
      * title.mid; when the scroller finishes, FUN_0041BDB4 case 4 prints
-     * "Story Over", waits 1000 ms and posts 0x478. */
-    art_background("chapter.jpg");
+     * "Story Over", dissolves for 1000 ms and posts 0x478 (state 5). The backdrop is
+     * art\splash.jpg: the oracle's cold scene-cache miss is 640_..._art_splash.jpg. */
+    art_background("splash.jpg");
+    story_live = 1;
     game_music("title.mid");
+}
+
+/* FUN_0042198F: the dissolve, `while (GetTickCount() - t0 < ms) { rand(); rand();
+ * FillSolidRect(random block); }` with no pump. On hardware its block count is the CPU's
+ * speed; the port and the oracle hook both charge 1 ms per in-loop GetTickCount, so a
+ * 1000 ms dissolve is 999 blocks (docs/architecture_port.md, deviations). */
+static int front_dissolve(uint32_t ms)
+{
+    uint32_t t0 = clock_ms(), u;
+    int blocks = 0;
+    clock_stall(1); u = clock_ms() - t0;
+    while (u < ms) {
+        (void)crt_rand(); (void)crt_rand();
+        ++blocks;
+        clock_stall(1); u = clock_ms() - t0;
+    }
+    return blocks;
+}
+
+/* FUN_0046831C: stop the MIDI device, then wait for the music thread (FUN_00469229) to
+ * take the quit request. The thread polls every 100 ms, so with the sound card enabled the
+ * wait is one Sleep(100); the oracle hook gives the original the same answer. */
+static void music_shutdown(void)
+{
+    plat_music_stop();
+    if (option_named_get(OPT_ENABLE_SOUND_CARD)) clock_stall(100);
 }
 
 /* --------------------------------------------------------- state machine --- */
@@ -631,6 +682,7 @@ static void incarnate(void)
     if(!g_hero.valid) { snprintf(message,sizeof(message),"My Child, how can you incarnate before you have a soul?"); return; }
     c=&g_world.classes[g_hero.klass];
     hero_recharge();
+    g_hero.slot_in_use = 1;           /* WellCommand cmd 0: `*hero = 1` (alive) */
     g_hero.incarnations++;
     g_hero.seconds_played = (int)((clock_ms()/1000u) - (clock_ms()/1000u)); /* 0 at the first tick */
     if(hero_save(&g_hero)) { snprintf(message,sizeof(message),"Could not save your soul."); return; }
@@ -713,6 +765,137 @@ static int purge_soul(const char *soul)
  * dlg+0x30C; the original always shows the review box and aborts on any answer
  * other than IDYES. In solo there is nothing to opt into, so the box is shown
  * and the answer defaults to NO unless the caller supplied one. */
+/* The modal chain behind New Soul's OK, in the original's order (NewSoulOnOK 0x460A7E,
+ * WellCommand cmd 3): the Sage's PK review (dialog 164), the soul's setup, the ability
+ * points (dialog 149, AbilityPointsOnOK 0x449851), the skin picker (dialog 180,
+ * ChangeSkinDialog), then WellCommand(0), Incarnate. */
+enum { NS_NONE, NS_PK_REVIEW, NS_POINTS, NS_POINTS_SAGE, NS_SKIN };
+static int ns_step, ns_pk, ns_points, ns_added[5];
+#define NS_POINTS_GIVEN 20         /* WellCommand: FUN_00449df2(0x14) before DoModal(149) */
+static const char *const ability_names[5] = { "STR", "WIS", "STA", "AGI", "DEX" };
+
+/* FUN_00448FD3: the class's MAX_ABILITY for one ability, clamped to 255. */
+static int ability_max(int i)
+{
+    int m = g_world.classes[g_hero.klass].max_ability[i];
+    return m > 0xfe ? 0xff : m;
+}
+static void ns_skin(void)
+{
+    ns_step = NS_SKIN;
+    wos_log_event("dialog_open","id=180");
+}
+/* AbilityPointsRandom (0x449BD6): spend what is left on rand()%5 picks, 1000 tries. */
+static void ns_points_random(void)
+{
+    int tries = 0;
+    while (ns_points > 0 && tries < 1000) {
+        int r = crt_rand() % 5;
+        if (g_hero.ability[r] + ns_added[r] < ability_max(r)) { ns_added[r]++; ns_points--; }
+        tries++;
+    }
+}
+static void ns_points_apply(void)
+{
+    int i;
+    for (i = 0; i < 5; ++i) g_hero.ability[i] += ns_added[i];
+    wos_log_event("ability_points","str=%d wis=%d sta=%d agi=%d dex=%d",
+                  g_hero.ability[0],g_hero.ability[1],g_hero.ability[2],g_hero.ability[3],g_hero.ability[4]);
+    ns_skin();
+}
+static void ns_pk_yes(void)
+{
+    int i, headroom = 0;
+    hero_create(&g_hero,name,class_ids[selected_class],gender_ids[selected_gender],NULL);
+    g_hero.serial = 1;
+    if(!g_hero.valid) { ns_step=NS_NONE; snprintf(message,sizeof(message),"Could not create your soul."); return; }
+    load_portrait();
+    wos_log_event("new_soul_created","name=%s class=%d",g_hero.name,g_hero.klass);
+    /* FUN_00449144 (149's OnInit): the points are capped by what the class can still
+     * take, and a soul with no headroom never sees the dialog (EndDialog(1)). */
+    for (i = 0; i < 5; ++i) { ns_added[i] = 0; headroom += ability_max(i) - g_hero.ability[i]; }
+    ns_points = headroom < NS_POINTS_GIVEN ? headroom : NS_POINTS_GIVEN;
+    if (ns_points < 1) { ns_points = 0; ns_points_apply(); return; }
+    ns_step = NS_POINTS;
+    wos_log_event("dialog_open","id=149 points=%d",ns_points);
+}
+static void ns_answer(int yes)
+{
+    if (ns_step == NS_PK_REVIEW) {
+        wos_log_event("sage_answer","box=pk yes=%d",yes);
+        if (yes) ns_pk_yes();
+        else { ns_step = NS_NONE; name_focus = 1; plat_text_input(1); }   /* back into dialog 138 */
+    } else if (ns_step == NS_POINTS_SAGE) {
+        wos_log_event("sage_answer","box=points yes=%d",yes);
+        if (yes) { ns_points_random(); ns_points_apply(); }
+        else ns_step = NS_POINTS;
+    }
+}
+static void ns_points_ok(void)
+{
+    if (ns_points > 0) { ns_step = NS_POINTS_SAGE; return; }
+    ns_points_apply();
+}
+static void ns_use_skin(void)
+{
+    ns_step = NS_NONE;
+    wos_log_event("skin_chosen","skin=%s",g_hero.skin);
+    plat_text_input(0);
+    incarnate();
+}
+
+/* --- the chain's panels (in-framebuffer, as every MFC dialog in the port) --- */
+static Rect ns_yes_rect(void) { Rect r={200,300,100,28}; return r; }
+static Rect ns_no_rect(void)  { Rect r={340,300,100,28}; return r; }
+static Rect ns_row_rect(int i) { Rect r={160,130+i*36,320,30}; return r; }
+static Rect ns_ok_rect(void)  { Rect r={270,330,100,28}; return r; }
+static void ns_update(const Input *in)
+{
+    int i;
+    if (ns_step == NS_PK_REVIEW || ns_step == NS_POINTS_SAGE) {
+        if (in->pressed[PLAT_KEY_RETURN] || clicked(in,ns_yes_rect())) ns_answer(1);
+        else if (in->pressed[PLAT_KEY_ESCAPE] || clicked(in,ns_no_rect())) ns_answer(0);
+    } else if (ns_step == NS_POINTS) {
+        /* FUN_004496E7: a left click on a row adds a point while the class allows it,
+         * a right click takes one back. */
+        for (i = 0; i < 5; ++i) {
+            Rect r = ns_row_rect(i);
+            if (clicked(in,r) && ns_points > 0 && g_hero.ability[i] + ns_added[i] < ability_max(i)) { ns_added[i]++; ns_points--; }
+            if ((in->mouse_pressed & 8u) && inside(in,r) && ns_added[i] > 0) { ns_added[i]--; ns_points++; }
+        }
+        if (in->pressed[PLAT_KEY_RETURN] || clicked(in,ns_ok_rect())) ns_points_ok();
+    } else if (ns_step == NS_SKIN) {
+        if (in->pressed[PLAT_KEY_RETURN] || clicked(in,ns_ok_rect())) ns_use_skin();
+    }
+}
+static void ns_draw(Framebuffer *fb)
+{
+    char line[96]; int i;
+    if (ns_step == NS_PK_REVIEW || ns_step == NS_POINTS_SAGE) {
+        const char *title = ns_step == NS_PK_REVIEW ? "Review Your PK Choice" : "Ability Points Not Used";
+        const char *text = ns_step == NS_POINTS_SAGE ?
+            "You have not applied all your ability points.  Do you want to apply the rest randomly?" :
+            ns_pk ? "You have chosen to be a Player-Killer.  PKers can hurt other PKers, and they can hurt you.  Is this as you wish?" :
+                    "You have chosen NOT to be a Player-Killer.  You will be free from attack by other players (except on dangerous maps).  Is this as you wish?";
+        ui_panel(fb,(Rect){120,150,400,200},title,"");
+        font_wrap(fb,(Rect){136,186,368,100},text,0xf0e0bd);
+        label_button(fb,ns_yes_rect(),"Yes"); label_button(fb,ns_no_rect(),"No");
+    } else if (ns_step == NS_POINTS) {
+        ui_panel(fb,(Rect){140,80,360,300},"Ability Points","");
+        snprintf(line,sizeof(line),"Points left: %d",ns_points); font_draw(fb,160,108,line,0xffffff);
+        for (i = 0; i < 5; ++i) {
+            snprintf(line,sizeof(line),"%s  %d / %d",ability_names[i],g_hero.ability[i]+ns_added[i],ability_max(i));
+            label_button(fb,ns_row_rect(i),line);
+        }
+        label_button(fb,ns_ok_rect(),"OK");
+    } else if (ns_step == NS_SKIN) {
+        ui_panel(fb,(Rect){140,120,360,250},"Pick New Skin","");
+        snprintf(line,sizeof(line),"Skin: %s",g_hero.skin[0]?g_hero.skin:"(the class default)");
+        font_draw(fb,160,180,line,0xffffff);
+        label_button(fb,ns_ok_rect(),"Use This Skin");
+    }
+}
+
 static void create_soul(int pk)
 {
     const char *error;
@@ -721,17 +904,9 @@ static void create_soul(int pk)
     if(error) { snprintf(message,sizeof(message),"%s",error); return; }
     if(!class_count) { snprintf(message,sizeof(message),"This world has no playable classes."); return; }
     wos_log_event("pk_choice","pk=%d",pk?1:0);
-    hero_create(&g_hero,name,class_ids[selected_class],gender_ids[selected_gender],NULL);
-    g_hero.serial = 1;
-    if(!g_hero.valid) { snprintf(message,sizeof(message),"Could not create your soul."); return; }
+    ns_pk = pk; name_focus = 0; plat_text_input(0);
+    ns_step = NS_PK_REVIEW;            /* "Review Your PK Choice", Yes/No */
     soul_count=hero_list_saves(souls,MAX_CHOICES);
-    if(hero_save(&g_hero)) { snprintf(message,sizeof(message),"Could not save your soul."); return; }
-    load_portrait();
-    /* Dialog 149 (0x95), the post-creation follow-up, then FUN_0042095E's own
-     * recursion into Incarnate. */
-    wos_log_event("new_soul_created","name=%s class=%d",g_hero.name,g_hero.klass);
-    plat_text_input(0);
-    incarnate();
 }
 
 /* -------------------------------------------------------- the story ----- */
@@ -1059,25 +1234,36 @@ static void front_update(const Input *in)
                 char chosen[64];
                 selected_world = arg;
                 snprintf(chosen,sizeof(chosen),"%s",worlds[arg]);
+                /* FUN_0041D635: SendMessage(frame, 0x4C8) and MapLoader's FUN_00437461 each
+                 * restart the sound system through FUN_0046831C, then FUN_0041B891(4). */
+                music_shutdown();
+                music_shutdown();
                 if(world_load(game_data_path(),chosen))
                     snprintf(message,sizeof(message),"Could not load that world.");
                 else {
                     env_world_loaded();     /* SoundThemesParser, part of the quest table load */
-                    memset(&g_hero,0,sizeof(g_hero));
+                    {   /* the slot allocation survives: FUN_0041D635 does not touch the record */
+                        int in_use=g_hero.slot_in_use, serial=g_hero.serial;
+                        memset(&g_hero,0,sizeof(g_hero));
+                        g_hero.slot_in_use=in_use; g_hero.serial=serial;
+                    }
                     wos_log_event("world_chosen","name=%s",chosen);
-                    front_goto(FRONT_WELL);
+                    front_goto(FRONT_STORY);
                 }
                 return;
             }
         }
         break;
     case FRONT_STORY:
-        /* FUN_0041BDB4 case 4: while DAT_004DF8A8 is set the scroller runs;
-         * otherwise "Story Over", a 1000 ms wait and PostMessage 0x478. The
-         * port ends the scroller on the same dwell and returns to the menu. */
-        if (key || (in->mouse_pressed&2u) || clock_ms()-state_tick > STORY_MS) {
-            wos_log_event("story_over","lines=%d",world_story_count());
-            front_goto(FRONT_MENU);
+        /* FUN_0041C2BC: a mouse-up in state 4 ends the scroller ("Saw Mouseup during
+         * story state"). The scroller's own end is font-dependent (FUN_00485A06 scrolls
+         * the wrapped Tempus Sans text 1 px per 35 ms); the port ends it on STORY_MS. */
+        if (story_live && ((in->mouse_released&2u) || clock_ms()-state_tick > STORY_MS)) story_live = 0;
+        /* FUN_0041BDB4 case 4, on the next world step: "Story Over", the dissolve, 0x478. */
+        if (!story_live && game_world_step()) {
+            int blocks = front_dissolve(1000);
+            wos_log_event("story_over","lines=%d blocks=%d",world_story_count(),blocks);
+            front_goto(FRONT_WELL);
         }
         break;
     case FRONT_WELL: {
@@ -1097,7 +1283,9 @@ static void front_update(const Input *in)
         if(in->pressed[PLAT_KEY_UP] && selected_soul>0) --selected_soul;
         if(in->pressed[PLAT_KEY_DOWN] && selected_soul+1<soul_count) ++selected_soul;
         if(old!=selected_soul) load_selected();
-        if(in->pressed['n'] || clicked(in,bar_rect(2)) || clicked(in,(Rect){376,300,232,28})) new_soul();
+        /* (392,266,72,32): the Pick-a-Soul pane's NEW SOUL button, rect +0x84 (FUN_00476F4C). */
+        if(in->pressed['n'] || clicked(in,bar_rect(2)) || clicked(in,(Rect){376,300,232,28}) ||
+           clicked(in,(Rect){392,266,72,32})) new_soul();
         else if(in->pressed['i'] || clicked(in,bar_rect(0)) || clicked(in,(Rect){376,336,232,28})) incarnate();
         else if(clicked(in,bar_rect(3))) { soul_count=hero_list_saves(souls,MAX_CHOICES); selected_soul=soul_count?0:-1; load_selected(); }
         else if(clicked(in,bar_rect(1))) snprintf(message,sizeof(message),"Haunting other players is an online feature.");
@@ -1153,7 +1341,20 @@ int front_dialog_op(int dialog_id, const char *const *kv, int n, int ok)
 static int front_dialog_apply(int dialog_id, const char *const *kv, int n, int ok)
 {
     int i;
+    if (ns_step && (dialog_id==0 || dialog_id==164 || dialog_id==149 || dialog_id==180)) {
+        /* The chain's current modal takes the op; one for a later step stays pending
+         * until that step is up, as the oracle hook's does. */
+        for (i=0;i<n;++i) {
+            int sage = ns_step==NS_PK_REVIEW || ns_step==NS_POINTS_SAGE;
+            if (sage && !strncmp(kv[i],"1091=",5)) { ns_answer(1); return 1; }   /* Yes */
+            if (sage && !strncmp(kv[i],"1092=",5)) { ns_answer(0); return 1; }   /* No */
+            if (ns_step==NS_POINTS && !strncmp(kv[i],"1094=",5)) { ns_points_ok(); return 1; }
+            if (ns_step==NS_SKIN && !strncmp(kv[i],"1235=",5)) { ns_use_skin(); return 1; }
+        }
+        return 0;
+    }
     if (dialog_id==138) {                     /* New Soul, 0x8A */
+        if (!name_focus) return 0;            /* the dialog is not up yet */
         if (!ok) { plat_text_input(0); name_focus=0; front_goto(FRONT_WELL); return 1; }
         for (i=0;i<n;++i) {
             const char *eq = strchr(kv[i],'=');
@@ -1164,15 +1365,15 @@ static int front_dialog_apply(int dialog_id, const char *const *kv, int n, int o
             if (klen>=sizeof(key)) continue;
             memcpy(key,kv[i],klen); key[klen]=0;
             while (klen && (key[klen-1]==' ' || key[klen-1]=='\t')) key[--klen]=0;
-            if (!text_casecmp(key,"name")) {
+            if (!text_casecmp(key,"name") || !strcmp(key,"1043")) {     /* EDIT 1043 */
                 snprintf(name,sizeof(name),"%s",eq+1);
-            } else if (!text_casecmp(key,"class")) {
+            } else if (!text_casecmp(key,"class") || !strcmp(key,"1063")) { /* LISTBOX 1063 row */
                 selected_class = atoi(eq+1);
                 if (selected_class<0 || selected_class>=class_count) selected_class=0;
-            } else if (!text_casecmp(key,"gender")) {
+            } else if (!text_casecmp(key,"gender") || !strcmp(key,"1230")) { /* COMBOBOX 1230 */
                 selected_gender = atoi(eq+1);
                 if (selected_gender<0 || selected_gender>=gender_count) selected_gender=0;
-            } else if (!text_casecmp(key,"pk")) {
+            } else if (!text_casecmp(key,"pk") || !strcmp(key,"1064")) {   /* BUTTON 1064 */
                 front_new_soul_pk = atoi(eq+1);
             } else if (!text_casecmp(key,"purge")) {
                 /* The duplicate-name branch of FUN_00460A7E step 4: answering
@@ -1261,8 +1462,9 @@ static void draw_hotspot_text(Framebuffer *fb)
     for (i=0;i<HOTSPOT_SLOTS;++i) {
         Hotspot *s=&spots[i];
         if (!s->state) continue;
-        if (s->flags & 2) font_draw(fb,s->rect.x+2,s->rect.y+2,s->text,0x101010);
-        font_draw(fb,s->rect.x,s->rect.y,s->text,s->colour);
+        int ty = s->rect.y + (s->rect.h-FONT_H)/2;
+        if (s->flags & 2) font_draw(fb,s->rect.x+2,ty+2,s->text,0x101010);
+        font_draw(fb,s->rect.x,ty,s->text,s->colour);
     }
 }
 static void draw_list_row(Framebuffer *fb,Rect r,int row,const char *label,int selected)
@@ -1354,6 +1556,7 @@ static void front_render(Framebuffer *fb)
             label_button(fb,ok_rect(),"OK");
             label_button(fb,(Rect){450,398,86,28},"Cancel");
         }
+        if (ns_step) ns_draw(fb);
         if (place_prompt) place_yourself_draw(fb);
     }
     draw_hotspot_text(fb);
@@ -1367,6 +1570,7 @@ static void front_render(Framebuffer *fb)
  * state machine's own handler. */
 static void front_screen_update(const Input *in)
 {
+    if (ns_step) { ns_update(in); return; }
     if (name_focus) { front_update_newsoul(in); return; }
     front_update(in);
 }
