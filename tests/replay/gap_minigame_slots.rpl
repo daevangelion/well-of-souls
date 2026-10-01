@@ -1,4 +1,4 @@
-# seed: 2
+# seed: 3
 # requires: hero_ready scene_enter minigame_arm minigame_open minigame_slots_spin minigame_slots_result
 #
 # Slobber Slots (GAME 1) at the retail casino.
@@ -206,7 +206,8 @@ hold LEFT 128
 hold UP 200
 hold DOWN 40
 expect scene_enter 2000
-wait 100
+# The Barker's END runs once his first bubble has gone (~90 frames), so click before that.
+wait 30
 shot /tmp/wos-gap-casino.bmp
 # The armed GAME button, then the window's own SPIN control.
 click 307 32
