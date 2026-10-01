@@ -394,8 +394,11 @@ static int dialog_retry_pending(void)
         kp[n] = keys[n];
         ++n;
         d.id = op->id; d.ctrl = -1; d.value = op->ok; d.ok = op->ok;
-        if (panel_dialog_op(&d)) took = 1;
+        /* The front first: dialog 149 is both New Soul's ability points and the in-game
+         * Stats/Train dialog, and only one of them is up at a time. panel_dialog_op returns
+         * 0 when it took the op and -1 when the id is not its own. */
         if (front_dialog_op(op->id, kp, n, op->ok)) took = 1;
+        else if (panel_dialog_op(&d) == 0) took = 1;
         if (options_dialog_op(op->id, kp, n, op->ok)) took = 1;
         if (took) { accepted = 1; g_pending[i] = g_pending[--g_pending_count]; }
         else ++i;

@@ -676,9 +676,6 @@ static void hero_died(void);
 static void finish(BattleResult result)
 {
     fight.result = result;
-    /* FUN_0048fd90's caller stamps the post-fight grace (DAT_004e70a8) so the map's encounter
-     * roll does not re-trigger on the very next step; without it the 1 s grace never expires. */
-    map_note_battle_end();
     if (result == BATTLE_WON) {
         int xp = fight.xp, gold = fight.gold;
         int64_t old_xp = g_hero.xp, old_gold = g_hero.gold;

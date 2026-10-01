@@ -1879,15 +1879,17 @@ static void do_dump(const char *label)
         fprintf(f, "hero.serial=%d\n",  *(int *)(hero + 0x004));
         fprintf(f, "hero.level=%d\n",   *(int *)(hero + 0x064));
         fprintf(f, "hero.map=%d\n",     *(int *)(hero + 0x090));
-        fprintf(f, "hero.gender=%d\n",  *(int *)(hero + 0x1A8));
+        /* Offsets from src/game/hero.c's record map, which round-trips the original's .her
+         * files: HP/MP +0x70/+0x78, the five abilities from +0x680, gender +0xAA0. */
+        fprintf(f, "hero.gender=%d\n",  *(int *)(hero + 0xAA0));
         fprintf(f, "hero.link=%d\n",    *(int *)(hero + 0x67C));
-        fprintf(f, "hero.hp=%d\n",      *(int *)(hero + 0x6BC));
-        fprintf(f, "hero.mp=%d\n",      *(int *)(hero + 0x6C0));
-        fprintf(f, "hero.abil.str=%d\n", *(int *)(hero + 0x1A0));
-        fprintf(f, "hero.abil.wis=%d\n", *(int *)(hero + 0x1A4));
-        fprintf(f, "hero.abil.sta=%d\n", *(int *)(hero + 0x1A8 - 8));
-        fprintf(f, "hero.abil.agi=%d\n", *(int *)(hero + 0x1A0 + 8));
-        fprintf(f, "hero.abil.dex=%d\n", *(int *)(hero + 0x1A0 + 12));
+        fprintf(f, "hero.hp=%d\n",      *(int *)(hero + 0x070));
+        fprintf(f, "hero.mp=%d\n",      *(int *)(hero + 0x078));
+        fprintf(f, "hero.abil.str=%d\n", *(int *)(hero + 0x680));
+        fprintf(f, "hero.abil.wis=%d\n", *(int *)(hero + 0x684));
+        fprintf(f, "hero.abil.sta=%d\n", *(int *)(hero + 0x688));
+        fprintf(f, "hero.abil.agi=%d\n", *(int *)(hero + 0x68C));
+        fprintf(f, "hero.abil.dex=%d\n", *(int *)(hero + 0x690));
         fprintf(f, "hero.checksum=%08x\n", (unsigned)*(unsigned *)(hero + 0x16C8));
         /* hero.base_offset is the hero record's offset inside the 0x15C0170 block
          * FUN_00426149 malloc'd: 0x1560A5C + (rand() & 0x3FFF & ~0xF).  It is the one

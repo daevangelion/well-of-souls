@@ -68,6 +68,9 @@ wait 2
 key RETURN
 expect hero_ready 300
 expect map_enter 600
+# Incarnate's "Place Yourself On Gaiea!" Sage box is modal over the map: answer No.
+key n
+wait 2
 keydown DOWN
 expect scene_enter 400
 keyup DOWN

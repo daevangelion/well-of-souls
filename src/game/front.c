@@ -243,7 +243,7 @@ static int selected_class, class_count, selected_gender, gender_count, name_focu
 static int class_ids[WORLD_MAX_CLASSES], gender_ids[4];
 static char worlds[MAX_CHOICES][64], souls[MAX_CHOICES][HERO_NAME_MAX];
 static char genders[4][64], name[HERO_NAME_MAX], message[160];
-static int pending_death, resurrect_on_well, place_prompt, place_map, place_link;
+static int pending_death, resurrect_on_well, place_prompt;
 static int show_credits;
 /* The Terms of Service modal, FUN_00402A73 (all.c:16956), called from
  * FUN_0041B891 case 1 (all.c:21092). It shows a top-level dialog carrying
@@ -619,7 +619,11 @@ int front_enter_title(void)
 
 int front_state(void) { return state; }
 int front_active(void) { return state>=0; }
-int front_modal_up(void) { return srnet_open; }
+/* WellCommand(3) runs the whole New Soul chain inside one message handler (DoModal 138, the
+ * Sage boxes, 149, 180, then Incarnate): no AppRun idle pass until it returns. */
+static int well_cmd_modal;
+/* Incarnate's "Place Yourself On Gaiea!" Sage box (0x420240) is modal too. */
+int front_modal_up(void) { return srnet_open || well_cmd_modal || place_prompt; }
 
 /* Control 1 with 1005 set: 0x46F returns 1 and FUN_0041F699 carries on. */
 static void srnet_play(void)
@@ -675,6 +679,7 @@ static void front_goto(int next)
 void front_reenter(void) { front_goto(state); }
 void game_go_front(void) { front_goto(FRONT_WHERE); }
 void game_go_well(void)  { front_goto(FRONT_WELL); }
+void front_enter_game(void) { if (state != FRONT_SCENE) front_goto(FRONT_SCENE); }
 
 /* FUN_004978D5(hero,1), the recharge the Incarnate handler performs. */
 static void hero_recharge(void)
@@ -703,12 +708,15 @@ static void incarnate(void)
     wos_log_event("incarnate","link=%d map=%d",c->start_location_set?c->start_link:0,
                   c->start_location_set?c->start_map:0);
     scene_embed_stop();               /* the Well's scene 0 ends with the incarnation */
+    /* Incarnate: CloseOverlaysGoMap(1) (state 6, DAT_004F2220), then the latch and
+     * DAT_004F2230 set, then 0x46A(link, map); a dropIn hero clears the latch again. */
+    map_close_overlays(1);
     game_enter_map(c->start_location_set?c->start_map:0,
                    c->start_location_set?c->start_link:0,
                    c->start_location_set?c->start_drop_in:0);
     /* hero[0x336] (dropIn) == 0 is the original's test for "no START_LOCATION";
      * it then asks, and answering Yes opens FUN_00434F95("earth"). */
-    if(!c->start_location_set) { place_prompt=1; place_map=0; place_link=0; }
+    if(!c->start_location_set) place_prompt=1;
 }
 
 /* --- New Soul, dialog 138 (0x8A) ----------------------------------------- */
@@ -716,6 +724,7 @@ static void new_soul(void)
 {
     char path[768], section[8]; char *text; Ini ini; int i;
     state=FRONT_WELL; name[0]=0; message[0]=0; name_focus=1;
+    well_cmd_modal=1;
     plat_text_input(1);
     class_count=0; selected_class=0; selected_gender=0; gender_count=0;
     for(i=1;i<WORLD_MAX_CLASSES;++i)
@@ -817,12 +826,41 @@ static void ns_points_apply(void)
                   g_hero.ability[0],g_hero.ability[1],g_hero.ability[2],g_hero.ability[3],g_hero.ability[4]);
     ns_skin();
 }
+/* FUN_004184B8 fills the skin list from ListFileNames("<data>\\skins", "*.bmp") with the
+ * extensions cut; FUN_0041862F (after New Soul's OK) then picks rand() % count of it as the
+ * new soul's skin. */
+#define MAX_SKINS 512
+static char skin_names[MAX_SKINS][64];
+static int skin_count;
+static void skin_entry(const char *entry,int is_dir,void *user)
+{
+    size_t n=strlen(entry);
+    (void)user;
+    if(is_dir || n<5 || n-4>=sizeof(skin_names[0]) || skin_count>=MAX_SKINS) return;
+    if(text_casecmp(entry+n-4,".bmp")) return;
+    memcpy(skin_names[skin_count],entry,n-4); skin_names[skin_count][n-4]=0;
+    skin_count++;
+}
+static int skin_cmp(const void *a,const void *b) { return text_casecmp((const char *)a,(const char *)b); }
+static void random_skin(void)
+{
+    char path[768];
+    skin_count=0;
+    world_data_path(path,sizeof(path),"skins");
+    plat_list_dir(path,skin_entry,NULL);
+    qsort(skin_names,(size_t)skin_count,sizeof(skin_names[0]),skin_cmp);
+    if(skin_count>0) {
+        int i=crt_rand()%skin_count;
+        snprintf(g_hero.skin,sizeof(g_hero.skin),"%s",skin_names[i]);
+    }
+}
 static void ns_pk_yes(void)
 {
     int i, headroom = 0;
     hero_create(&g_hero,name,class_ids[selected_class],gender_ids[selected_gender],NULL);
     g_hero.serial = 1;
-    if(!g_hero.valid) { ns_step=NS_NONE; snprintf(message,sizeof(message),"Could not create your soul."); return; }
+    if(!g_hero.valid) { ns_step=NS_NONE; well_cmd_modal=0; snprintf(message,sizeof(message),"Could not create your soul."); return; }
+    random_skin();
     load_portrait();
     wos_log_event("new_soul_created","name=%s class=%d",g_hero.name,g_hero.klass);
     /* FUN_00449144 (149's OnInit): the points are capped by what the class can still
@@ -855,7 +893,13 @@ static void ns_use_skin(void)
     ns_step = NS_NONE;
     wos_log_event("skin_chosen","skin=%s",g_hero.skin);
     plat_text_input(0);
+    /* WellCommand(0) for a fresh soul (view+0x13A8 == 3): RefreshSoulList selects the new row,
+     * so SoulSelectionChanged (0x4773C7) makes the hero's combatant, then WellCommand makes it
+     * again at 0x420AF7. FUN_0049210A twice, 37 draws each. */
+    battle_scene_hero();
+    battle_scene_hero();
     incarnate();
+    well_cmd_modal = 0;               /* WellCommand(3) returns after WellCommand(0) */
 }
 
 /* --- the chain's panels (in-framebuffer, as every MFC dialog in the port) --- */
@@ -949,15 +993,30 @@ static void select_list(const Input *in,Rect r,int count,int *selection)
     }
 }
 
-static void place_yourself_draw(Framebuffer *fb)
+/* Incarnate's "Place Yourself On Gaiea!" Sage box (SageMessageBox at 0x420240, dialog 164)
+ * comes up over the map: it is modal, so it owns the input, while the map pass behind it
+ * keeps running from the timer as the original's MapTick does. */
+static void place_answer(int yes)
 {
-    ui_panel(fb,(Rect){120,140,400,200},"Place Yourself On Gaiea",
-             "You have not yet specified your position");
-    font_draw(fb,140,190,"Map",0xffffff);
-    snprintf(message,sizeof(message),"%d  (link %d)",place_map,place_link);
-    font_draw(fb,200,190,message,0xffdf80);
-    label_button(fb,(Rect){140,240,120,28},"Where");
-    label_button(fb,(Rect){280,240,120,28},"Onward");
+    place_prompt=0;
+    wos_log_event("sage_answer","box=place yes=%d",yes);
+    if (yes) front_goto(FRONT_CHOOSE);   /* PlaceYourselfPicker, the port's chooser */
+}
+int front_place_prompt_update(const Input *in)
+{
+    if (!place_prompt) return 0;
+    if (clicked(in,(Rect){140,240,120,28}) || in->pressed['y']) place_answer(1);
+    else if (clicked(in,(Rect){280,240,120,28}) || in->pressed['n'] || in->pressed[PLAT_KEY_RETURN])
+        place_answer(0);
+    return 1;
+}
+void front_place_prompt_render(Framebuffer *fb)
+{
+    if (!place_prompt) return;
+    ui_panel(fb,(Rect){120,140,400,200},"Place Yourself On Gaiea!",
+             "You have not yet specified your position in the world. Would you like to do so now?");
+    label_button(fb,(Rect){140,240,120,28},"Yes");
+    label_button(fb,(Rect){280,240,120,28},"No");
 }
 
 int front_bio_active(void) { return bio_open; }
@@ -1287,16 +1346,6 @@ static void front_update(const Input *in)
         break;
     case FRONT_WELL: {
         int old=selected_soul;
-        if (place_prompt) {
-            if (clicked(in,(Rect){140,240,120,28})) { place_prompt=0; front_goto(FRONT_CHOOSE); return; }
-            if (clicked(in,(Rect){280,240,120,28}) || in->pressed[PLAT_KEY_RETURN]) {
-                g_hero.map=place_map; g_hero.link=place_link;
-                if (hero_save(&g_hero)) snprintf(message,sizeof(message),"Could not save your soul.");
-                place_prompt=0;
-                wos_log_event("placed","map=%d link=%d",place_map,place_link);
-            }
-            return;
-        }
         if (resurrect_on_well) { resurrect_on_well=0; hero_recharge(); if(hero_save(&g_hero)) { /* keep going */ } }
         select_list(in,(Rect){376,106,232,180},soul_count,&selected_soul);
         if(in->pressed[PLAT_KEY_UP] && selected_soul>0) --selected_soul;
@@ -1329,7 +1378,7 @@ static void front_update_newsoul(const Input *in)
 {
     int i;
     if(in->pressed[PLAT_KEY_ESCAPE] || clicked(in,(Rect){450,398,86,28})) {
-        plat_text_input(0); name_focus=0; front_goto(FRONT_WELL); return;
+        plat_text_input(0); name_focus=0; well_cmd_modal=0; front_goto(FRONT_WELL); return;
     }
     if(clicked(in,name_rect())) name_focus=1;
     if(name_focus) {
@@ -1360,6 +1409,13 @@ int front_dialog_op(int dialog_id, const char *const *kv, int n, int ok)
 static int front_dialog_apply(int dialog_id, const char *const *kv, int n, int ok)
 {
     int i;
+    if (place_prompt && (dialog_id==0 || dialog_id==164)) {
+        for (i=0;i<n;++i) {
+            if (!strncmp(kv[i],"1091=",5)) { place_answer(1); return 1; }   /* Yes */
+            if (!strncmp(kv[i],"1092=",5)) { place_answer(0); return 1; }   /* No */
+        }
+        return 0;
+    }
     if (ns_step && (dialog_id==0 || dialog_id==164 || dialog_id==149 || dialog_id==180)) {
         /* The chain's current modal takes the op; one for a later step stays pending
          * until that step is up, as the oracle hook's does. */
@@ -1604,7 +1660,6 @@ static void front_render(Framebuffer *fb)
             label_button(fb,(Rect){450,398,86,28},"Cancel");
         }
         if (ns_step) ns_draw(fb);
-        if (place_prompt) place_yourself_draw(fb);
     }
     draw_hotspot_text(fb);
     if(*message) {

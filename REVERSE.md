@@ -34,6 +34,7 @@ The detailed findings for each subsystem are in `docs/re/*.md`:
 ### Port Fixes
 
 ## Corrections to docs/re/*.md (verified against the decomp)
+- maps.md / the port's map code: DAT_004E70A8 is not a post-battle grace. Its only writer is the Hunt button's handler (msg 0x4CB, OnHunt 0x436B2F: hunting skill +1, drum2.wav, stamp, ++DAT_004E70AC); FrontEndSetState clears it. FUN_0046259A is the 2 s hunt window. Fights stamp nothing; leaving a scene (CloseOverlaysGoMap(1)) stamps DAT_004F2220, so no encounter for 5 s, and the hero stays where the scene began. A map change (msg 0x46A, 0x429547) puts the hero ON the link with the latch set.
 - maps.md 8a: all.c:70909-70911 suppresses the difficulty-0 `.mon` encounters when the hero is ON the nearest link (`onLink == nearest`), not when it is off it. (MapView)
 - maps.md 8c: the proximity tiers use the .rdata doubles at VA 0x4cd548 = 0.5 and VA 0x4cd578 = 0.25 (file offsets 0xcc748/0xcc778), i.e. radius/2 and radius/4. (MapView)
 - battle.md: FUN_0049b70f is an encrypted-stat getter, not rand(). Assembly 0x4805b8..0x480604 maps +660 defense, +698 offense and +628 level. Physical power = ((level+100)*(str+65)*(offense*B/100+5))/6500; the denominator is (targetLevel+40)*(targetSta+200); the second scale is 200/(targetDefense+200). Monster per-action output scales by min(elapsed/480 frames, 1). The XP base uses HP*40/100, stamina+300, offense+200, defense+300 and level+70; the reward XP is not randomized. The HP algorithm multiplier is 1162/100 (11.62), not 1.162. (Battle)

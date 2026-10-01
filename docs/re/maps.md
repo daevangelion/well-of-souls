@@ -445,7 +445,7 @@ else {
 
 So the **per-tick probability** is `200*3 / (bitlen(difficulty) - 3 + 3) / 10000`, i.e. `0.06 / (bitlen(difficulty))` — with the party-difficulty field at offset `+0xA04` reused *raw* as a second `/10000` threshold. The rate is scaled by how many animation frames elapse, which is why the short idle-wander legs in §6 matter so much: **encounter rate is per frame, not per map unit walked.** A faithful port should pick a fixed tick rate (or convert to per-map-unit) rather than replicate the frame dependence.
 
-`FUN_0046259a` (all.c:70851) is the post-battle grace period: 2 s, after which (if `DAT_004f2228`) it emits the "no monsters here" hint. `DAT_004e70a8` is the timestamp.
+`FUN_0046259a` (all.c:70851) is the **hunt window**, not a post-battle grace: `DAT_004e70a8` is stamped only by the Hunt button's handler (msg 0x4CB, OnHunt 0x436B2F, which also trains hero+0xA04 and counts presses in `DAT_004e70ac`) and cleared by FrontEndSetState. For 2 s after a Hunt press the encounter roll runs standing still; then (if `DAT_004f2228`) it emits the "no monsters here" hint.
 
 ### 8b. Which monsters — `FUN_0049099b` (0x49099b, all.c:106381)
 Triggered by the battle, uses `DAT_004f2240` = the **nearest** link (not necessarily the one you're standing on) and `DAT_004f2248`-adjacent fields:
@@ -585,7 +585,7 @@ Load order for a map: parse `maps.txt` -> open `root.jpg` (record W,H) -> `root.
 | 0x46260E | `FUN_0046260e` | **random-encounter roll** + nearby-player scan |
 | 0x49099B | `FUN_0049099b` | **PickRandomMonster** (groups.txt) |
 | 0x464DAF | `FUN_00464daf` | **PickRandomMonster** (`.mon` proximity) |
-| 0x46259A | `FUN_0046259a` | 2 s post-battle grace / "no monsters" hint |
+| 0x46259A | `FUN_0046259a` | HuntWindow: the 2 s hunt window after a Hunt press / "no monsters" hint |
 | 0x4625EE | `FUN_004625ee` | nearest link is kind 4 (safe) |
 | 0x4636D3 | `FUN_004636d3` | nearest link + link-under-hero |
 | 0x463853 | `FUN_00463853` | activate a link (dispatch by kind) |

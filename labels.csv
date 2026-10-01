@@ -562,10 +562,10 @@ addr,name,comment
 00418404,FUN_00418404,"souls.exe function, 8 bytes"
 00418416,FUN_00418416,"souls.exe function, 32 bytes"
 00418436,FUN_00418436,"souls.exe function, 114 bytes"
-004184B8,FUN_004184b8,"souls.exe function, 260 bytes"
+004184B8,SkinListFill,"Fills the skin list box from ListFileNames(the data skins folder, *.bmp), extensions cut"
 004185C6,FUN_004185c6,"souls.exe function, 8 bytes"
 004185CE,FUN_004185ce,"souls.exe function, 97 bytes"
-0041862F,FUN_0041862f,"souls.exe function, 154 bytes"
+0041862F,NewSoulRandomSkin,"After New Soul OK: HeroRecordReset, rand() % skin count picks the new soul skin, HUD refresh"
 004186C9,FUN_004186c9,"souls.exe function, 13 bytes"
 004186D6,FUN_004186d6,"souls.exe function, 185 bytes"
 004187F1,FUN_004187f1,"souls.exe function, 94 bytes"
@@ -1158,7 +1158,9 @@ addr,name,comment
 004294D4,FUN_004294d4,"souls.exe function, 11 bytes"
 004294DF,FUN_004294df,"souls.exe function, 11 bytes"
 004294F4,FUN_004294f4,"souls.exe function, 8 bytes"
+00429547,OnChangeMap,"msg 0x46A(link, map): MapLoader, then the hero ON the link (x, y) with DAT_004F222C (latch) set"
 00429693,FUN_00429693,"souls.exe function, 28 bytes"
+004296AF,OnLeaveSceneMsg,"msg 0x476: CloseOverlaysGoMap(1) when a view exists"
 004296C5,FUN_004296c5,"souls.exe function, 88 bytes"
 004299EC,FUN_004299ec,"souls.exe function, 27 bytes"
 00429A07,ResetCustomSounds,"Clears the custom sound table 0x54D578 (boot, sound prefs change)"
@@ -1292,7 +1294,10 @@ addr,name,comment
 00436724,FUN_00436724,"souls.exe function, 8 bytes"
 00436B03,BitLength,floor(log2(n))+1
 00436B15,PartyLevelBitlen,bitlen(party[0].+0xA04) - 3 clamped at 0: the party level used by the encounter roll
+00436B2F,OnHunt,"Hunt button (msg 0x4CB): incarnated and no hunt running: hunting skill +1 (hero+0xA04), level message, drum2.wav, stamps DAT_004E70A8, ++DAT_004E70AC"
 00436C9D,FleeTest,Flee success test used by the Flee button
+00436DF5,OnLeaveScene,"msg 0x47F: FleeTest unless forced, else CloseOverlaysGoMap(1), FrontEndSetState(6)"
+00436E8D,ExitScene,"msg 0x480 (leaving a scene): CloseOverlaysGoMap(1), Done with ExitScene"
 00436F05,FUN_00436f05,"souls.exe function, 188 bytes"
 00436FC1,PlayMidi,Plays a MIDI file (MUSIC opcode; empty name or missing file = silence)
 00436FFC,SwitchMap,"Actual map switch: sets DAT_004e70b4, picks the music.ini midi<N>, calls FUN_00436fc1"
@@ -2296,7 +2301,7 @@ addr,name,comment
 004624C3,FUN_004624c3,"souls.exe function, 15 bytes"
 004624D2,NameHash,"Hash of the soul name string at hero+0x14, stored at hero+0x2AE"
 004624EF,MarkSelfAttacked,Marks I am the one being attacked / world-CRC bookkeeping
-0046259A,PostBattleGrace,2 s post-battle grace period and the There are no monsters here - hunt hint
+0046259A,HuntWindow,"The 2 s hunt window after a Hunt press (DAT_004E70A8): (elapsed*100)/2000, then clears it and prints There are no monsters here, hunt somewhere else."
 004625EE,NearestLinkIsSafe,True when the nearest link is kind 4 (a no-random-monsters-here link)
 0046260E,EncounterRoll,"Random-encounter roll plus nearby-player scan, once per frame from FUN_00462958"
 00462958,MapTick,"Map tick: camera, nearest link, link activation, encounter roll, monster zones"
@@ -2882,7 +2887,7 @@ addr,name,comment
 00478C6F,ButtonBarFire,"Fires a button-bar slot: SendMessage(parentHwnd,msg,0,0)"
 00478D00,FUN_00478d00,"souls.exe function, 83 bytes"
 00478D53,FUN_00478d53,"souls.exe function, 106 bytes"
-00478DBD,FUN_00478dbd,"souls.exe function, 71 bytes"
+00478DBD,ButtonBarHunt,"Registers (or clears) button-bar slot 6 Hunt (buttonHunt.bmp, msg 0x4CB) in map mode for a live hero"
 00478E04,FUN_00478e04,"souls.exe function, 86 bytes"
 00478E5A,ButtonBarFightExtra,FIGHT button-bar extra: the Flee/Exit slot
 00478EAC,FUN_00478eac,"souls.exe function, 147 bytes"

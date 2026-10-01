@@ -1127,7 +1127,8 @@ static void step(void)
         if(n<2) return;
         if(eq(t[1],"EXIT")) { finish();return; }
         if(eq(t[1],"SCENE")&&n>2) { Link l=vm.link; game_enter_scene(number(t[2]),&l); return; }
-        if(eq(t[1],"LINK")&&n>3) { game_enter_map(number(t[2]),number(t[3]),n>4?number(t[4]):0); return; }
+        /* 0x476 (leave the scene: CloseOverlaysGoMap(1)), then 0x46A (link, map). */
+        if(eq(t[1],"LINK")&&n>3) { map_close_overlays(1); game_enter_map(number(t[2]),number(t[3]),n>4?number(t[4]):0); return; }
         jump_to(t[1]);
         return;
     case OP_ACTOR: { /* id[.layer], "name", skin, pose, x, y [,colorTable][,pain][,mode] */

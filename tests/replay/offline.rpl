@@ -45,16 +45,86 @@ wait 2
 key RETURN
 expect hero_ready 300
 expect map_enter 600
-# Walk east, then south until a random encounter pulls the hero into fight scene 2.
-hold RIGHT 60
-expect hero_move 300
-# Walking east into link 0 opens the embark scene, and quest.txt:1774 is an
-# `ASK 30` -- "Do you agree to obey the golden rule? (type YES or NO)". An ASK
-# suspends the scene until the player answers, so the replay must answer it or
-# the scene waits forever and `expect battle_start` can never fire. SceneVM-2
-# implemented the suspend; this is the script catching up, not a behaviour revert.
-text YES
+# Incarnate's "Place Yourself On Gaiea!" Sage box is modal over the map: answer No.
+key n
+wait 2
+# The hero lands ON link 0 (179,219), the embark scene. One step east and he comes to rest
+# inside it, which fires it (the latch only holds while he has not walked).
+hold RIGHT 4
+expect scene_enter 600
+# quest.txt:1774 is an `ASK 30` -- "Do you agree to obey the golden rule? (type YES or NO)".
+# Speech no longer blocks the lines after it, so the ASK comes up with the third bubble:
+# two RETURNs clear the first two, `y` answers YES (scene.c ST_ASK).
+wait 40
+key RETURN
+wait 40
+key RETURN
+wait 40
+key y
 wait 20
+key RETURN
+wait 40
+key RETURN
+wait 40
+# The Soul Brother's OFFER2 shop: close it, then clear the farewell lines.
+expect panel_open 600
+key ESCAPE
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+wait 20
+key RETURN
+expect map_enter 2000
+# Out of the link in ONE walk (arrow keys step a cell at a time and would stop inside it):
+# (245,142) is (194,220) from (179,220). Then south until a random encounter.
+click 245 142
+expect hero_move 300
+wait 60
 keydown DOWN
 expect battle_start 1200
 keyup DOWN

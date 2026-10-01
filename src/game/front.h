@@ -9,6 +9,8 @@
 #define WOS_FRONT_H
 
 #include "../engine/dump.h"
+#include "../engine/fb.h"
+#include "../engine/ui.h"
 
 /* Original state values of DAT_004df8a4, all.c:21078 (FUN_0041b891's switch).
  * The port keeps the same numbering so a dump reads like the decomp. */
@@ -35,6 +37,11 @@ int front_active(void);
 /* SRNet's 0x46F modal is up. Its modal loop dispatches messages but never runs AppRun's
  * idle path, so FUN_0040A7C7 is entered only from the 100 ms timer meanwhile. */
 int front_modal_up(void);
+/* FrontEndSetState(6): the live map, where MapTick runs. */
+void front_enter_game(void);
+/* The Place Yourself Sage box over the map: input (1 = it took it) and drawing. */
+int front_place_prompt_update(const Input *in);
+void front_place_prompt_render(Framebuffer *fb);
 
 /* Transition to FRONT_TITLE from a cold boot. Returns 0 on success. */
 int front_enter_title(void);
