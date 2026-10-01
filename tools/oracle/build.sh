@@ -11,10 +11,18 @@ BIN=/mnt/build/wos-oracle/bin
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hook"
 CC="$TC/bin/i686-w64-mingw32-clang"
 
-[ -x "$CC" ] || { echo "build.sh: no i686 clang at $CC" >&2; exit 1; }
+TARGET="-target i686-w64-windows-gnu"
+if [ ! -x "$CC" ] && command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
+    # apt's gcc-mingw-w64-i686 (what tools/bootstrap_cloud.sh installs). gcc has no
+    # -target, and libgcc must be static or hook.dll imports libgcc_s_dw2-1.dll, which
+    # the target process cannot find (LoadLibrary error 126 at injection).
+    CC=i686-w64-mingw32-gcc
+    TARGET="-static-libgcc"
+fi
+[ -x "$CC" ] || command -v "$CC" >/dev/null 2>&1 || { echo "build.sh: no i686 compiler (llvm-mingw clang at $TC or i686-w64-mingw32-gcc)" >&2; exit 1; }
 mkdir -p "$BIN"
 
-COMMON="-target i686-w64-windows-gnu -O2 -fno-exceptions -fno-stack-protector
+COMMON="$TARGET -O2 -fno-exceptions -fno-stack-protector
          -Wall -Wextra -Wno-unused-parameter -Wno-cast-function-type
          -DPSAPI_VERSION=1"
 
