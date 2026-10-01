@@ -109,7 +109,7 @@ addr,name,comment
 004054A7,FUN_004054a7,"souls.exe function, 65 bytes"
 004054E8,HotspotAnimTick,"Advances a hotspot's animation by (idx, tick)"
 004055A2,HotspotFreeLayer,Frees all hotspots of one layer
-004055E1,FUN_004055e1,"souls.exe function, 228 bytes"
+004055E1,HotspotDrawLayer,"For each hotspot of a layer: HotspotAnimTick(i, tick) then HotspotDraw; tick is GetTickCount at paint"
 004056DF,FUN_004056df,"souls.exe function, 8 bytes"
 004056E7,HotspotAdd,"find-free-slot + register wrapper (layer,flags,tLenMs,text,font,colour,size,x/y from/to,hwnd,msg,lparam)"
 00405765,HotspotHitTest,"Hit-tests (x,y) against the hotspots and posts (hwnd,msg,slotIndex,lparam)"
@@ -450,8 +450,8 @@ addr,name,comment
 004126C8,FUN_004126c8,"souls.exe function, 23 bytes"
 004126DF,FUN_004126df,"souls.exe function, 19 bytes"
 004126F2,FUN_004126f2,"souls.exe function, 36 bytes"
-00412716,FUN_00412716,"souls.exe function, 129 bytes"
-00412797,FUN_00412797,"souls.exe function, 39 bytes"
+00412716,PetPenInit,"Loads petButtons.bmp/petPen.jpg and sets DAT_004DEA1C=1 (CSoulsView::OnCreate and ToggleGameDialog #5 open)"
+00412797,PetPenClose,"KillTimer and DAT_004DEA1C=0 (ToggleGameDialog #5 close)"
 004127BE,FUN_004127be,"souls.exe function, 130 bytes"
 00412840,FUN_00412840,"souls.exe function, 1158 bytes"
 00412CC6,FUN_00412cc6,"souls.exe function, 105 bytes"
@@ -785,7 +785,7 @@ addr,name,comment
 0041C543,FUN_0041c543,"souls.exe function, 169 bytes"
 0041C5EC,FUN_0041c5ec,"souls.exe function, 237 bytes"
 0041C6D9,FUN_0041c6d9,"souls.exe function, 62 bytes"
-0041C717,FUN_0041c717,"souls.exe function, 2240 bytes"
+0041C717,FrontViewOnDraw,"Front view paint: backdrop, then HotspotDrawLayer(0/1, GetTickCount()) at 0x41C7F2"
 0041CFD7,FUN_0041cfd7,"souls.exe function, 11 bytes"
 0041CFEC,FUN_0041cfec,"souls.exe function, 11 bytes"
 0041D01E,TitleStateInit,State 0: registers the Well/Souls/copyright sliding hotspots over art\title.jpg
@@ -3119,7 +3119,7 @@ addr,name,comment
 0048A019,FUN_0048a019,"souls.exe function, 18 bytes"
 0048A02B,FUN_0048a02b,"souls.exe function, 22 bytes"
 0048A041,FUN_0048a041,"souls.exe function, 30 bytes"
-0048A05F,FUN_0048a05f,"souls.exe function, 328 bytes"
+0048A05F,JpegResizeExternal,"ShellExecuteEx cresizer.exe into temp\sceneCache, then Sleep(50), WaitForSingleObject(5000), Sleep(100) on the UI thread"
 0048A1A7,SceneBackgroundLoad,Loads the scene background jpg (world/scenes then scenes) with a temp/sceneCache cache
 0048A316,StateBackgroundLoad,Sets a front-end state's background image (view+0x34A8)
 0048A3A5,FUN_0048a3a5,"souls.exe function, 153 bytes"

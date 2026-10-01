@@ -51,6 +51,9 @@ uint32_t clock_real_ms(void);
 void clock_advance(uint32_t ms);        /* now += ms; also moves clock_time_s() */
 void clock_set_now(uint32_t now_ms);    /* absolute; ignored if it moves backwards */
 void clock_attach_realtime(void);       /* clock_ms() follows the host clock again */
+/* A blocking call inside a handler (the original's Sleep): the clock jumps `ms` ahead in
+ * either mode, so timers come due late and coalesce exactly as after a real stall. */
+void clock_stall(uint32_t ms);
 void clock_set_time_base(uint32_t epoch_s); /* time(0) at t0; 0 by default */
 void clock_reset(void);                 /* t0=0, epoch base 0, all timers killed */
 
@@ -106,5 +109,9 @@ uint32_t clock_next_timer_deadline(void);
  * the 20 ms idle tick and the whole game world, so the world step is 40 Hz, not
  * 60 Hz and not 20 Hz. See docs/re/timing.md section 2.1. */
 int  clock_gate(void *owner, int id, uint32_t interval_ms);
+/* The same gate with the original's own re-stamp, `last = GetTickCount()` (NetGraphTick
+ * 0x4289B7 stores the observed tick into _DAT_004e48cc). Polled from the 20 ms idle gate
+ * it passes every 40 ms, not every 25: the oracle's world stamps are 300, 340, 380, ... */
+int  clock_gate_restamp(void *owner, int id, uint32_t interval_ms);
 
 #endif

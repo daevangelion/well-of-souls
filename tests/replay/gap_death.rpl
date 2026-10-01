@@ -1,4 +1,4 @@
-# seed: 2
+# seed: 1
 # requires: hero_ready map_enter battle_start battle_lost battle_hero_death hero_resurrect
 # requires-match: battle_hero_death .*resurrect=1
 # FUN_00494fcd: losing a fight. The hero takes a normal random encounter and never presses

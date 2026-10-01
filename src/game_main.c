@@ -277,7 +277,7 @@ static void usage(void)
  * reading it as 0 throughout is seeing its own virtualised GetTickCount return 0, not
  * a missing tick. */
 #define MAIN_FRAME_TIMER_ID 0x16   /* 22 */
-static int frame_timer_owner, frame_timer_armed;
+static int frame_timer_owner;
 static int world_tick_pending;
 /* The 20 Hz tick and the 25 ms world tick, i.e. the real shape of
  * FUN_0040A7C7 (0x0040A7C7) -> FUN_0042895C (0x0042895C) -> FUN_0041BDB4
@@ -316,9 +316,18 @@ static void main_frame_timer(void *owner, void *user)
     idle_gate();                            /* FUN_00428C8F -> FUN_0040A7C7 */
 }
 
+int g_pet_pen_up = 1;
+#define OPTION_CUT_DIALOG_ANIMATIONS 10  /* "My computer is slow, cut animations during dialogs." */
+static unsigned half_rate_count;         /* DAT_00559628 */
+
 static int world_tick_due(void)
 {
-    if (!clock_gate(WORLD_GATE_OWNER, 0, 25u)) return 0;
+    if (!clock_gate_restamp(WORLD_GATE_OWNER, 0, 25u)) return 0;
+    /* NetGraphTick 0x428B1D: with a dialog up (DAT_004E6914, a modal box, is not modelled;
+     * DAT_004DEA1C is g_pet_pen_up) and option 10 on, every odd step is stamped but skips
+     * the world, so the front end runs at half the step rate. */
+    if (g_pet_pen_up && options_get(OPTION_CUT_DIALOG_ANIMATIONS) && (++half_rate_count & 1u))
+        return 0;
     if (++idle_ticks % 40u == 0u)      /* one log line per virtual second */
         wos_log_event("world_tick", "ms=%lu count=%u",
                       (unsigned long)clock_ms(), idle_ticks);
@@ -553,9 +562,19 @@ int game_main(int argc, char **argv)
     if (have_seed && !have_epoch) { boot_seed_pin = seed; boot_seed_have_pin = 1; }
     boot_run();
     /* FUN_00428360, the main frame's id-0x16 100 ms timer, armed at the original's
-     * point. It is what actually drives FUN_0040A7C7's gate. */
+     * point: InitInstance, at t=0 and before the title art loads. It is what actually
+     * drives FUN_0040A7C7's gate. The title's cold scene-cache stall (scenecache.h) takes
+     * the clock to 150 before the loop runs, so the first WM_TIMER (due at 100) is
+     * delivered late at 150 and the next is due at 200 -- the oracle's t_tim. */
     frame_timer_owner = 0;
+    clock_set_timer(&frame_timer_owner, MAIN_FRAME_TIMER_ID, 100u, main_frame_timer, NULL);
     if(game_boot()) { result=1; goto cleanup; }
+    {
+        /* The first WM_PAINT: the original paints its new windows before the loop takes its
+         * first script event or timer (oracle: WM_PAINT at 150, ahead of everything). */
+        const Screen *first=screen_current();
+        if(first && first->render) { fb_reset_clip(&fb); fb_clear(&fb,0); first->render(&fb); }
+    }
     if(!replay && !script) clock_attach_realtime();
 
     /* The original's loop is CWinApp::Run at 0x0040A8D9: a bare PeekMessage pump
@@ -585,7 +604,13 @@ int game_main(int argc, char **argv)
              * lets the app run (timers, the idle gate) before the next, even at an equal
              * timestamp (docs/re/oracle.md 3.1). The clock does not move while ops are due. */
             {
-                const DscriptOp *op = dscript_take(script, clock_ms());
+                /* A timer that came due BEFORE the op's time (the boot timer due at 100,
+                 * delivered late at 150 after the title stall) is already in the queue
+                 * when the op is posted, so it is taken first; ties still go to input. */
+                uint32_t op_at = dscript_next_time(script, 0), tdl = clock_next_timer_deadline();
+                int timer_first = tdl != UINT32_MAX && (int32_t)(tdl - clock_ms()) <= 0 &&
+                                  (int32_t)(tdl - op_at) < 0;
+                const DscriptOp *op = timer_first ? NULL : dscript_take(script, clock_ms());
                 if(op) { apply_script_op(op,&input); delivered = 1; }
             }
             {
@@ -597,7 +622,6 @@ int game_main(int argc, char **argv)
                      * deadline and (once AppRun's loop runs) the idle boundary. */
                     uint32_t target = next, t = clock_next_timer_deadline();
                     if (t != UINT32_MAX && (int32_t)(t - target) < 0) target = t;
-                    if (!frame_timer_armed && (int32_t)(50u - target) < 0) target = 50u; /* the arm point */
                     if (idle_loop_live) {
                         t = clock_idle_next();
                         if ((int32_t)(t - target) < 0) target = t;
@@ -619,23 +643,15 @@ int game_main(int argc, char **argv)
         }
         /* TIMER: every WM_TIMER due now, oldest deadline first (FUN_0040A8D9
          * dispatches the queue, and the timers are the lowest-priority entries). */
-        clock_dispatch_timers();
+        /* Not in an iteration that delivered an op: the input message is handled (by the
+         * update below) before any timer the next pump pass takes. The oracle's click at
+         * 150 with a timer due since 100 runs the click first (boot_menu.dsc). */
+        if (!delivered) clock_dispatch_timers();
         /* IDLE (FUN_0040A7C7, 20 ms) -> world (FUN_0042895C's 25 ms sub-gate ->
          * FUN_0041BDB4). The world step runs once per 25 ms of virtual time in
          * --script mode, which is the original's rate; the legacy --replay mode
          * keeps its per-frame step so the .rpl acceptance tests are unchanged. */
-        /* FUN_00428360 arms the main frame's id-0x16 100 ms timer during
-         * InitInstance, and the oracle's trace records its FIRST delivery at
-         * t=150, not t=100. So the port arms it 50 ms into the run rather than at
-         * boot: with a 100 ms period that puts the first WM_TIMER at 150 and the
-         * first FUN_0042895C draw there, which is what the original does. Arming at
-         * t=0 drew at t=100 and cost one spurious draw in every boot-only run. */
-        if (!frame_timer_armed && clock_ms() >= 50u) {
-            clock_set_timer(&frame_timer_owner, MAIN_FRAME_TIMER_ID, 100u,
-                            main_frame_timer, NULL);
-            frame_timer_armed = 1;
-        }
-        if (idle_loop_live) idle_gate();     /* AppRun's idle path -> FUN_0040A7C7 */
+        if (idle_loop_live && !delivered) idle_gate();   /* AppRun's idle path -> FUN_0040A7C7 */
         dialog_retry_pending();
         if (capped && frame >= max_frames) { result = 3; break; }
         if (script && !delivered) {

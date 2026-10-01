@@ -28,6 +28,7 @@
 #include "front.h"
 #include "editors.h"
 #include "sched.h"
+#include "scenecache.h"
 #include "../game_main.h"
 #include "../engine/screen.h"
 #include "../engine/clock.h"
@@ -73,7 +74,7 @@
  * FUN_004056E7's 15 arguments, minus the ones the port does not need. */
 typedef struct {
     int state, layer, flags, t_start, t_len;
-    int fs0, fs1, x0, x1, y0, y1, cx, cy, colour;
+    int fs0, fs1, x0, x1, y0, y1, cur_fs, cur_x, cur_y, colour;  /* cur_*: +0xAC/+0xB0/+0xB4 */
     int msg, lparam;
     char text[128];
     Rect rect;
@@ -112,7 +113,7 @@ static int spot_add(int layer, int flags, int t_len, const char *text, int colou
         s->x0 = x0; s->x1 = x1; s->y0 = y0; s->y1 = y1;
         /* FUN_004054E8 stores the FROM values into the current slots, so a
          * freshly registered entry starts at its from-position, not at rest. */
-        s->cx = fs0; s->cy = x0;
+        s->cur_fs = fs0; s->cur_x = x0; s->cur_y = y0;
         s->rect.x = s->rect.y = s->rect.w = s->rect.h = 0;
         return i;
     }
@@ -126,8 +127,9 @@ static void spot_advance(void)
     for (i = 0; i < HOTSPOT_SLOTS; ++i) {
         Hotspot *s = &spots[i];
         if (!s->state) continue;
-        s->cx = lerp(s->fs0, s->fs1, s->t_start, s->t_len, tick);
-        s->cy = lerp(s->x0,  s->x1,  s->t_start, s->t_len, tick);
+        s->cur_x  = lerp(s->x0,  s->x1,  s->t_start, s->t_len, tick);
+        s->cur_y  = lerp(s->y0,  s->y1,  s->t_start, s->t_len, tick);
+        s->cur_fs = lerp(s->fs0, s->fs1, s->t_start, s->t_len, tick);
         if ((uint32_t)s->t_len < (uint32_t)tick-(uint32_t)s->t_start) {
             s->state = (s->flags & 4) ? 3 : 2;
             /* FUN_004054E8's flag-8 branch: a one-shot sound, then the bit clears. */
@@ -297,7 +299,9 @@ static int load_background(const char *path,int w,int h)
 static void art_background(const char *file)
 {
     char path[768]; snprintf(path,sizeof(path),"%s/art/%s",game_data_path(),file);
-    load_background(path,640,480);
+    /* StateBackgroundLoad (0x0048A316) from FUN_0041B891: the client rect's size, and a
+     * cold temp\sceneCache entry stalls the thread (scenecache.h). */
+    if(!load_background(path,640,480)) scene_cache_load(640,480,path);
 }
 
 /* --- the screens' setup, i.e. FUN_0041B891's switch ------------------------ */
@@ -307,9 +311,10 @@ static void art_title(void)
     /* FUN_0041D01E, all.c:21985. Layer 0, flags 0x2C0/0x240/0x340, 5000 ms, no
      * message, so nothing here is clickable: a mouse-down anywhere is handled
      * by FUN_0041C1CD case 0, which goes straight to state 1. */
-    spot_add(0,0x2c0,5000,"Well",0x0000ff,2500,1000,333,2500,500,583,0,0);
-    spot_add(0,0x240,5000,"Souls",0x0000ff,2500,   0,833,2500,500,583,0,0);
-    spot_add(0,0x340,5000,"Synthetic Reality, Inc.",0x0000ff,1666,500,583,1666,500,583,0,0);
+    /* The texts are .data 0x4E1F58/0x4E1F4C/0x4E1F48, padded as stored. */
+    spot_add(0,0x2c0,5000,"Well      ",0x0000ff,2500,1000,333,2500,500,583,0,0);
+    spot_add(0,0x240,5000,"     Souls",0x0000ff,2500,   0,833,2500,500,583,0,0);
+    spot_add(0,0x340,5000,"of",0x0000ff,1666,500,583,1666,500,583,0,0);
     spot_add(0,0x340,5000,"synthetic-reality.com",0x00ffff, 125,500,583,1000,500,115,0,0);
 }
 
@@ -1370,8 +1375,8 @@ void front_dump(DumpEmit emit, void *user)
 {
     int i, live = 0;
     char key[64];
-    spot_advance();
-    spot_layout();
+    /* No spot_advance() here: the original's table holds what its last paint left
+     * (HotspotAnimTick runs inside the draw, 0x41C7F2), and that is what the oracle reads. */
     for (i = 0; i < HOTSPOT_SLOTS; ++i)
         if (spots[i].state >= 1 && spots[i].state <= 2 && (spots[i].rect.w || spots[i].rect.h))
             ++live;
@@ -1392,6 +1397,9 @@ void front_dump(DumpEmit emit, void *user)
         if (!sp->rect.w && !sp->rect.h) continue;
         snprintf(key,sizeof(key),"front.hotspot.%d.state",i);
         dump_emit_int(emit,key,sp->state,user);
+        snprintf(key,sizeof(key),"front.hotspot.%d.anchor",i);
+        snprintf(message,sizeof(message),"%d,%d,%d",sp->cur_fs,sp->cur_x,sp->cur_y);
+        emit(key,message,user);
         snprintf(key,sizeof(key),"front.hotspot.%d.clickable",i);
         dump_emit_int(emit,key,(sp->flags & 0x400)?1:0,user);
         snprintf(key,sizeof(key),"front.hotspot.%d.msg",i);

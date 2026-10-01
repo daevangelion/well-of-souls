@@ -1,4 +1,4 @@
-# seed: 2
+# seed: 1
 # requires: battle_start battle_hit train
 # Win the encounter out of the Gateway's doorstep, then buy training with the PP the
 # fight paid: button_rect(3) opens the Stats panel, T opens Training, T spends PP.

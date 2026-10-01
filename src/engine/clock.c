@@ -67,6 +67,12 @@ void clock_set_now(uint32_t now_ms)
     if ((int32_t)(now_ms - g.now_ms) >= 0) g.now_ms = now_ms;
 }
 
+void clock_stall(uint32_t ms)
+{
+    if (g.realtime) g.real_base -= ms;
+    g.now_ms += ms;
+}
+
 void clock_attach_realtime(void)
 {
     g.real_base = plat_ticks_ms() - g.now_ms;
@@ -238,6 +244,25 @@ int clock_gate(void *owner, int id, uint32_t interval_ms)
     }
     if ((uint32_t)(now - g_gate[i].last) < interval_ms) return 0;
     g_gate[i].last += interval_ms;      /* re-arm from the boundary, never from now */
+    return 1;
+}
+
+int clock_gate_restamp(void *owner, int id, uint32_t interval_ms)
+{
+    int i, free_slot = -1;
+    uint32_t now = clock_ms();
+    for (i = 0; i < GATE_SLOTS; ++i) {
+        if (g_gate[i].used && g_gate[i].owner == owner && g_gate[i].id == id) break;
+        if (free_slot < 0 && !g_gate[i].used) free_slot = i;
+    }
+    if (i == GATE_SLOTS) {
+        if (free_slot < 0) return 0;
+        i = free_slot;
+        g_gate[i].owner = owner; g_gate[i].id = id; g_gate[i].interval = interval_ms;
+        g_gate[i].last = 0; g_gate[i].used = 1;    /* a zero-initialised static stamp */
+    }
+    if ((uint32_t)(now - g_gate[i].last) < interval_ms) return 0;
+    g_gate[i].last = now;
     return 1;
 }
 

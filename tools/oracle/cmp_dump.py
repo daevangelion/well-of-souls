@@ -92,6 +92,11 @@ ORACLE_ONLY_PREFIX = "oracle."
 #: (DAT_005339F8) that src/game_main.c's dump table has no module for.  The hook reads
 #: and emits it (see dump_hotspots) so the values are on the record, but there is no
 #: `front_dump` on the port side to compare them against yet.
+#: The front end's drawn text extents come from the font: the original measures Tempus
+#: Sans ITC with GDI, the port its 8x8 bitmap font (docs/architecture_port.md, deviations).
+#: The rect is reported but not compared; `front.hotspot.N.anchor` (the lerped font size,
+#: x and y per-mille the rect is laid out from) is the font-independent half and IS compared.
+FONT_DEPENDENT = re.compile(r"^front\.hotspot\.\d+\.rect$")
 NO_SOURCE_PREFIXES = ("map.", "scene.", "battle.", "panels.", "items.",
                       "minigame.", "options.", "world.", "chat.", "editors.",
                       "missions.", "html.", "front.")
@@ -127,11 +132,13 @@ def main():
     order = [k for k in oracle if k.startswith("rng.")] + \
             [k for k in oracle if not k.startswith("rng.")] + \
             [k for k in port if k not in oracle]
-    bad, nosrc, extra = [], [], 0
+    bad, nosrc, extra, font = [], [], 0, 0
     real = 0          # keys genuinely compared on both sides, for the weak-OK test
     for k in order:
         if k.startswith(ORACLE_ONLY_PREFIX):
             extra += 1
+        elif FONT_DEPENDENT.match(k) and k in oracle and k in port:
+            font += 1
         elif k not in oracle:
             if k.startswith(NO_SOURCE_PREFIXES):
                 nosrc.append(k)
@@ -152,9 +159,11 @@ def main():
         tail += "  [%d oracle-only key(s) not compared]" % extra
     if nosrc:
         tail += "  [%d key(s) with no oracle source yet]" % len(nosrc)
+    if font:
+        tail += "  [%d font-dependent rect(s) not compared]" % font
     if not bad:
         print("%s: OK (%d compared%s)"
-              % (label, len(order) - extra - len(nosrc), tail))
+              % (label, len(order) - extra - len(nosrc) - font, tail))
         if nosrc:
             print("    no oracle source for: %s" % ", ".join(sorted(set(nosrc))[:12]))
         # WEAK OK. A label whose comparison is dominated by keys only one side can supply
@@ -170,7 +179,7 @@ def main():
                   " not coverage" % (real, len(set(nosrc))))
         return 0
     print("%s: MISMATCH (%d of %d keys%s)"
-          % (label, len(bad), len(order) - extra, tail))
+          % (label, len(bad), len(order) - extra - font, tail))
     for line in bad[:12]:
         print(line)
     if len(bad) > 12:

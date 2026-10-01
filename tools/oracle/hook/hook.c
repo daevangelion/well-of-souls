@@ -96,10 +96,12 @@ static void civil_from_days(int64_t z, int *py, int *pm, int *pd)
     *pd = (int)(doy);
     if (*pm <= 2) (*py)++;
 }
+static void tr(const char *fmt, ...);
 /* See the DETOUR below for why Sleep is virtual rather than real. */
 static VOID WINAPI hook_Sleep(DWORD ms)
 {
     if (!ms) { vadvance(vnow()); return; }     /* a yield, not a wait */
+    tr("sleep now=%u ms=%lu ra=%p", vnow(), (unsigned long)ms, __builtin_return_address(0));
     vadvance(vnow() + ms);
 }
 
@@ -1618,6 +1620,11 @@ static void dump_hotspots(FILE *f, const char *pfx)
         fprintf(f, "%s.hotspot.%d.state=%d\n", pfx, i, state);
         fprintf(f, "%s.hotspot.%d.rect=%d,%d,%d,%d\n", pfx, i,
                 rect[0], rect[1], rect[2], rect[3]);
+        /* HotspotAnimTick's lerped font size, x and y (+0xAC/+0xB0/+0xB4, per-mille):
+         * the font-independent part of the rect, so the port can be held to it. */
+        fprintf(f, "%s.hotspot.%d.anchor=%d,%d,%d\n", pfx, i,
+                *(int *)(r + 0xAC), *(int *)(r + 0xB0), *(int *)(r + 0xB4));
+        fprintf(f, "oracle.hotspot.%d.t_start=%u\n", i, *(unsigned *)(r + 0x0C));
         fprintf(f, "%s.hotspot.%d.clickable=%d\n", pfx, i, flags ? 1 : 0);
         fprintf(f, "%s.hotspot.%d.msg=%04X\n", pfx, i, (unsigned)msg);
         fprintf(f, "%s.hotspot.%d.target=%d\n", pfx, i, target);
@@ -1730,7 +1737,11 @@ static void do_dump(const char *label)
      * real differences. `front.*` is PORT-ONLY until the port grows a front_dump; the
      * keys are what such a dump would answer, and cmp_dump.py lists the prefix as
      * no-source rather than as a mismatch (docs/re/oracle.md 5.4.4). */
-    if (label_is(mod, "front")) dump_hotspots(f, "front");
+    if (label_is(mod, "front")) {
+        /* DAT_004DF8A4 under the port's own key, which the port emits on a front label. */
+        fprintf(f, "front_state=%d\n", *(int *)(b + (0x004DF8A4u - IMAGE_BASE)));
+        dump_hotspots(f, "front");
+    }
 
     /* --- the module read-outs, in the port's key vocabulary ---------------- */
     if (label_is(mod, "map"))       dump_map(f);
@@ -1790,6 +1801,8 @@ hero_done: ;
     fprintf(f, "oracle.seq=%d\n", g_dump_seq++);
     fprintf(f, "oracle.gate_stamp=%lu\n",
             (unsigned long)*(volatile DWORD *)(b + (VA_GATE_STAMP - IMAGE_BASE)));
+    fprintf(f, "oracle.world_stamp=%lu\n",       /* NetGraphTick's 25 ms world-step stamp */
+            (unsigned long)*(volatile DWORD *)(b + (0x004E48CCu - IMAGE_BASE)));
     fprintf(f, "oracle.steps=%ld\n", (long)g_steps);
     fprintf(f, "oracle.timers_live=%d\n", (live = timer_live_count(), live));
     fprintf(f, "oracle.next_deadline=%u\n", timer_next_deadline());
@@ -2221,10 +2234,17 @@ static BOOL WINAPI hook_GetMessageA(LPMSG m, HWND h, UINT a, UINT b)
      * user32's disagree. */
     {
         MSG probe;
-        pump_step();
+        /* Step only when the queue is empty, as hook_PeekMessageA does: a GetMessage
+         * that takes a message already queued costs no time on Windows. Stepping here
+         * moved the clock 10 ms between the WM_MOUSEMOVE and the WM_LBUTTONDOWN of one
+         * scripted click (both posted at 200, the button taken at 210). */
         memset(&probe, 0, sizeof probe);
-        if (!real_PeekMessageA(&probe, h, a, b, PM_NOREMOVE))
-            getmessage_wakeup(h, a, b);
+        if (!real_PeekMessageA(&probe, h, a, b, PM_NOREMOVE)) {
+            pump_step();
+            memset(&probe, 0, sizeof probe);
+            if (!real_PeekMessageA(&probe, h, a, b, PM_NOREMOVE))
+                getmessage_wakeup(h, a, b);
+        }
     }
     r = real_GetMessageA(m, h, a, b);
     if (r && m->message == WM_TIMER) timer_taken(m->hwnd, m->wParam);

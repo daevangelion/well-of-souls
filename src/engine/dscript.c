@@ -179,7 +179,10 @@ uint32_t dscript_next_time(const Dscript *ds, uint32_t from)
     size_t i;
     for (i = ds->pc; i < ds->count; ++i) {
         if (ds->ops[i].at_ms < from) continue;
-        if (ds->ops[i].at_ms < best) best = ds->ops[i].at_ms;
+        /* File order: an op cannot be taken before the one ahead of it, so a later
+         * line with an earlier time must not wake the loop (it would spin there). */
+        best = ds->ops[i].at_ms;
+        break;
     }
     if (ds->has_end && ds->end_ms >= from && ds->end_ms < best) best = ds->end_ms;
     return best;

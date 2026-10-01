@@ -25,8 +25,6 @@
 #
 # The `front.*` keys are the front end's own hotspot table (DAT_005339F8, 100 slots of
 # 0xBC bytes), which is also how the click coordinates for the later scripts were found.
-at 100 click 320 240
-at 600 dump front@title
 # The title dump is BEFORE the click, deliberately: a dump after it would show the main
 # menu under the name "title", which is the kind of label that makes a broken script look
 # like a working one. With this order the two dumps are a real before and after --
