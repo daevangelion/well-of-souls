@@ -2118,7 +2118,10 @@ static BOOL WINAPI hook_PeekMessageA(LPMSG m, HWND h, UINT a, UINT b, UINT rm)
         if (!real_PeekMessageA(&probe, h, a, b, PM_NOREMOVE)) pump_step();
     }
     r = real_PeekMessageA(m, h, a, b, rm);
-    if (r && m->message == WM_TIMER) timer_taken(m->hwnd, m->wParam);
+    /* Only a REMOVING peek takes the message. MFC peeks with PM_NOREMOVE before every
+     * GetMessage, and counting that peek too re-armed every timer twice per delivery:
+     * the 100 ms timers were delivered every 200 ms. */
+    if (r && (rm & PM_REMOVE) && m->message == WM_TIMER) timer_taken(m->hwnd, m->wParam);
     if (!r) InterlockedIncrement(&g_idle_pass);
     if (r) msglog_win(m->hwnd);
     msglog(m, "Peek", rm, r);

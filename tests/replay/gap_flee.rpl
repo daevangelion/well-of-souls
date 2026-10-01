@@ -1,4 +1,4 @@
-# seed: 2
+# seed: 1
 # requires: hero_ready map_enter battle_start battle_flee_failed battle_fled
 # requires-match: battle_flee_failed sticky=0 held=
 # requires-match: battle_fled sticky=0

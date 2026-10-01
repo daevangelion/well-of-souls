@@ -558,6 +558,17 @@ int front_enter_title(void)
 
 int front_state(void) { return state; }
 int front_active(void) { return state>=0; }
+int front_modal_up(void) { return srnet_open; }
+
+/* Control 1 with 1005 set: 0x46F returns 1 and FUN_0041F699 carries on. */
+static void srnet_play(void)
+{
+    srnet_open=0; srnet_channel_open=1;
+    stepper_active=1; stepper_start=clock_ms();
+    /* DrawScanningText (0x41D374), behind 0x46F's return: .data 0x4E202C. */
+    spot_add(0,0x280,3000,"..Scanning................",0x00ffff,500,1062,875,500,62,875,0,0);
+    wos_log_event("srnet_dialog","ctrl=1 scanning=1");
+}
 
 static void front_goto(int next)
 {
@@ -827,9 +838,7 @@ static void front_update(const Input *in)
         if (clicked(in,srnet_play_r) || in->pressed[PLAT_KEY_RETURN]) {
             /* Control 1 alone is a no-op unless 1005 is set. */
             if (srnet_solo) {
-                srnet_open=0; srnet_channel_open=1;
-                stepper_active=1; stepper_start=clock_ms();
-                wos_log_event("srnet_dialog","ctrl=1 scanning=1");
+                srnet_play();
             }
             return;
         }
@@ -1221,9 +1230,7 @@ static int front_dialog_apply(int dialog_id, const char *const *kv, int n, int o
           }
           if (want_solo) { srnet_solo = 1; wos_log_event("srnet_dialog","ctrl=1005"); return 1; }
           if (want_play && srnet_solo) {
-              srnet_open = 0; srnet_channel_open = 1;
-              stepper_active = 1; stepper_start = clock_ms();
-              wos_log_event("srnet_dialog","ctrl=1 scanning=1");
+              srnet_play();
               return 1;
           }
           return 1;   /* 1 without 1005 is a no-op in the original */

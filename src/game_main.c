@@ -29,6 +29,7 @@ __attribute__((weak)) void scene_tick(void);
 
 __attribute__((weak)) int front_dialog_op(int dialog_id, const char *const *kv, int n, int ok);
 #include "game/options.h"
+#include "game/front.h"
 #include "game/sched.h"
 #include "game/scene.h"
 static void scene_tick_if_any(void) { if (scene_tick) scene_tick(); }
@@ -622,7 +623,7 @@ int game_main(int argc, char **argv)
                      * deadline and (once AppRun's loop runs) the idle boundary. */
                     uint32_t target = next, t = clock_next_timer_deadline();
                     if (t != UINT32_MAX && (int32_t)(t - target) < 0) target = t;
-                    if (idle_loop_live) {
+                    if (idle_loop_live && !front_modal_up()) {
                         t = clock_idle_next();
                         if ((int32_t)(t - target) < 0) target = t;
                     }
@@ -651,7 +652,7 @@ int game_main(int argc, char **argv)
          * FUN_0041BDB4). The world step runs once per 25 ms of virtual time in
          * --script mode, which is the original's rate; the legacy --replay mode
          * keeps its per-frame step so the .rpl acceptance tests are unchanged. */
-        if (idle_loop_live && !delivered) idle_gate();   /* AppRun's idle path -> FUN_0040A7C7 */
+        if (idle_loop_live && !delivered && !front_modal_up()) idle_gate();   /* AppRun's idle path -> FUN_0040A7C7 */
         dialog_retry_pending();
         if (capped && frame >= max_frames) { result = 3; break; }
         if (script && !delivered) {

@@ -32,6 +32,9 @@ enum {
 int front_state(void);
 /* 1 while any of the 13 states is showing. */
 int front_active(void);
+/* SRNet's 0x46F modal is up. Its modal loop dispatches messages but never runs AppRun's
+ * idle path, so FUN_0040A7C7 is entered only from the 100 ms timer meanwhile. */
+int front_modal_up(void);
 
 /* Transition to FRONT_TITLE from a cold boot. Returns 0 on success. */
 int front_enter_title(void);

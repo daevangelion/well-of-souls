@@ -1067,7 +1067,10 @@ static void map_render(Framebuffer *fb)
 void map_dump(DumpEmit emit, void *user)
 {
     uint32_t now = clock_ms();
-    dump_emit_int(emit, "map.id", loaded ? map.id : -1, user);
+    /* Not loaded: hero+0x90 of an in-use record (1..4), which is 0 for the zeroed slot-0
+     * record every boot allocates, and -1 with no hero at all -- the oracle's reading. */
+    dump_emit_int(emit, "map.id", loaded ? map.id :
+                  (g_hero.slot_in_use >= 1 && g_hero.slot_in_use <= 4) ? g_hero.map : -1, user);
     dump_emit_int(emit, "map.x", hero_x_units(&g_hero), user);
     dump_emit_int(emit, "map.y", hero_y_units(&g_hero), user);
     dump_emit_int(emit, "map.fx", g_hero.x, user);
@@ -1084,7 +1087,8 @@ void map_dump(DumpEmit emit, void *user)
     dump_emit_int(emit, "map.latched", link_latched, user);
     dump_emit_int(emit, "map.enc_a", (long long)(now - cool_a), user);
     dump_emit_int(emit, "map.enc_b", (long long)(now - cool_b), user);
-    dump_emit_int(emit, "map.enc_grace", battle_end_tick ? (long long)(now - battle_end_tick) : -1, user);
+    /* Elapsed since DAT_004e70a8, which reads 0 until a fight ends (the hook's convention). */
+    dump_emit_int(emit, "map.enc_grace", (long long)(uint32_t)(now - battle_end_tick), user);
     dump_emit_int(emit, "map.no_monsters", no_monsters_here, user);
     dump_emit_int(emit, "map.wander", wander_speed != 0, user);
     dump_emit_int(emit, "map.wander_legs", (long long)wander_legs, user);
