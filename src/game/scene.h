@@ -7,6 +7,7 @@
 #define WOS_SCENE_H
 #include <stdint.h>
 #include "../engine/dump.h"
+#include "../engine/fb.h"
 
 /* Scene-local map rules (FLAGS, DAT_004FB030); also read by battle.c for NO_REWARD/NO_HEAL. */
 uint32_t scene_flags(void);
@@ -18,6 +19,14 @@ void scene_reset_timers(void);
  * (docs/re/timing.md) and every deadline is a GetTickCount() sample compared through clock_ms().
  * Declared only so the tree links; Core is dropping the call in game_main.c. */
 void scene_tick(void);
+/* An embedded scene runs inside another screen's pane without owning the screen: the Well
+ * (front state 5) runs scene 0 in its scene pane, as SceneRunByNumber does in the original.
+ * Start it, tick it once per world step, draw it into the pane, stop it on leaving. */
+void scene_embed_start(int scene_no);
+void scene_embed_tick(void);
+void scene_embed_render(Framebuffer *fb, Rect pane);
+void scene_embed_stop(void);
+int  scene_embed_active(void);
 /* The scene number game_enter_scene() last entered, or -1 when the scene screen is not current
  * (map mode). FUN_0047A2A7 stores the number at DAT_004E4874+0x10; a travel ticket's 5th dotted
  * arg is compared against it (FUN_004A6353). */

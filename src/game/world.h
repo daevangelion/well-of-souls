@@ -91,6 +91,7 @@ typedef struct {
     int strength, stamina, agility, dexterity, wisdom;
     char growl_wav[64], pain_wav[64]; /* arg17, arg18; the combatant record keeps runtime
                                        * copies at +0x046 and +0x079 (FUN_004809a3) */
+    int attack_path_random;            /* the packed path FUN_0048CA8E draws for arg19 == -1 */
     int attack_path;                   /* arg19; not to be confused with ItemDef.attack_path,
                                          * which IS live (written world.c:445, read items.c) */
     char ai[256];    /* arg20 optional AI command, FUN_004809a3 */
@@ -146,6 +147,7 @@ typedef struct {
     int spell_binding, ability_points, find_probability, find_monster;
     int travel_mode, travel_map_scene, travel_link, travel_drop_in, travel_scene;
     int attack_path, attack_image, attack_flags, attack_weather, attack_effect;
+    int attack_path_random;            /* the packed path FUN_0048CA8E draws for arg16 == -1 */
     char description[256], sound[256];
 } ItemDef;
 

@@ -20,6 +20,7 @@ typedef struct {
 static struct {
     uint32_t now_ms;
     uint32_t epoch_s;
+    int time_pinned;   /* --time: time() runs from epoch_s on the virtual clock */
     uint32_t real_base;
     int realtime;
     uint32_t idle_last; /* FUN_0040a7c7's _DAT_004dd510 */
@@ -47,12 +48,13 @@ uint32_t clock_ms(void)
     return g.now_ms;
 }
 
-/* The original's time() is the wall clock, not the virtual one: FUN_00409722's date
- * check and the two boot srand calls both read it. So this is the SAME source as
- * plat_time_s(), including a pin, and deliberately NOT epoch + virtual_ms/1000 --
- * that conflates two different clocks and desynchronises the boot RNG stream from
- * the harness, which pins time() to a constant. */
-uint32_t clock_time_s(void) { return plat_time_s(); }
+/* The original's time() is the wall clock: FUN_00409722's date check, the two boot srand
+ * calls and FUN_0040A7C7's time-vs-GetTickCount drift test all read it. Unpinned it is
+ * plat_time_s(). Pinned (--time), it is the pin advanced by the VIRTUAL clock, which is
+ * what the oracle hook's time() returns (vtime_s = epoch + ms/1000): a constant would
+ * stop the seconds while GetTickCount runs on. The boot seeds read it at 0 ms, where
+ * both forms agree. */
+uint32_t clock_time_s(void) { return g.time_pinned ? g.epoch_s + g.now_ms / 1000u : plat_time_s(); }
 
 void clock_advance(uint32_t ms)
 {
@@ -65,23 +67,35 @@ void clock_set_now(uint32_t now_ms)
     if ((int32_t)(now_ms - g.now_ms) >= 0) g.now_ms = now_ms;
 }
 
+void clock_stall(uint32_t ms)
+{
+    if (g.realtime) g.real_base -= ms;
+    g.now_ms += ms;
+}
+
 void clock_attach_realtime(void)
 {
     g.real_base = plat_ticks_ms() - g.now_ms;
     g.realtime = 1;
 }
 
-void clock_set_time_base(uint32_t epoch_s) { plat_time_set_s(epoch_s); }
+void clock_set_time_base(uint32_t epoch_s)
+{
+    g.epoch_s = epoch_s;
+    g.time_pinned = epoch_s != 0;             /* 0 unpins, as plat_time_set_s(0) does */
+    plat_time_set_s(epoch_s);
+}
 
 void clock_gate_reset(void);
 void clock_reset(void)
 {
     uint32_t epoch = g.epoch_s;
-    int i;
+    int pinned = g.time_pinned, i;
     for (i = 0; i < TIMER_SLOTS; ++i) g.slot[i].active = 0;
     clock_gate_reset();
     g.now_ms = 0;
     g.epoch_s = epoch;
+    g.time_pinned = pinned;
     g.realtime = 0;
     g.idle_last = 0;
     g.seq = 0;
@@ -192,6 +206,24 @@ uint32_t clock_20hz_next(void)
     return g.idle_last + 20u;
 }
 
+uint32_t clock_idle_next(void)
+{
+    uint32_t now = clock_ms(), next = g.idle_last + 20u;
+    return (int32_t)(next - now) > 0 ? next : now;
+}
+
+uint32_t clock_next_timer_deadline(void)
+{
+    uint32_t best = UINT32_MAX;
+    int i, found = 0;
+    for (i = 0; i < TIMER_SLOTS; ++i) {
+        if (!g.slot[i].active || g.slot[i].pending) continue;
+        if (!found || (int32_t)(g.slot[i].deadline - best) < 0) best = g.slot[i].deadline;
+        found = 1;
+    }
+    return best;
+}
+
 /* --- private rate gates (the `GetTickCount() - last < N` idiom) --------------- */
 #define GATE_SLOTS 32
 static struct { void *owner; int id; uint32_t interval, last; int used; } g_gate[GATE_SLOTS];
@@ -212,6 +244,25 @@ int clock_gate(void *owner, int id, uint32_t interval_ms)
     }
     if ((uint32_t)(now - g_gate[i].last) < interval_ms) return 0;
     g_gate[i].last += interval_ms;      /* re-arm from the boundary, never from now */
+    return 1;
+}
+
+int clock_gate_restamp(void *owner, int id, uint32_t interval_ms)
+{
+    int i, free_slot = -1;
+    uint32_t now = clock_ms();
+    for (i = 0; i < GATE_SLOTS; ++i) {
+        if (g_gate[i].used && g_gate[i].owner == owner && g_gate[i].id == id) break;
+        if (free_slot < 0 && !g_gate[i].used) free_slot = i;
+    }
+    if (i == GATE_SLOTS) {
+        if (free_slot < 0) return 0;
+        i = free_slot;
+        g_gate[i].owner = owner; g_gate[i].id = id; g_gate[i].interval = interval_ms;
+        g_gate[i].last = 0; g_gate[i].used = 1;    /* a zero-initialised static stamp */
+    }
+    if ((uint32_t)(now - g_gate[i].last) < interval_ms) return 0;
+    g_gate[i].last = now;
     return 1;
 }
 

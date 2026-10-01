@@ -1,4 +1,4 @@
-# seed: 3
+# seed: 5
 # requires: hero_ready map_enter battle_start battle_flee_failed battle_fled
 # requires-match: battle_flee_failed sticky=0 held=
 # requires-match: battle_fled sticky=0
@@ -59,8 +59,21 @@ key n
 wait 5
 text Tester
 key RETURN
+# The New Soul chain (NewSoulOnOK 0x460A7E, dialog 149, dialog 180): PK review Yes,
+# ability points OK, apply the rest randomly Yes, Use This Skin.
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
 expect hero_ready 300
 expect map_enter 600
+# Incarnate's "Place Yourself On Gaiea!" Sage box is modal over the map: answer No.
+key n
+wait 2
 keydown DOWN
 expect scene_enter 600
 keyup DOWN
@@ -137,9 +150,11 @@ wait 20
 key RETURN
 wait 20
 expect map_enter 2000
-hold RIGHT 60
+# Out of the Gateway link in ONE walk: arrow keys step a cell at a time, and a hero at
+# rest inside link 0 fires it again. (245,142) is (194,220) from (179,220).
+click 245 142
 expect hero_move 300
-wait 20
+wait 60
 keydown DOWN
 expect encounter 2000
 keyup DOWN

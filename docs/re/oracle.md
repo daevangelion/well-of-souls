@@ -609,7 +609,7 @@ a diff.
 | `map.facing_raw` | `hero+0x88` | the original's own encoding, `fy*4+fx` with a 5→9 remap (`0x46230E`) — **not** the port's `fy*3+fx`. Compared as the raw word. |
 | `map.path_count`, `map.path_cursor` | `DAT_004F2168`, `DAT_004F216C` | the polyline itself is 2000 nodes × 3 ints at `0x00679E28`. |
 | `map.nearest`, `map.hit`, `map.latched` | `DAT_004F2240`, `+0x44`, `+0x2C` | |
-| `map.enc_a`, `map.enc_b`, `map.enc_grace` | `_DAT_004F2220`, `_DAT_004F2224`, `DAT_004E70A8` | `GetTickCount` stamps. |
+| `map.enc_a`, `map.enc_b`, `map.enc_grace` | `_DAT_004F2220`, `_DAT_004F2224`, `DAT_004E70A8` | `GetTickCount` stamps (enc_grace is the Hunt press stamp). |
 | `map.no_monsters` | `DAT_004F2228` | |
 | `map.wander`, `map.wander_legs` | `DAT_004F2190`, `_DAT_004F219C` | |
 | `map.music` | `DAT_004E70B8` | |

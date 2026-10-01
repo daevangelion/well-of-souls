@@ -76,6 +76,11 @@ rm -f "$LOGPATH"
 export XDG_RUNTIME_DIR=/tmp/wos-oracle-xdg
 mkdir -p "$XDG_RUNTIME_DIR"
 
+# The winepath calls above started a wineserver with no DISPLAY. A target that attaches to
+# it gets no graphics driver, every CreateWindow fails and MFC reports "Failed to create
+# empty document". Let that server exit so the run starts its own under Xvfb.
+"$WINE_DIR/bin/wineserver" -w
+
 xvfb-run -a -s "-screen 0 1024x768x24 -nolisten tcp" \
     "$WINE_DIR/bin/wine" "$BIN/launcher.exe" \
         "$STAGE/Souls.exe" "$STAGE/hook.dll" \

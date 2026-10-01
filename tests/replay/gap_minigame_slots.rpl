@@ -1,4 +1,4 @@
-# seed: 5
+# seed: 3
 # requires: hero_ready scene_enter minigame_arm minigame_open minigame_slots_spin minigame_slots_result
 #
 # Slobber Slots (GAME 1) at the retail casino.
@@ -89,13 +89,24 @@ key n
 wait 5
 text Gambler
 key RETURN
+# The New Soul chain (NewSoulOnOK 0x460A7E, dialog 149, dialog 180): PK review Yes,
+# ability points OK, apply the rest randomly Yes, Use This Skin.
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
 expect hero_ready 300
 expect map_enter 600
+# Incarnate's "Place Yourself On Gaiea!" Sage box is modal over the map: answer No.
+key n
+wait 2
 keydown DOWN
 expect scene_enter 600
 keyup DOWN
-wait 40
-key RETURN
 wait 40
 key RETURN
 wait 40
@@ -189,8 +200,11 @@ wait 30
 expect battle_won 4000
 expect map_enter 4000
 # (151,275) is map 0 link 9, eleven units south of where the fight left the hero.
-click 183 184
+# The hero stays where the encounter stopped him, (186,273); (45,150) is (151,275), link 9.
+click 45 150
 expect map_enter 3000
+# The 0x46A handler lands the hero ON the Main Gate link (158,333): climb to row 322 first.
+hold UP 44
 # Macgyver Castle, (158,322) -> (264,267) = map 2 link 3.
 hold RIGHT 552
 hold UP 140
@@ -198,7 +212,8 @@ hold LEFT 128
 hold UP 200
 hold DOWN 40
 expect scene_enter 2000
-wait 100
+# The Barker's END runs once his first bubble has gone (~90 frames), so click before that.
+wait 30
 shot /tmp/wos-gap-casino.bmp
 # The armed GAME button, then the window's own SPIN control.
 click 307 32

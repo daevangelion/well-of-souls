@@ -521,15 +521,50 @@ void battle_hero_reseal_level(void)
     if (fight.result == BATTLE_NONE || fight.count < 1) return;
     enc_put(&fight.actors[0].enc_level,&fight.actors[0].level,g_hero.level);
 }
-/* FUN_0048e19a clears the fight block and the per-fight kill table, and jitters the block's
- * base with one rand: `rand()%0x3E0A0 & 0xFFFFFFF0`. */
+/* SceneRunByNumber (0x491767) builds the local hero's combatant on EVERY scene start (the
+ * Well's scene 0 and camp's scene 1 as well as fight scenes), not at the FIGHT op:
+ *   FUN_0048E19A  clears the scene block, one rand: `rand()%0x3E0A0 & 0xFFFFFFF0` (scene_begin)
+ *   FUN_0049210A  -> AllocCombatant(hero id): four seals of 100, then for a locally hosted
+ *                    combatant one rand for its x, `rand()%32 + FUN_0048B13C()` (0x492043),
+ *                 then five seals from the hero record (scene_hero below).
+ * The oracle's Well entry is exactly this: one draw at 0x48E1CF, the 150 ms backdrop stall,
+ * then 4 + 1 + 5 seals' worth (37 draws). battle_begin_ex takes the hero from here. */
+static Combatant scene_hero;
+static int scene_hero_ready;
+void battle_scene_begin(void)
+{
+    rand1(); /* FUN_0048e19A: rand()%0x3E0A0 & 0xFFFFFFF0 */
+}
+/* ActorPlaceXY (0x4923EC): a scene ACTOR is a combatant made by AllocCombatant(-2), so it
+ * costs the same four seals of 100 as any other slot (0x49243F in the oracle trace). */
+void battle_scene_actor(void)
+{
+    Combatant actor;
+    memset(&actor,0,sizeof actor);
+    combatant_create(&actor);
+}
+void battle_scene_hero(void)
+{
+    Combatant *hero = &scene_hero;
+    memset(hero,0,sizeof *hero);
+    combatant_create(hero);
+    (void)rand1();                       /* AllocCombatant 0x492043: the x jitter, rand()%32 */
+    enc_put(&hero->enc_level,&hero->level,clamp(g_hero.level,1,65535));
+    enc_put(&hero->enc_offense,&hero->offense,hero_offense(&g_hero));
+    enc_put(&hero->enc_defense,&hero->defense,hero_defense(&g_hero));
+    enc_put(&hero->enc_hp,&hero->hp,clamp(g_hero.hp,0,g_hero.max_hp));
+    enc_put(&hero->enc_mp,&hero->mp,g_hero.mp);
+    scene_hero_ready = 1;
+}
 void battle_begin_ex(const int *ids, int count, int difficulty, int distance_pct, unsigned mods)
 {
     Combatant *hero;
     int i;
     for (i = 0; i < fight.sheets_count; ++i) sheet_free(&fight.sheets[i]);
     memset(&fight,0,sizeof fight);
-    rand1(); /* FUN_0048e19A: rand()%0x3E0A0 & 0xFFFFFFF0 */
+    /* A fight with no scene start behind it (none in the solo game) still pays the scene's
+     * draws, in the same order. */
+    if (!scene_hero_ready) { battle_scene_begin(); battle_scene_hero(); }
     fight.view = (Rect){0,0,364,416};
     fight.count = fight.sheets_count = 1;
     fight.state = ROUND_START;
@@ -550,8 +585,9 @@ void battle_begin_ex(const int *ids, int count, int difficulty, int distance_pct
     hero = &fight.actors[0];
     hero->ally = 1;
     /* The hero's own combatant is made by FUN_0049210A, the one solo-reachable caller of which
-     * is FUN_00491767 at 0x004919B7 - the fight-start function, on the `local_8 == 0` arm that
-     * means "the local player is combatant 0", i.e. every offline fight. It does NOT call
+     * is SceneRunByNumber (FUN_00491767) at 0x004919B7, on the `local_8 == 0` arm that means
+     * "the local player is combatant 0" - every offline SCENE start, so it is made by
+     * battle_scene_hero() when the scene starts and copied here. It does NOT call
      * FUN_00449006 (see hero_sync_stats below), which is why the five seals that used to sit
      * here do not belong at fight start.
      *
@@ -564,12 +600,9 @@ void battle_begin_ex(const int *ids, int count, int difficulty, int distance_pct
      * The three movs interleaved with them (rec[0x2A8] = hero[0x74], rec[0x2AC] = hero[0x7C],
      * rec[0x2B4] = hero[0x68]) are PLAIN. hero+0x84/+0x80 are the attack and defence ratings
      * the .her encoding carries, surfaced by hero_offense()/hero_defense(). */
-    combatant_create(hero);
-    enc_put(&hero->enc_level,&hero->level,clamp(g_hero.level,1,65535));
-    enc_put(&hero->enc_offense,&hero->offense,hero_offense(&g_hero));
-    enc_put(&hero->enc_defense,&hero->defense,hero_defense(&g_hero));
-    enc_put(&hero->enc_hp,&hero->hp,clamp(g_hero.hp,0,g_hero.max_hp));
-    enc_put(&hero->enc_mp,&hero->mp,g_hero.mp);
+    *hero = scene_hero;                  /* made at the scene start, see battle_scene_hero */
+    hero->ally = 1;
+    scene_hero_ready = 0;
     hero->max_hp = g_hero.max_hp;
     for (i = 0; i < HERO_ABILITIES; ++i) hero->ability[i] = hero_ability(&g_hero,i);
     hero->x = 80; hero->y = 204;
@@ -643,9 +676,6 @@ static void hero_died(void);
 static void finish(BattleResult result)
 {
     fight.result = result;
-    /* FUN_0048fd90's caller stamps the post-fight grace (DAT_004e70a8) so the map's encounter
-     * roll does not re-trigger on the very next step; without it the 1 s grace never expires. */
-    map_note_battle_end();
     if (result == BATTLE_WON) {
         int xp = fight.xp, gold = fight.gold;
         int64_t old_xp = g_hero.xp, old_gold = g_hero.gold;

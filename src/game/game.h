@@ -41,11 +41,11 @@ void game_music(const char *midi_name);
  * dialog ("Enable automatic Way Point calculations", read into DAT_006840D0[7] at
  * 0x466F3F). It is the ONLY thing that makes a map click run FUN_0046206D -> FUN_00461DCC;
  * retail leaves it off, so the hero walks in a straight line and stops at an obstacle.
- * map_note_battle_end is FUN_0046259A's stamp DAT_004e70a8: the tick the last fight ended,
- * which gates the encounter roll's 1 s grace and the "no monsters here" hint.
+ * map_close_overlays is CloseOverlaysGoMap(1) (0x420714): the encounter stamp DAT_004F2220,
+ * the latch when the hero comes back from a scene, the hunt stamp cleared, front state 6.
  * map_dump is the `map.*` differential namespace (parity_plan contract 3). */
 void map_set_waypoints(int on);
-void map_note_battle_end(void);
+void map_close_overlays(int from_scene);
 void map_dump(DumpEmit emit, void *user);
 
 #endif

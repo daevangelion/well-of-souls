@@ -352,6 +352,69 @@ static int set_token(char t[][256], int n)
     return 0;
 }
 
+/* RandomGrowl (0x48FE21): `sprintf(dst, "%s%d%s", base, rand() % n + 1, ".wav")`. The
+ * parsers call it for every empty sound field while the world loads. */
+static void random_growl(char *dst, size_t cap, const char *base, int n)
+{
+    snprintf(dst, cap, "%s%d.wav", base, crt_rand() % n + 1);
+}
+/* FUN_0048CA8E: a random packed attack path for a field of "-1" (FUN_0048CBC6 returns
+ * 0xFC000000 for it): (rand() % 8) << 26 | (rand() & 0x30) << 8. */
+/* FUN_0048CBC6: the packed attack path of a "path.image.flags.weather.effect" field. "-1" is
+ * 0xFC000000; otherwise each '.' part is 0xFF for '?', else atoi clamped to 0..63 (0..199 for
+ * the second), packed as p0<<26 | (p2&63)<<12 | (p3&63)<<6 | (p1&255)<<18 | p4&63. The top
+ * byte reads 0xFC (the parsers' "pick one at random") for -1, for p0 == '?' and for p0 >= 63. */
+static unsigned packed_path(const char *s)
+{
+    int part[5] = {0,0,0,0,0}, k = 0;
+    if (atoi(s) == -1) return 0xfc000000u;
+    while (s && k < 5) {
+        const char *dot = strchr(s, '.');
+        int max = k == 1 ? 199 : 63, v;
+        if (*s == '?') v = 0xff;
+        else { v = atoi(s); if (v < 0) v = 0; else if (v > max) v = max; }
+        part[k++] = v;
+        s = dot ? dot + 1 : NULL;
+    }
+    return (unsigned)part[0] << 26 | (unsigned)(part[2] & 63) << 12 | (unsigned)(part[3] & 63) << 6 |
+           (unsigned)(part[1] & 255) << 18 | (unsigned)(part[4] & 63);
+}
+static int random_path_wanted(const char *s) { return (packed_path(s) & 0xff000000u) == 0xfc000000u; }
+static int random_attack_path(void)
+{
+    int a = crt_rand(), b = crt_rand();
+    return (int)((unsigned)(a % 8) << 26 | (unsigned)(b & 0x30) << 8);
+}
+/* TokenizeLine's (0x47A0E4) field count, which some parsers test where world_tokenize's
+ * differs: an empty field between commas counts, and a field ended by whitespace, a comma
+ * or a closing quote leaves its length set, so the end of the line counts one more. A row
+ * ending in a quoted description therefore has one field more than it shows. */
+static int orig_token_count(const char *line, int max)
+{
+    int count = 0, state = 0, len = max > 0 ? max : 0;
+    const unsigned char *p = (const unsigned char *)line;
+    for (; *p; ++p) {
+        unsigned char c = *p;
+        if (state == 0) {
+            if (count >= max) return count;
+            if (c < '!') continue;
+            state = 1; len = 0;
+        } else if (state == 2) {
+            if (c == '"') { count++; state = 3; } else len++;
+            continue;
+        } else if (state == 3) {
+            if (c > ' ') { if (c != ',') --p; state = 0; }
+            continue;
+        }
+        if (c < '!') { count++; state = 3; }
+        else if (c == ',') { count++; state = 0; }
+        else if (c == '"') state = 2;
+        else len++;
+    }
+    if (len > 0) count++;
+    return count;
+}
+static const char *row_line;     /* the raw row parse_row is parsing, for orig_token_count */
 static int parse_row(int section, char t[][256], int n, int *current_class)
 {
     int id, i;
@@ -407,7 +470,12 @@ static int parse_row(int section, char t[][256], int n, int *current_class)
         m->dexterity=arg(t,n,15); m->wisdom=arg(t,n,16);
         if(n>17) copy_string(m->growl_wav,sizeof(m->growl_wav),t[17]);
         if(n>18) copy_string(m->pain_wav,sizeof(m->pain_wav),t[18]);
+        /* MonstersParser 0x480CA9..0x480D2D: empty sounds get random ones, and an attack
+         * path of -1 a random packed one, in this order. */
+        if(!m->growl_wav[0]) random_growl(m->growl_wav,sizeof(m->growl_wav),"growl",23);
+        if(!m->pain_wav[0]) random_growl(m->pain_wav,sizeof(m->pain_wav),"pain",14);
         m->attack_path=arg(t,n,19);
+        if(random_path_wanted(n>19?t[19]:"")) m->attack_path_random=random_attack_path();
         /* Arg20 is an AI command, not a spell ID: FUN_004809a3. */
         if(n>20) copy_string(m->ai,sizeof(m->ai),t[20]);
         break;
@@ -442,6 +510,11 @@ static int parse_row(int section, char t[][256], int n, int *current_class)
         v->find_probability=arg(t,n,13); v->find_monster=dotted(t[13],1);
         copy_string(v->description,sizeof(v->description),t[14]);
         if(n>15) copy_string(v->sound,sizeof(v->sound),t[15]);
+        /* ItemsParser 0x483425..0x483493: a weapon (class 12..19) with no sound gets a
+         * random "swordN.wav"; with more than 16 fields an attack path of -1 gets a random
+         * packed one. */
+        if(orig_token_count(row_line,32)>15 && !v->sound[0] && v->klass>=12 && v->klass<=19) random_growl(v->sound,sizeof(v->sound),"sword",12);
+        if(orig_token_count(row_line,32)>16 && random_path_wanted(n>16?t[16]:"")) v->attack_path_random=random_attack_path();
         v->attack_path=clamp(arg(t,n,16),-1,63);
         v->attack_image=clamp(dotarg(t,n,16,1),0,199);
         v->attack_flags=clamp(dotarg(t,n,16,2),0,63);
@@ -484,6 +557,10 @@ static int parse_row(int section, char t[][256], int n, int *current_class)
         if(n>14) copy_string(v->sfx_summon,sizeof(v->sfx_summon),t[14]);
         if(n>15) copy_string(v->sfx_travel,sizeof(v->sfx_travel),t[15]);
         if(n>16) copy_string(v->sfx_strike,sizeof(v->sfx_strike),t[16]);
+        /* SpellsParser 0x480140..0x4801D5: each empty sound gets a random one. */
+        if(!v->sfx_summon[0]) random_growl(v->sfx_summon,sizeof(v->sfx_summon),"summon",8);
+        if(!v->sfx_travel[0]) random_growl(v->sfx_travel,sizeof(v->sfx_travel),"travel",12);
+        if(!v->sfx_strike[0]) random_growl(v->sfx_strike,sizeof(v->sfx_strike),"magic",11);
         v->extra[0]=dotarg(t,n,17,0); v->extra[1]=dotarg(t,n,17,1);
         break;
     }
@@ -591,6 +668,7 @@ static int parse_world(void)
             g_world.scenes[scene].used=1; g_world.scenes[scene].first_line=line;
         } else {
             n=world_tokenize(p,t,TABLE_TOKENS_MAX);
+            row_line=p;
             if(n<0 || (n && parse_row(active,t,n,&current_class))) {
                 fprintf(stderr,"world: invalid %s row at expanded line %d: %.80s\n",section_names[active],line,p);
                 return -1;

@@ -29,6 +29,7 @@ __attribute__((weak)) void scene_tick(void);
 
 __attribute__((weak)) int front_dialog_op(int dialog_id, const char *const *kv, int n, int ok);
 #include "game/options.h"
+#include "game/front.h"
 #include "game/sched.h"
 #include "game/scene.h"
 static void scene_tick_if_any(void) { if (scene_tick) scene_tick(); }
@@ -231,11 +232,26 @@ static int save_shot(const Framebuffer *fb, const char *path)
     wos_log_event("shot","path=%s",path); return 0;
 }
 
+/* --dump-shots DIR: at every `dump <label>` also save DIR/<label>.bmp, as the oracle hook
+ * does (do_dump writes the text, then repaints and captures the client). The repaint is
+ * the screen's own render, so a shot shows what the player would see at that label. */
+static const char *g_dump_shot_dir;
+static Framebuffer *g_dump_shot_fb;
+static void dump_shot(const char *label)
+{
+    char path[4096]; const Screen *screen = screen_current(); int n;
+    if (!g_dump_shot_dir || !g_dump_shot_fb) return;
+    fb_reset_clip(g_dump_shot_fb); fb_clear(g_dump_shot_fb, 0);
+    if (screen && screen->render) screen->render(g_dump_shot_fb);
+    n = snprintf(path, sizeof(path), "%s/%s.bmp", g_dump_shot_dir, label);
+    if (n > 0 && (size_t)n < sizeof(path)) (void)save_shot(g_dump_shot_fb, path);
+}
+
 static void usage(void)
 {
     fputs("Usage: wos --data DIR [--save DIR] [--headless] [--replay FILE] [--script FILE]\n"
           "          [--log FILE] [--dump FILE] [--time EPOCH_S] [--max-frames N]\n"
-          "          [--seed N] [--shot-every N DIR]\n", stderr);
+          "          [--seed N] [--shot-every N DIR] [--dump-shots DIR]\n", stderr);
 }
 
 /* --- seeding ----------------------------------------------------------------
@@ -277,7 +293,7 @@ static void usage(void)
  * reading it as 0 throughout is seeing its own virtualised GetTickCount return 0, not
  * a missing tick. */
 #define MAIN_FRAME_TIMER_ID 0x16   /* 22 */
-static int frame_timer_owner, frame_timer_armed;
+static int frame_timer_owner;
 static int world_tick_pending;
 /* The 20 Hz tick and the 25 ms world tick, i.e. the real shape of
  * FUN_0040A7C7 (0x0040A7C7) -> FUN_0042895C (0x0042895C) -> FUN_0041BDB4
@@ -296,16 +312,40 @@ static int world_tick_due(void);
 /* FUN_00428C8F: the 100 ms WM_TIMER is what enters the gate, so the handler is where
  * the world's rand and 25 ms step live. It only DECIDES -- the loop performs the step,
  * so update/render/present stay in one place. */
-static void main_frame_timer(void *owner, void *user)
+/* FUN_0040A7C7's 20 ms gate and what it calls first, FUN_0042895C: one discarded rand(),
+ * then the 25 ms world sub-gate. AppRun (0x0040A8D9) enters it on every idle pass while the
+ * game is focused, and FUN_00428C8F enters it from the 100 ms timer; the gate's own stamp
+ * makes both the same 20 ms cadence. Measured on the oracle once its pump stopped
+ * stepping the clock mid-drain: one 0x428996 draw on every 20 ms boundary from t=150. */
+static int idle_loop_live;   /* AppRun's loop is running: from the first frame-timer delivery */
+static void idle_gate(void)
 {
-    (void)owner; (void)user;
+    if (!clock_idle_due()) return;
     (void)crt_rand();                       /* FUN_0042895C's discarded draw */
     (void)world_tick_due();
 }
 
+static void main_frame_timer(void *owner, void *user)
+{
+    (void)owner; (void)user;
+    idle_loop_live = 1;
+    idle_gate();                            /* FUN_00428C8F -> FUN_0040A7C7 */
+}
+
+int g_pet_pen_up = 1;
+static int world_step_now = 1;
+int game_world_step(void) { return world_step_now; }
+#define OPTION_CUT_DIALOG_ANIMATIONS 10  /* "My computer is slow, cut animations during dialogs." */
+static unsigned half_rate_count;         /* DAT_00559628 */
+
 static int world_tick_due(void)
 {
-    if (!clock_gate(WORLD_GATE_OWNER, 0, 25u)) return 0;
+    if (!clock_gate_restamp(WORLD_GATE_OWNER, 0, 25u)) return 0;
+    /* NetGraphTick 0x428B1D: with a dialog up (DAT_004E6914, a modal box, is not modelled;
+     * DAT_004DEA1C is g_pet_pen_up) and option 10 on, every odd step is stamped but skips
+     * the world, so the front end runs at half the step rate. */
+    if (g_pet_pen_up && options_get(OPTION_CUT_DIALOG_ANIMATIONS) && (++half_rate_count & 1u))
+        return 0;
     if (++idle_ticks % 40u == 0u)      /* one log line per virtual second */
         wos_log_event("world_tick", "ms=%lu count=%u",
                       (unsigned long)clock_ms(), idle_ticks);
@@ -339,20 +379,26 @@ static int dialog_retry_pending(void)
     int i = 0, accepted = 0;
     while (i < g_pending_count) {
         const DscriptOp *op = &g_pending[i];
-        char keys[DSCRIPT_KV_MAX + 1][32];
+        char keys[DSCRIPT_KV_MAX + 1][48];
         const char *kp[DSCRIPT_KV_MAX + 1];
         DialogOp d;
         int k, n = op->control_count, took = 0;
         for (k = 0; k < n; ++k) {
-            snprintf(keys[k], sizeof(keys[k]), "%d=%d", op->control[k], op->value[k]);
+            if (op->svalue[k][0])
+                snprintf(keys[k], sizeof(keys[k]), "%d=%s", op->control[k], op->svalue[k]);
+            else
+                snprintf(keys[k], sizeof(keys[k]), "%d=%d", op->control[k], op->value[k]);
             kp[k] = keys[k];
         }
         snprintf(keys[n], sizeof(keys[n]), "ok");
         kp[n] = keys[n];
         ++n;
         d.id = op->id; d.ctrl = -1; d.value = op->ok; d.ok = op->ok;
-        if (panel_dialog_op(&d)) took = 1;
+        /* The front first: dialog 149 is both New Soul's ability points and the in-game
+         * Stats/Train dialog, and only one of them is up at a time. panel_dialog_op returns
+         * 0 when it took the op and -1 when the id is not its own. */
         if (front_dialog_op(op->id, kp, n, op->ok)) took = 1;
+        else if (panel_dialog_op(&d) == 0) took = 1;
         if (options_dialog_op(op->id, kp, n, op->ok)) took = 1;
         if (took) { accepted = 1; g_pending[i] = g_pending[--g_pending_count]; }
         else ++i;
@@ -400,6 +446,11 @@ static void apply_script_op(const DscriptOp *op, Input *input)
         ev.type = op->kind == DS_UP ? PLAT_EV_MOUSE_UP : PLAT_EV_MOUSE_DOWN;
         ev.button = op->button ? op->button : 1;
         input_event(input, &ev);
+        /* `click` is a down AND an up, as the oracle hook posts it (do_mouse). */
+        if (op->kind == DS_CLICK || op->kind == DS_RCLICK) {
+            ev.type = PLAT_EV_MOUSE_UP;
+            input_event(input, &ev);
+        }
         break;
     case DS_KEY:
         ev.type = PLAT_EV_KEY_DOWN; ev.key = op->key; input_event(input, &ev);
@@ -420,7 +471,7 @@ static void apply_script_op(const DscriptOp *op, Input *input)
     case DS_DIALOG:
         apply_dialog_op(op);
         break;
-    case DS_DUMP: dump_one(op->text); break;
+    case DS_DUMP: dump_one(op->text); dump_shot(op->text); break;
     case DS_END: game_request_quit(); break;
     default: break;
     }
@@ -482,6 +533,10 @@ int game_main(int argc, char **argv)
         else if(!strcmp(arg,"--time")) { if(unsigned_arg(argv[++i],&epoch)) { usage(); return 1; } have_epoch=1; }
         else if(!strcmp(arg,"--seed")) { if(unsigned_arg(argv[++i],&seed)) { usage(); return 1; } have_seed=1; }
         else if(!strcmp(arg,"--max-frames")) { capped=1; if(unsigned_arg(argv[++i],&max_frames)) { usage(); return 1; } }
+        else if(!strcmp(arg,"--dump-shots")) {
+            if(i+1>=argc || !*argv[i+1]) { usage(); return 1; }
+            g_dump_shot_dir=argv[++i];
+        }
         else if(!strcmp(arg,"--shot-every")) {
             if(i+2>=argc || unsigned_arg(argv[++i],&shot_every) || !shot_every) { usage(); return 1; }
             shot_dir=argv[++i]; if(!*shot_dir) { usage(); return 1; }
@@ -516,6 +571,8 @@ int game_main(int argc, char **argv)
     if(!pixels) { result=1; goto cleanup; }
     if(shot_dir && plat_mkdir(shot_dir)) { fputs("Cannot create screenshot directory\n",stderr); result=1; goto cleanup; }
     fb_init(&fb,pixels,PLAT_SCREEN_W,PLAT_SCREEN_H);
+    g_dump_shot_fb=&fb;
+    if(g_dump_shot_dir && plat_mkdir(g_dump_shot_dir)) { fputs("Cannot create the dump-shot directory\n",stderr); result=1; goto cleanup; }
     clock_reset();
     if(have_epoch) clock_set_time_base(epoch);
     /* The seed step is a BOOT STEP now, at CRT index 41, because the 1408 EncInt
@@ -540,9 +597,19 @@ int game_main(int argc, char **argv)
     if (have_seed && !have_epoch) { boot_seed_pin = seed; boot_seed_have_pin = 1; }
     boot_run();
     /* FUN_00428360, the main frame's id-0x16 100 ms timer, armed at the original's
-     * point. It is what actually drives FUN_0040A7C7's gate. */
+     * point: InitInstance, at t=0 and before the title art loads. It is what actually
+     * drives FUN_0040A7C7's gate. The title's cold scene-cache stall (scenecache.h) takes
+     * the clock to 150 before the loop runs, so the first WM_TIMER (due at 100) is
+     * delivered late at 150 and the next is due at 200 -- the oracle's t_tim. */
     frame_timer_owner = 0;
+    clock_set_timer(&frame_timer_owner, MAIN_FRAME_TIMER_ID, 100u, main_frame_timer, NULL);
     if(game_boot()) { result=1; goto cleanup; }
+    {
+        /* The first WM_PAINT: the original paints its new windows before the loop takes its
+         * first script event or timer (oracle: WM_PAINT at 150, ahead of everything). */
+        const Screen *first=screen_current();
+        if(first && first->render) { fb_reset_clip(&fb); fb_clear(&fb,0); first->render(&fb); }
+    }
     if(!replay && !script) clock_attach_realtime();
 
     /* The original's loop is CWinApp::Run at 0x0040A8D9: a bare PeekMessage pump
@@ -553,7 +620,7 @@ int game_main(int argc, char **argv)
      * 1000/60 ms virtual step so the existing .rpl acceptance tests are
      * bit-identical. */
     while(!quitting) {
-        PlatEvent event; const Screen *screen; int delivered = 0;
+        PlatEvent event; const Screen *screen; int delivered = 0, dump_only = 0;
         input_begin(&input);
         while(plat_poll_event(&event)) if(!replay || event.type==PLAT_EV_QUIT) input_event(&input,&event);
         if(input.quit) break;
@@ -568,20 +635,37 @@ int game_main(int argc, char **argv)
              * iteration's input_begin() would clear the pressed/released edges, and
              * every scripted event would be dropped -- a --script run with no input
              * at all, which is exactly what the diff suite was measuring. */
-            for(;;) {
-                const DscriptOp *op = dscript_take(script, clock_ms());
-                if(!op) break;
-                apply_script_op(op,&input);
-                delivered = 1;
+            /* ONE op per iteration: the oracle's pump fires one .dsc event per step and
+             * lets the app run (timers, the idle gate) before the next, even at an equal
+             * timestamp (docs/re/oracle.md 3.1). The clock does not move while ops are due. */
+            {
+                /* A timer that came due BEFORE the op's time (the boot timer due at 100,
+                 * delivered late at 150 after the title stall) is already in the queue
+                 * when the op is posted, so it is taken first; ties still go to input. */
+                uint32_t op_at = dscript_next_time(script, 0), tdl = clock_next_timer_deadline();
+                int timer_first = tdl != UINT32_MAX && (int32_t)(tdl - clock_ms()) <= 0 &&
+                                  (int32_t)(tdl - op_at) < 0;
+                const DscriptOp *op = timer_first ? NULL : dscript_take(script, clock_ms());
+                if(op) { apply_script_op(op,&input); delivered = 1; dump_only = op->kind == DS_DUMP; }
             }
             {
                 uint32_t next = dscript_next_time(script, clock_ms());
                 if(next == UINT32_MAX) break;             /* nothing scheduled remains */
                 if(script->has_end && clock_ms() >= script->end_ms) break;
                 {
-                    uint32_t idle = clock_20hz_next();
-                    uint32_t target = idle < next ? idle : next;
-                    if(target > clock_ms()) clock_advance(target - clock_ms());
+                    /* The oracle pump's step: the earliest of the next op, the next timer
+                     * deadline and (once AppRun's loop runs) the idle boundary. */
+                    uint32_t target = next, t = clock_next_timer_deadline();
+                    if (t != UINT32_MAX && (int32_t)(t - target) < 0) target = t;
+                    if (idle_loop_live && !front_modal_up()) {
+                        t = clock_idle_next();
+                        if ((int32_t)(t - target) < 0) target = t;
+                    }
+                    /* After a step, start over: an op due at the new time goes before a
+                     * timer or the idle gate due at the same millisecond (input wins ties).
+                     * Never step in an iteration that delivered an op: the update below must
+                     * see its input edges first, and the next iteration steps instead. */
+                    if(!delivered && target > clock_ms()) { clock_advance(target - clock_ms()); continue; }
                 }
             }
         } else if(replay) {
@@ -594,22 +678,15 @@ int game_main(int argc, char **argv)
         }
         /* TIMER: every WM_TIMER due now, oldest deadline first (FUN_0040A8D9
          * dispatches the queue, and the timers are the lowest-priority entries). */
-        clock_dispatch_timers();
+        /* Not in an iteration that delivered an op: the input message is handled (by the
+         * update below) before any timer the next pump pass takes. The oracle's click at
+         * 150 with a timer due since 100 runs the click first (boot_menu.dsc). */
+        if (!delivered) clock_dispatch_timers();
         /* IDLE (FUN_0040A7C7, 20 ms) -> world (FUN_0042895C's 25 ms sub-gate ->
          * FUN_0041BDB4). The world step runs once per 25 ms of virtual time in
          * --script mode, which is the original's rate; the legacy --replay mode
          * keeps its per-frame step so the .rpl acceptance tests are unchanged. */
-        /* FUN_00428360 arms the main frame's id-0x16 100 ms timer during
-         * InitInstance, and the oracle's trace records its FIRST delivery at
-         * t=150, not t=100. So the port arms it 50 ms into the run rather than at
-         * boot: with a 100 ms period that puts the first WM_TIMER at 150 and the
-         * first FUN_0042895C draw there, which is what the original does. Arming at
-         * t=0 drew at t=100 and cost one spurious draw in every boot-only run. */
-        if (!frame_timer_armed && clock_ms() >= 50u) {
-            clock_set_timer(&frame_timer_owner, MAIN_FRAME_TIMER_ID, 100u,
-                            main_frame_timer, NULL);
-            frame_timer_armed = 1;
-        }
+        if (idle_loop_live && !delivered && !front_modal_up()) idle_gate();   /* AppRun's idle path -> FUN_0040A7C7 */
         dialog_retry_pending();
         if (capped && frame >= max_frames) { result = 3; break; }
         if (script && !delivered) {
@@ -619,8 +696,16 @@ int game_main(int argc, char **argv)
             if (!world_tick_pending) continue;
             world_tick_pending = 0;
         }
+        /* A dump is the oracle hook reading memory: it takes a pump step like any op, but
+         * it is not a message to the game, so nothing updates or paints for it. */
+        if (dump_only) continue;
+        /* An iteration that only delivers input is a message handler, not FUN_0041BDB4. */
+        world_step_now = !(script && delivered);
         scene_tick_if_any();
         screen=screen_current(); if(screen && screen->update) screen->update(&input);
+        /* FUN_00456AA1, on both arms of the world step FUN_0041BDB4, after the state's own
+         * work (the Well's scene tick and paint come first in the oracle's rand trace). */
+        env_tick();
         fb_reset_clip(&fb); fb_clear(&fb,0);
         screen=screen_current(); if(screen && screen->render) screen->render(&fb);
         if(replay && replay->shot_path && save_shot(&fb,replay->shot_path)) {

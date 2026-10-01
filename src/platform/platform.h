@@ -110,6 +110,10 @@ void plat_cursor_restore(void);
 /* Audio. Buffers are complete RIFF/WAVE files in memory; the platform decodes them.
  * Music is a path to a MIDI file; playback is best effort (silently ignored if unsupported). */
 void plat_sound_play(const void *wav, size_t len);
+/* Keyed voices: one voice per key (key >= 0), like one sound buffer per sound id. Playing
+ * a key restarts it from the start; loop != 0 repeats it until plat_sound_key_stop(key). */
+void plat_sound_key_play(int key, const void *wav, size_t len, int loop);
+void plat_sound_key_stop(int key);
 void plat_music_play(const char *midi_path, int loop);
 void plat_music_stop(void);
 int  plat_music_playing(void);

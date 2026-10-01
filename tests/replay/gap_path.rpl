@@ -1,11 +1,11 @@
-# seed: 2
+# seed: 1
 # requires: boot_menu hero_ready map_enter path_found hero_move
 # Option 7, "Enable automatic Way Point calculations", gates the pathfinder. Its DEFAULT is
 # 1 -- it is ON in retail, straight out of the table at DAT_004F2A58 (record 27:
 # {7, 1, "Enable automatic Way Point calculations."}), so nothing has to be seeded or ticked
 # to run this replay. If a future script needs option 7 OFF, it must go through the Options
 # dialog op, because the original has no other way to reach it.
-# Evergreen spawn (179,202). The walk view is the map pane, 19,0 325x281 at a 640x480
+# The detour below starts from (179,202). The walk view is the map pane, 19,0 325x281 at a 640x480
 # client (FUN_0041B891's OnSize, all.c:20906-20961), so the view origin is
 # (179-41, 202-35) = (138,167) and one screen pixel is a quarter of a map unit.
 # click (149,150) is therefore map (138+32, 167+8) = (170,204): the direct line from the
@@ -45,9 +45,28 @@ key n
 wait 5
 text PathWalker
 key RETURN
+# The New Soul chain (NewSoulOnOK 0x460A7E, dialog 149, dialog 180): PK review Yes,
+# ability points OK, apply the rest randomly Yes, Use This Skin.
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
 expect hero_ready 300
 expect map_enter 600
-click 149 150
+# Incarnate's "Place Yourself On Gaiea!" Sage box is modal over the map: answer No.
+key n
+wait 2
+# The hero starts ON link 0 at (179,219) (the 0x46A handler). One straight walk off the
+# Gateway first, to (179,201) just above the link -- (185,70) from the view origin (138,184) --
+# then the detour click: (149,154) is map (170,204) from the origin (138,166).
+click 185 70
+expect hero_move 600
+wait 10
+click 149 154
 expect path_found 240
 expect hero_move 900
 quit

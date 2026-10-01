@@ -44,9 +44,18 @@ static int parse_pair(DscriptOp *c, const char *tok)
     *eq = 0;
     if (number(buf, &n)) return -1;
     c->control[c->control_count] = (int)n;
-    /* `click` is the oracle's button press; as a value it is 1. */
+    c->svalue[c->control_count][0] = 0;
+    /* `click` is the oracle's button press; as a value it is 1. `sel:N` and `check:N`
+     * are the hook's list/check forms. Anything else that is not a number is text. */
     if (!strcmp(eq + 1, "click")) n = 1;
-    else if (number(eq + 1, &n)) return -1;
+    else if (!strncmp(eq + 1, "sel:", 4) || !strncmp(eq + 1, "check:", 6)) {
+        if (number(strchr(eq + 1, ':') + 1, &n)) return -1;
+    } else if (number(eq + 1, &n)) {
+        size_t tl = strlen(eq + 1);
+        if (!tl || tl >= sizeof(c->svalue[0])) return -1;
+        memcpy(c->svalue[c->control_count], eq + 1, tl + 1);
+        n = 0;
+    }
     c->value[c->control_count] = (int)n;
     ++c->control_count;
     return 0;
@@ -135,9 +144,12 @@ int dscript_parse(Dscript *ds, char *text, size_t *error_line)
                 if (number(t, &n)) goto bad;
                 c.id = (int)n;
             }
+            /* The terminator is optional in both forms (the oracle hook needs none):
+             * `dialog 164 1091=click` presses a button, and that is the whole op. */
+            c.ok = 1;
             for (;;) {
                 t = token(&args);
-                if (!t) { if (bare) break; goto bad; }
+                if (!t) break;
                 if (!strcmp(t, "ok")) { c.ok = 1; break; }
                 if (!strcmp(t, "cancel")) { c.ok = 0; break; }
                 if (parse_pair(&c, t)) goto bad;
@@ -179,7 +191,10 @@ uint32_t dscript_next_time(const Dscript *ds, uint32_t from)
     size_t i;
     for (i = ds->pc; i < ds->count; ++i) {
         if (ds->ops[i].at_ms < from) continue;
-        if (ds->ops[i].at_ms < best) best = ds->ops[i].at_ms;
+        /* File order: an op cannot be taken before the one ahead of it, so a later
+         * line with an earlier time must not wake the loop (it would spin there). */
+        best = ds->ops[i].at_ms;
+        break;
     }
     if (ds->has_end && ds->end_ms >= from && ds->end_ms < best) best = ds->end_ms;
     return best;

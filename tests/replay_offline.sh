@@ -16,7 +16,7 @@ mkdir -p "$work/save"
 export SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-dummy}
 export SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy}
 status=0
-"$build/wos" --data "$data" --save "$work/save" --headless --seed 3 --max-frames 200000 \
+"$build/wos" --data "$data" --save "$work/save" --headless --seed 1 --max-frames 200000 \
     --replay "$root/tests/replay/offline.rpl" --log "$work/events.log" || status=$?
 cat "$work/events.log"
 if [ "$status" -ne 0 ]; then

@@ -46,6 +46,7 @@
 #include <time.h>
 #include <stdarg.h>
 #include <tlhelp32.h>
+#include <commctrl.h>
 
 #define IMAGE_BASE     0x00400000u
 #define VA_GATE_STAMP  0x004DD510u
@@ -96,10 +97,32 @@ static void civil_from_days(int64_t z, int *py, int *pm, int *pd)
     *pd = (int)(doy);
     if (*pm <= 2) (*py)++;
 }
+static void tr(const char *fmt, ...);
+extern uintptr_t g_base;
 /* See the DETOUR below for why Sleep is virtual rather than real. */
 static VOID WINAPI hook_Sleep(DWORD ms)
 {
     if (!ms) { vadvance(vnow()); return; }     /* a yield, not a wait */
+    {
+        /* the caller chain, by EBP, for telling apart the code paths that sleep */
+        void **fp = (void **)__builtin_frame_address(0);
+        if (fp && !IsBadReadPtr(fp, 8)) fp = (void **)fp[0];
+        void *r2 = 0, *r3 = 0;
+        if (fp && !IsBadReadPtr(fp, 8)) { r2 = fp[1]; fp = (void **)fp[0];
+            if (fp && !IsBadReadPtr(fp, 8)) r3 = fp[1]; }
+        tr("sleep now=%u ms=%lu ra=%p up=%p,%p", vnow(), (unsigned long)ms,
+           __builtin_return_address(0), r2, r3);
+    }
+    /* FUN_0046831C's wait for the music thread (FUN_00469229) to take its quit request:
+     * `DAT_004F416C = 1; while (DAT_004F416C && GetTickCount() - t0 < 3000) Sleep(100);`.
+     * The thread polls every 100 ms and clears the flag. Under Wine DirectSound init
+     * (FUN_004682CA) fails, the thread never starts, and every music shutdown cost the full
+     * 3000 ms. Emulate a live thread taking the request during the first Sleep: one 100 ms
+     * wait, which is what a machine with sound gets. The port's music_shutdown() matches. */
+    if ((uintptr_t)__builtin_return_address(0) - g_base + IMAGE_BASE == 0x004683CFu) {
+        *(volatile LONG *)(g_base + (0x004F416Cu - IMAGE_BASE)) = 0;
+        *(volatile LONG *)(g_base + (0x004F4154u - IMAGE_BASE)) = 0;
+    }
     vadvance(vnow() + ms);
 }
 
@@ -127,6 +150,7 @@ static volatile LONG g_rand_calls;
 static volatile LONG g_srand_calls;
 static void tr(const char *fmt, ...);
 static volatile LONG g_rand_trace;
+static int g_rand_deep;
 /* One handle, opened once.  Two reasons, both learned the hard way: an fopen per
  * call costs more than the call, and a RELATIVE name lands wherever the CWD
  * happens to be -- the game does SetCurrentDirectory(install root) in
@@ -330,20 +354,36 @@ static int __cdecl hook_rand(void)
          * unseen caller gives both, once per site, which is the whole boot-rand table. */
         unsigned *sp;
         void *ra = __builtin_return_address(0);
-        char chain[80];
+        char chain[160];
         int i, got = 0, cn = 0;
+        /* WOS_RANDTRACE_DEEP: every code address on the stack (12, no first-seen filter),
+         * for telling apart the paths into a routine that is reached more than one way. */
+        int deep = g_rand_deep, lim = deep ? 12 : 4, scan = deep ? 400 : 64;
         __asm__ __volatile__("movl %%esp, %0" : "=r"(sp));
         chain[0] = 0;
-        for (i = 0; i < 64 && got < 4; i++) {
+        if (deep) {
+            /* The EBP chain, not a stack scan: the caller's frame (saved by this detour's
+             * own prologue) and up, so a routine like RandomGrowl names its real caller. */
+            void **fp = (void **)__builtin_frame_address(0);
+            for (i = 0; i < lim && fp && !IsBadReadPtr(fp, 8); i++) {
+                fp = (void **)fp[0];
+                if (!fp || IsBadReadPtr(fp, 8)) break;
+                cn += snprintf(chain + cn, sizeof chain - cn, " %08X", (unsigned)(uintptr_t)fp[1]);
+            }
+            scan = 0;
+        }
+        for (i = 0; i < scan && got < lim; i++) {
             unsigned v = sp[i];
             if (v >= 0x00401000u && v < 0x00500000u && v != (unsigned)(uintptr_t)ra &&
-                !site_seen(v)) {
+                (deep || !site_seen(v))) {
                 site_seen(v);
                 cn += snprintf(chain + cn, sizeof chain - cn, " %08X", v);
                 if (++got == 8) break;
             }
         }
-        trace_line("%d %08X%s", (int)g_rand_calls, (unsigned)(uintptr_t)ra, chain);
+        /* The virtual ms goes LAST so readers keyed on "<index> <site>" still parse. */
+        trace_line("%d %08X%s t=%u", (int)g_rand_calls, (unsigned)(uintptr_t)ra, chain,
+                   (unsigned)vnow());
     }
     return (int)((g_holdrand >> 16) & 0x7FFFu);
 }
@@ -452,7 +492,18 @@ static BOOL __stdcall hook_KillTimer(HWND hwnd, UINT_PTR id)
 
 /* --------------------------------------------------------------- time hooks */
 
-static DWORD  __stdcall hook_GetTickCount(void) { return vnow(); }
+/* FUN_0042198F, the dissolve: `while (GetTickCount() - t0 < ms) { rand(); rand(); FillSolidRect(); }`
+ * with no message pump. Under a virtual clock that loop never ends, and on real hardware
+ * its rand() count is the CPU's speed. The harness fixes the rate: each of the two in-loop
+ * GetTickCount calls (0x4219EC, 0x421A5B; return addresses below) costs 1 ms, the start
+ * stamp at 0x42199A costs nothing, so a 1000 ms dissolve is 999 blocks. The port's
+ * front_dissolve() does the same arithmetic. */
+static DWORD __stdcall hook_GetTickCount(void)
+{
+    uintptr_t ra = (uintptr_t)__builtin_return_address(0) - g_base + IMAGE_BASE;
+    if (ra == 0x004219F2u || ra == 0x00421A61u) vadvance(vnow() + 1);
+    return vnow();
+}
 static void   __stdcall hook_GetSystemTime(LPSYSTEMTIME st) { vfill_systemtime(st); }
 static void   __stdcall hook_GetLocalTime(LPSYSTEMTIME st)  { vfill_systemtime(st); }
 static time_t __cdecl hook_time(time_t *t) { time_t v = (time_t)vtime_s(); if (t) *t = v; return v; }
@@ -727,6 +778,11 @@ typedef struct {
     int       ctl;        /* EV_DIALOG */
     int       val;        /* EV_DIALOG kind */
     char     *valstr;
+    /* EV_DIALOG in the port's full form, `dialog <id> <ctl>=<v>... ok|cancel`: every
+     * pair is applied in order, then the terminator button is pressed. */
+    int       npair;
+    struct { int ctl, val; char *valstr; } pair[12];
+    int       term;       /* 0 none, IDOK, IDCANCEL */
 } Event;
 
 static Event  g_ev[MAX_EVENTS];
@@ -858,6 +914,24 @@ static int parse_script(const char *path)
                 int i;
                 e->kind = EV_DIALOG;
                 e->ctl  = -1;
+                if (n > 4 && !strchr(tok[3], '=') && tok[3][0] >= '0' && tok[3][0] <= '9') {
+                    /* the port's form: `dialog <id> <ctl>=<v>... ok|cancel` */
+                    for (i = 4; i < n; i++) {
+                        if (strchr(tok[i], '=') && e->npair < 12) {
+                            Event tmp;
+                            memset(&tmp, 0, sizeof tmp);
+                            parse_dialog_value(&tmp, tok[i]);
+                            e->pair[e->npair].ctl = tmp.ctl;
+                            e->pair[e->npair].val = tmp.val;
+                            e->pair[e->npair].valstr = tmp.valstr;
+                            if (e->ctl < 0) e->ctl = tmp.ctl;
+                            e->npair++;
+                        } else if (!strcmp(tok[i], "ok"))     e->term = IDOK;
+                        else if (!strcmp(tok[i], "cancel")) e->term = IDCANCEL;
+                    }
+                    if (e->ctl < 0) continue;
+                    goto parsed_dialog;
+                }
                 for (i = 3; i < n; i++) {
                     if (strchr(tok[i], '=')) parse_dialog_value(e, tok[i]);
                     else {
@@ -866,6 +940,7 @@ static int parse_script(const char *path)
                     }
                 }
                 if (e->ctl < 0) continue;      /* nothing to key the dialog off */
+            parsed_dialog: ;
             } else if (!strcmp(tok[2], "dump")) {
                 e->kind = EV_DUMP;
                 e->text = xstrdup(n > 3 ? tok[3] : "dump", n > 3 ? strlen(tok[3]) : 4);
@@ -1199,35 +1274,62 @@ static HWND find_dialog_with(int ctl)
     return (HWND)(intptr_t)found[0];
 }
 
+static void dialog_apply(HWND dlg, int id, int val, const char *valstr);
 static void do_dialog(Event *e)
 {
     HWND dlg = find_dialog_with(e->ctl);
     HWND ctl;
     if (!dlg) return;
-    if (e->val == DT_DEFAULT) {
-        UINT id = (e->text && (e->text[0] == 'c' || e->text[0] == 'C')) ? IDCANCEL : IDOK;
-        ctl = GetDlgItem(dlg, id);
+    if (e->npair) {
+        int i;
+        for (i = 0; i < e->npair; i++) dialog_apply(dlg, e->pair[i].ctl, e->pair[i].val, e->pair[i].valstr);
+        /* Posted, as DT_CLICK below. */
+        if (e->term && (ctl = GetDlgItem(dlg, e->term)) != NULL) PostMessageA(ctl, BM_CLICK, 0, 0);
+        return;
+    }
+    dialog_apply(dlg, e->ctl, e->val, e->valstr ? e->valstr : (e->text ? e->text : ""));
+}
+static void dialog_apply(HWND dlg, int id, int val, const char *valstr)
+{
+    HWND ctl;
+    if (val == DT_DEFAULT) {
+        UINT bid = (valstr[0] == 'c' || valstr[0] == 'C') ? IDCANCEL : IDOK;
+        ctl = GetDlgItem(dlg, bid);
         if (ctl) SendMessageA(ctl, BM_CLICK, 0, 0);
         return;
     }
-    ctl = GetDlgItem(dlg, e->ctl);
-    if (!ctl) { HWND t = search_wnd(dlg, e->ctl, 0); ctl = t; }
+    ctl = GetDlgItem(dlg, id);
+    if (!ctl) { HWND t = search_wnd(dlg, id, 0); ctl = t; }
     if (!ctl) return;
-    switch (e->val) {
+    switch (val) {
     case DT_TEXT:
-        SendMessageA(ctl, WM_SETTEXT, 0, (LPARAM)(e->valstr ? e->valstr : ""));
+        SendMessageA(ctl, WM_SETTEXT, 0, (LPARAM)(valstr));
         break;
     case DT_SEL: {
-        int idx = atoi(e->valstr ? e->valstr : "0");
-        if (SendMessageA(ctl, CB_SETCURSEL, (WPARAM)idx, 0) == CB_ERR)
+        int idx = atoi(valstr[0] ? valstr : "0");
+        char cls[32];
+        GetClassNameA(ctl, cls, sizeof cls);
+        if (!strcmp(cls, "SysListView32")) {
+            /* A list-view row: select and focus it; comctl32 sends the parent its
+             * LVN_ITEMCHANGED, which is what the skin picker reacts to. */
+            LVITEMA it;
+            memset(&it, 0, sizeof it);
+            it.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+            it.state     = LVIS_SELECTED | LVIS_FOCUSED;
+            SendMessageA(ctl, LVM_SETITEMSTATE, (WPARAM)idx, (LPARAM)&it);
+        } else if (SendMessageA(ctl, CB_SETCURSEL, (WPARAM)idx, 0) == CB_ERR)
             SendMessageA(ctl, LB_SETCURSEL, (WPARAM)idx, 0);
         break;
     }
     case DT_CHECK:
         SendMessageA(ctl, BM_SETCHECK,
-                     (WPARAM)(atoi(e->valstr ? e->valstr : "0") ? BST_CHECKED : BST_UNCHECKED), 0);
+                     (WPARAM)(atoi(valstr[0] ? valstr : "0") ? BST_CHECKED : BST_UNCHECKED), 0);
         break;
-    case DT_CLICK: SendMessageA(ctl, BM_CLICK, 0, 0); break;
+    /* Posted: a click's handler can open the next modal (the Sage box after New Soul's
+     * OK, dialog 149 after that), whose loop must run in the app, not inside this pump
+     * step where the clock cannot move ("pump_step: re-entered ... refusing"). A posted
+     * BM_CLICK still toggles a check box and sends the parent its WM_COMMAND. */
+    case DT_CLICK: PostMessageA(ctl, BM_CLICK, 0, 0); break;
     case DT_FOCUS: SetFocus(ctl); break;
     }
 }
@@ -1248,9 +1350,13 @@ static void dump_bmp(const char *label)
     int y;
     ensure_main();
     if (!g_main) return;
-    /* Xvfb has no window manager, so nothing forces a repaint: ask for one.
-     * RDW_UPDATENOW sends WM_PAINT synchronously; no message loop is re-entered. */
-    RedrawWindow(g_main, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    /* NO forced repaint by default. A paint is game state, not a neutral read: the scene
+     * view's paint runs the weather (FUN_004960BB), which respawns particles with rand(),
+     * so RedrawWindow here moved the original's rand stream at every dump (an extra
+     * ScenePaint at each dump time in the Well). The capture is what the screen already
+     * shows; WOS_DUMP_REPAINT=1 restores the old forced repaint for screenshot-only runs. */
+    if (GetEnvironmentVariableA("WOS_DUMP_REPAINT", NULL, 0))
+        RedrawWindow(g_main, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     dc = GetDC(g_main);
     mem = CreateCompatibleDC(dc);
     bmp = CreateCompatibleBitmap(dc, bw, bh);
@@ -1616,6 +1722,11 @@ static void dump_hotspots(FILE *f, const char *pfx)
         fprintf(f, "%s.hotspot.%d.state=%d\n", pfx, i, state);
         fprintf(f, "%s.hotspot.%d.rect=%d,%d,%d,%d\n", pfx, i,
                 rect[0], rect[1], rect[2], rect[3]);
+        /* HotspotAnimTick's lerped font size, x and y (+0xAC/+0xB0/+0xB4, per-mille):
+         * the font-independent part of the rect, so the port can be held to it. */
+        fprintf(f, "%s.hotspot.%d.anchor=%d,%d,%d\n", pfx, i,
+                *(int *)(r + 0xAC), *(int *)(r + 0xB0), *(int *)(r + 0xB4));
+        fprintf(f, "oracle.hotspot.%d.t_start=%u\n", i, *(unsigned *)(r + 0x0C));
         fprintf(f, "%s.hotspot.%d.clickable=%d\n", pfx, i, flags ? 1 : 0);
         fprintf(f, "%s.hotspot.%d.msg=%04X\n", pfx, i, (unsigned)msg);
         fprintf(f, "%s.hotspot.%d.target=%d\n", pfx, i, target);
@@ -1728,7 +1839,11 @@ static void do_dump(const char *label)
      * real differences. `front.*` is PORT-ONLY until the port grows a front_dump; the
      * keys are what such a dump would answer, and cmp_dump.py lists the prefix as
      * no-source rather than as a mismatch (docs/re/oracle.md 5.4.4). */
-    if (label_is(mod, "front")) dump_hotspots(f, "front");
+    if (label_is(mod, "front")) {
+        /* DAT_004DF8A4 under the port's own key, which the port emits on a front label. */
+        fprintf(f, "front_state=%d\n", *(int *)(b + (0x004DF8A4u - IMAGE_BASE)));
+        dump_hotspots(f, "front");
+    }
 
     /* --- the module read-outs, in the port's key vocabulary ---------------- */
     if (label_is(mod, "map"))       dump_map(f);
@@ -1764,15 +1879,17 @@ static void do_dump(const char *label)
         fprintf(f, "hero.serial=%d\n",  *(int *)(hero + 0x004));
         fprintf(f, "hero.level=%d\n",   *(int *)(hero + 0x064));
         fprintf(f, "hero.map=%d\n",     *(int *)(hero + 0x090));
-        fprintf(f, "hero.gender=%d\n",  *(int *)(hero + 0x1A8));
+        /* Offsets from src/game/hero.c's record map, which round-trips the original's .her
+         * files: HP/MP +0x70/+0x78, the five abilities from +0x680, gender +0xAA0. */
+        fprintf(f, "hero.gender=%d\n",  *(int *)(hero + 0xAA0));
         fprintf(f, "hero.link=%d\n",    *(int *)(hero + 0x67C));
-        fprintf(f, "hero.hp=%d\n",      *(int *)(hero + 0x6BC));
-        fprintf(f, "hero.mp=%d\n",      *(int *)(hero + 0x6C0));
-        fprintf(f, "hero.abil.str=%d\n", *(int *)(hero + 0x1A0));
-        fprintf(f, "hero.abil.wis=%d\n", *(int *)(hero + 0x1A4));
-        fprintf(f, "hero.abil.sta=%d\n", *(int *)(hero + 0x1A8 - 8));
-        fprintf(f, "hero.abil.agi=%d\n", *(int *)(hero + 0x1A0 + 8));
-        fprintf(f, "hero.abil.dex=%d\n", *(int *)(hero + 0x1A0 + 12));
+        fprintf(f, "hero.hp=%d\n",      *(int *)(hero + 0x070));
+        fprintf(f, "hero.mp=%d\n",      *(int *)(hero + 0x078));
+        fprintf(f, "hero.abil.str=%d\n", *(int *)(hero + 0x680));
+        fprintf(f, "hero.abil.wis=%d\n", *(int *)(hero + 0x684));
+        fprintf(f, "hero.abil.sta=%d\n", *(int *)(hero + 0x688));
+        fprintf(f, "hero.abil.agi=%d\n", *(int *)(hero + 0x68C));
+        fprintf(f, "hero.abil.dex=%d\n", *(int *)(hero + 0x690));
         fprintf(f, "hero.checksum=%08x\n", (unsigned)*(unsigned *)(hero + 0x16C8));
         /* hero.base_offset is the hero record's offset inside the 0x15C0170 block
          * FUN_00426149 malloc'd: 0x1560A5C + (rand() & 0x3FFF & ~0xF).  It is the one
@@ -1788,6 +1905,23 @@ hero_done: ;
     fprintf(f, "oracle.seq=%d\n", g_dump_seq++);
     fprintf(f, "oracle.gate_stamp=%lu\n",
             (unsigned long)*(volatile DWORD *)(b + (VA_GATE_STAMP - IMAGE_BASE)));
+    {   /* the scene view (DAT_005006BC) and its work DIB at +0x12C (ScenePaint's ebx):
+         * the snow (FUN_004960BB) projects onto that bitmap's width and height */
+        unsigned char *view = *(unsigned char **)(b + (0x005006BCu - IMAGE_BASE));
+        fprintf(f, "oracle.scene_view=%p\n", (void *)view);
+        if (view && !IsBadReadPtr(view + 0x12C, 12)) {
+            BITMAPINFOHEADER *h = *(BITMAPINFOHEADER **)(view + 0x130);
+            if (h && !IsBadReadPtr(h, sizeof *h))
+                fprintf(f, "oracle.scene_dib=%ld,%ld\n", (long)h->biWidth, (long)h->biHeight);
+        }
+        {
+            int *pt = (int *)(b + (0x00D21730u - IMAGE_BASE));
+            if (!IsBadReadPtr(pt, 28))
+                fprintf(f, "oracle.snow0=%d,%d,%d,%d,%d,%d,%d\n", pt[0], pt[1], pt[2], pt[3], pt[4], pt[5], pt[6]);
+        }
+    }
+    fprintf(f, "oracle.world_stamp=%lu\n",       /* NetGraphTick's 25 ms world-step stamp */
+            (unsigned long)*(volatile DWORD *)(b + (0x004E48CCu - IMAGE_BASE)));
     fprintf(f, "oracle.steps=%ld\n", (long)g_steps);
     fprintf(f, "oracle.timers_live=%d\n", (live = timer_live_count(), live));
     fprintf(f, "oracle.next_deadline=%u\n", timer_next_deadline());
@@ -1895,8 +2029,15 @@ static int pump_step_inner(void)
     gate = *(volatile DWORD *)(g_base + (VA_GATE_STAMP - IMAGE_BASE));
     if (gate > now) gate = now;                  /* stale, uninitialised, or moved */
     t_idle = gate + GATE_PERIOD;
-    if (t_idle <= now) t_idle = now + IDLE_QUANTUM;   /* must be strictly forward,
-                                                           or the clock livelocks */
+    if (t_idle <= now) {
+        /* The 20 Hz work is DUE at now. Give the app one pass at this clock value so its
+         * idle path (AppRun 0x40A8D9 -> FUN_0040A7C7) runs on the boundary, as it does on
+         * Windows where draining a timer's messages takes no time. Only one: if the gate
+         * did not stamp (a modal loop, a closed gate), move on so the clock cannot livelock. */
+        static uint32_t held_at = 0xFFFFFFFFu;
+        if (held_at != now) { held_at = now; t_idle = now; }
+        else t_idle = now + IDLE_QUANTUM;
+    }
 
     for (idx = 0; idx < g_nev; idx++) if (!g_ev[idx].done) break;
     t_in = (idx < g_nev) ? g_ev[idx].t : 0xFFFFFFFFu;
@@ -2088,9 +2229,18 @@ static BOOL WINAPI hook_PeekMessageA(LPMSG m, HWND h, UINT a, UINT b, UINT rm)
     BOOL r;
     if (InterlockedIncrement(&g_peeks) < 8)
         tr("hook_PeekMessageA: call %ld rm=%08X", (long)g_peeks, rm);
-    pump_step();
+    /* Step only when the caller's queue is empty. AppRun's message loop peeks after every
+     * message it dispatches; stepping there advanced the clock past 20 ms boundaries while
+     * the app was still draining a timer handler's paints, so its idle path never saw them. */
+    {
+        MSG probe;
+        if (!real_PeekMessageA(&probe, h, a, b, PM_NOREMOVE)) pump_step();
+    }
     r = real_PeekMessageA(m, h, a, b, rm);
-    if (r && m->message == WM_TIMER) timer_taken(m->hwnd, m->wParam);
+    /* Only a REMOVING peek takes the message. MFC peeks with PM_NOREMOVE before every
+     * GetMessage, and counting that peek too re-armed every timer twice per delivery:
+     * the 100 ms timers were delivered every 200 ms. */
+    if (r && (rm & PM_REMOVE) && m->message == WM_TIMER) timer_taken(m->hwnd, m->wParam);
     if (!r) InterlockedIncrement(&g_idle_pass);
     if (r) msglog_win(m->hwnd);
     msglog(m, "Peek", rm, r);
@@ -2206,10 +2356,17 @@ static BOOL WINAPI hook_GetMessageA(LPMSG m, HWND h, UINT a, UINT b)
      * user32's disagree. */
     {
         MSG probe;
-        pump_step();
+        /* Step only when the queue is empty, as hook_PeekMessageA does: a GetMessage
+         * that takes a message already queued costs no time on Windows. Stepping here
+         * moved the clock 10 ms between the WM_MOUSEMOVE and the WM_LBUTTONDOWN of one
+         * scripted click (both posted at 200, the button taken at 210). */
         memset(&probe, 0, sizeof probe);
-        if (!real_PeekMessageA(&probe, h, a, b, PM_NOREMOVE))
-            getmessage_wakeup(h, a, b);
+        if (!real_PeekMessageA(&probe, h, a, b, PM_NOREMOVE)) {
+            pump_step();
+            memset(&probe, 0, sizeof probe);
+            if (!real_PeekMessageA(&probe, h, a, b, PM_NOREMOVE))
+                getmessage_wakeup(h, a, b);
+        }
     }
     r = real_GetMessageA(m, h, a, b);
     if (r && m->message == WM_TIMER) timer_taken(m->hwnd, m->wParam);
@@ -2754,7 +2911,7 @@ static void start_watchdog(void)
  * run does 500k relay-worthy calls in the first two seconds) and must be asked
  * for by name:
  *
- *   core  (default) pump, timer, key, tick, wall, clock, rng, help, modal
+ *   core  (default) pump, timer, key, tick, wall, clock, rng, help, modal, focus
  *   probe           one-shot dump of the live options table (the "values=" line)
  *   trace           every failing _access/fopen/CreateFileA, with its path
  *   watch           log every modal dialog, with its resource id, caption and
@@ -2775,12 +2932,30 @@ static int in_list(char *list, const char *name)
 }
 static int grp(const char *name)
 {
-    char core[] = "pump,timer,key,tick,wall,clock,rng,help,modal,watch";
+    char core[] = "pump,timer,key,tick,wall,clock,rng,help,modal,watch,focus";
     char buf[256];
     DWORD n = GetEnvironmentVariableA("WOS_DETOURS", buf, sizeof buf);
     if (!n) return in_list(core, name);
     if (!buf[0]) return 0;
     return in_list(buf, name) || in_list(buf, "all");
+}
+
+/* GetForegroundWindow: report the game's main frame. The Run loop (0x0040A8D9) spins its
+ * idle path, and with it FUN_0040A7C7's 20 ms gate, only while the foreground window's
+ * top-level parent is the main frame (*0x004E4844); otherwise it blocks in GetMessage
+ * and only the 100 ms WM_TIMER (FUN_00428C8F) enters the gate. Under Xvfb with no window
+ * manager the foreground window drifts with whatever the title's timers show, so the idle
+ * cadence depended on the Wine build. A player has the game focused, and so does the
+ * oracle. m_hWnd is at +0x20 (SetTimer(*(this+0x20), ...) throughout); else fall through. */
+static HWND (WINAPI *real_GetForegroundWindow)(void);
+static HWND WINAPI hook_GetForegroundWindow(void)
+{
+    static int logged;
+    uintptr_t frame = *(uintptr_t *)(g_base + (0x004E4844u - IMAGE_BASE));
+    HWND w = frame ? *(HWND *)(frame + 0x20) : NULL;
+    if (!w || !IsWindow(w)) w = real_GetForegroundWindow();
+    if (!logged && frame) { logged = 1; tr("focus: main frame %p hwnd %p", (void *)frame, (void *)w); }
+    return w;
 }
 
 static BOOL (WINAPI *real_SetCursorPos)(int, int);
@@ -2946,6 +3121,9 @@ static void install_front_trace(void)
         { 0x0041D3CCu, "worldlist_rows",   7 },  /* push ebp / mov eax,[esp+0Ch] / mov ebp,esp */
         { 0x0041D717u, "worldlist_init",   6 },  /* push ebp / mov eax,11C0h */
         { 0x00438E8Eu, "solo_stepper",     6 },  /* push ebp / mov eax,1FBCh */
+        { 0x004960BBu, "scene_weather",    6 },  /* push ebp / mov ebp,esp / sub esp,2Ch */
+        { 0x00456A30u, "scene_tick",       6 },  /* push esi / mov esi,ecx / push [ecx+64h] */
+        { 0x00447D29u, "scene_fx_tick",    6 },  /* push ebp / mov ebp,esp / sub esp,0Ch */
         /* 0x0042AA10 is deliberately NOT traced here.  Its first ten bytes are
          * `mov eax,1F50h / call chkstk`, and `call rel32` is POSITION DEPENDENT: the
          * trampoline replays those bytes at a VirtualAlloc address, so the copy's
@@ -3040,6 +3218,13 @@ static void install_detours(void)
     if (grp("timer")) {
     DETOUR("user32.dll", "SetTimer",         hook_SetTimer);
         DETOUR("user32.dll", "KillTimer",        hook_KillTimer);
+    }
+
+    if (grp("focus")) {
+        real_GetForegroundWindow = (HWND (WINAPI *)(void))(void *)GetProcAddress(
+            GetModuleHandleA("user32.dll"), "GetForegroundWindow");
+        if (real_GetForegroundWindow)
+            DETOUR("user32.dll", "GetForegroundWindow", hook_GetForegroundWindow);
     }
 
     if (grp("key")) {
@@ -3151,6 +3336,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r)
          * at script_init misses every one of them.  Tracing costs an fopen per
          * call, so it stays off unless the variable is set. */
         g_rand_trace = GetEnvironmentVariableA("WOS_RANDTRACE", g_scratch, sizeof g_scratch) != 0;
+        g_rand_deep = GetEnvironmentVariableA("WOS_RANDTRACE_DEEP", g_scratch, sizeof g_scratch) != 0;
         if (g_rand_trace) trace_open();
         if (GetEnvironmentVariableA("WOS_ENC_TRACE", g_scratch, sizeof g_scratch)) {
             g_enc_trace = 1;              /* install_enc_trace also sets it; the write here

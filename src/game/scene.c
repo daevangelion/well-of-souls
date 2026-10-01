@@ -15,11 +15,14 @@
 #include "game.h"
 #include "hero.h"
 #include "battle.h"
+#include "scenecache.h"
 #include "panels.h"
 #include "items.h"
 #include "minigame.h"
 #include "html.h"
 #include "missions.h"
+#include "sched.h"
+#include "chat.h"
 #include "../game_main.h"
 #include "../engine/clock.h"
 #include "../engine/screen.h"
@@ -106,6 +109,9 @@ typedef enum {
 typedef struct {
     int used, pose[3], poses, frame, face;
     uint32_t started;   /* GetTickCount() sample the pose cycle began */
+    /* NpcIdlePoses (0x485F21): rec+0x270 state 1/2/3, rec+0x274 dwell, rec+0x134 stamp */
+    int idle_state, idle_dwell; uint32_t idle_stamp;
+    int osc, osc_up;    /* FUN_0049590D: rec+0x29C and its direction rec+0x2A0 */
     int x, y, tx, ty;   /* percentage * 256 (the original keeps y as 8.8 percent) */
     char name[32];
     Sheet sheet;
@@ -141,9 +147,6 @@ static struct {
     char title[128];
     uint32_t flags;                        /* DAT_004FB030 */
     int weather, fx, color_table;          /* scene+0x3E064 / +0x3E060 / +0x3E06C */
-    int theme_id, theme_period, theme_left;
-    void *theme;
-    size_t theme_size;
     int last_give, last_attack, last_spell; /* DAT_00502B00 / +0x02B08 / +0x02B04 */
     /* Anti-tamper / PK state the original keeps in the hero record at +0x296 (the M<n>
      * cheat bitmask), +0x1A6 (the PK flag) and +0x28B (PK kills). FrontHero does not expose
@@ -779,12 +782,24 @@ static int asset_path(char *path,size_t cap,const char *folder,const char *name,
     if(f) { fclose(f);return 1; }
     return 0;
 }
+/* An embedded scene runs inside another screen's pane (see scene_embed_start). */
+static int embedded, embedded_starting;
+/* Snow that reached the ground is painted onto the backdrop (SceneWeather, 0x496573 path),
+ * so it lasts until the next backdrop load. The scene view is 361x280. */
+static unsigned char settled[280][361];
 static void background(const char *name)
 {
     char path[640];
     if(!*name) return;
     image_free(&vm.background);
-    if(asset_path(path,sizeof path,"scenes",name,".jpg")) image_load(&vm.background,path);
+    if(asset_path(path,sizeof path,"scenes",name,".jpg")) {
+        image_load(&vm.background,path);
+        /* StateBackgroundLoad from the Well view (0x41ED11): the scene pane's client,
+         * 361x280, on a cold temp\sceneCache entry (scenecache.h). In-game scene
+         * backdrops (0x41EF95) use another size and are not modelled yet. */
+        if(embedded_starting) scene_cache_load(361,280,path);
+        memset(settled,0,sizeof settled);   /* a new backdrop drops the settled snow */
+    }
 }
 static void sound(const char *name)
 {
@@ -793,51 +808,17 @@ static void sound(const char *name)
     bytes=text_read_file(path,&len);
     if(bytes) { plat_sound_play(bytes,len);free(bytes); }
 }
-static unsigned le32(const unsigned char *p)
-{
-    return (unsigned)p[0]|((unsigned)p[1]<<8)|((unsigned)p[2]<<16)|((unsigned)p[3]<<24);
-}
-/* THEME (opcode 0). -1 stops, 0 uses the nearest link's theme; the WAV loops until
- * a different theme or theme -1. */
+/* THEME (opcode 0): `atoi(arg)`, and 0 means the nearest link's theme (link +0x6C) when
+ * there is one (0x47D6BF). Everything else, including -1, goes to FUN_00456D2F. */
 static void theme(int id)
 {
-    int i,inside=0,n;
-    char (*t)[256]=vlabel_toks;
-    char path[640];
-    free(vm.theme);vm.theme=NULL;vm.theme_size=0;vm.theme_period=0;vm.theme_left=0;
-    if(id<0) return;
-    if(!id) id=vm.link.theme;
-    vm.theme_id=id;
-    for(i=0;i<g_world.line_count;i++) {
-        n=world_tokenize(g_world.lines[i],t,ARGS);
-        if(n<=0) continue;
-        if(eq(t[0],"+THEMES")) { inside=1;continue; }
-        if(eq(t[0],"-THEMES")) break;
-        if(inside && n>=3 && number(t[0])==id) {
-            const char *ext=strrchr(t[2],'.');
-            if(ext&&(eq(ext,".mid")||eq(ext,".midi"))) { game_music(t[2]);return; }
-            if(asset_path(path,sizeof path,"sfx",t[2],".wav")) {
-                size_t off=12,data=0;unsigned rate=0;
-                vm.theme=text_read_file(path,&vm.theme_size);
-                if(!vm.theme) return;
-                while(off+8<=vm.theme_size) {
-                    const unsigned char *p=(const unsigned char *)vm.theme+off;
-                    unsigned len=le32(p+4);
-                    if(len>vm.theme_size-off-8) break;
-                    if(!memcmp(p,"fmt ",4)&&len>=16) rate=le32(p+16);
-                    if(!memcmp(p,"data",4)) data=len;
-                    off+=8+(size_t)len+(len&1u);
-                }
-                if(rate && data && data<=INT_MAX/1000) vm.theme_period=(int)(data*1000/rate);
-                vm.theme_left=vm.theme_period;
-                plat_sound_play(vm.theme,vm.theme_size);
-            }
-            return;
-        }
-    }
+    if(!id && vm.link.used) id=vm.link.theme;
+    env_theme(id);
 }
 static void finish(void)
 {
+    /* The Well's scene 0 simply stops when its script ends; it does not leave the Well. */
+    if(embedded) { vm.state=ST_ENDED; return; }
     hero_save(&g_hero);
     html_close();
     if(vm.number==0) game_go_well(); else game_return_to_map();
@@ -854,8 +835,12 @@ static uint32_t bubble_ms(const char *text)
 static void say(const char *text,int owner)
 {
     expand(text,vm.dialog,sizeof vm.dialog);
+    if(strlen(vm.dialog)>0x103) vm.dialog[0x103]=0;   /* NextArg's cap */
     vm.bubble_owner=owner;
     copy(vm.speaker,sizeof vm.speaker,owner>=0&&owner<ACTORS?vm.actors[owner].name:"");
+    /* WaitBubbleClear then echoes the line to the chat pane (FUN_0049CB86) under the
+     * speaker's name; the host (-1) speaks as slot 0, the hero. */
+    chat_echo(owner==-1?g_hero.name:vm.speaker,vm.dialog);
     vm.reveal=0;
     vm.bubble_start=clock_ms();
     vm.bubble_ms=bubble_ms(vm.dialog);
@@ -866,6 +851,7 @@ static void say(const char *text,int owner)
 static void narration(const char *text)
 {
     expand(text,vm.dialog,sizeof vm.dialog);
+    if(strlen(vm.dialog)>0x103) vm.dialog[0x103]=0;   /* NextArg's cap */
     copy(vm.speaker,sizeof vm.speaker,"");
     vm.bubble_owner=-2;
     vm.reveal=0;
@@ -1061,6 +1047,23 @@ static void give_all(char toks[][256],int n,int take,int host_only)
 static char vt[ARGS][256];
 static char vexpanded[COOKIE_BUF];
 
+/* A speech bubble is up until FUN_0046C3E0's lifetime has passed (or a click clears it). */
+static int bubble_up(void)
+{
+    return vm.dialog[0] && vm.bubble_owner!=-2 && clock_ms()-vm.bubble_start<vm.bubble_ms;
+}
+/* ScriptInterpreter's `*param_2`: the opcodes that end BattleStateMachine's run for this
+ * tick (the cases that leave it 0), plus a line that tokenizes to nothing. */
+static int step_op;
+static int op_stops(int op)
+{
+    switch(op) {
+    case OP_UNKNOWN: case OP_WAIT: case OP_FIGHT: case OP_ASK: case OP_END: case OP_TOKEN:
+    case OP_FIGHT2: case OP_HTML: case OP_GET_SERVER_VAR: case OP_SET_SERVER_VAR: case OP_TIMER:
+        return 1;
+    default: return 0;
+    }
+}
 static void step(void)
 {
     char (*t)[256]=vt;
@@ -1069,8 +1072,13 @@ static void step(void)
     if(vm.pc<0 || vm.pc>=vm.end) { finish();return; }
     raw=g_world.lines[vm.pc];
     n=world_tokenize(raw,t,ARGS);
+    step_op=OP_UNKNOWN;
     if(n<=0) { vm.pc++;return; }
     opcode_of(t[0],&op);
+    step_op=op;
+    /* WaitBubbleClear (0x46C44A): speech waits, without advancing, while the last bubble is
+     * still up; then it sets its own and the run goes on. Narration does not wait. */
+    if((op==OP_QUOTE||op==OP_HOST)&&bubble_up()) return;
     wos_log_event("scene_op","scene=%d line=%d op=%s",vm.number,vm.pc,t[0]);
     for(i=1;i<n;i++) { expand(t[i],vexpanded,sizeof vexpanded);copy(t[i],256,vexpanded); }
     vm.pc++;
@@ -1090,6 +1098,7 @@ static void step(void)
             p+=2;
             while(*p==' ') p++;
         } else p++;
+        while(*p==' ') p++;          /* NextArg (0x484B3E) skips leading spaces */
         len=strlen(p);
         if(len>=sizeof text) len=sizeof text-1;
         memcpy(text,p,len); text[len]=0;
@@ -1118,7 +1127,8 @@ static void step(void)
         if(n<2) return;
         if(eq(t[1],"EXIT")) { finish();return; }
         if(eq(t[1],"SCENE")&&n>2) { Link l=vm.link; game_enter_scene(number(t[2]),&l); return; }
-        if(eq(t[1],"LINK")&&n>3) { game_enter_map(number(t[2]),number(t[3]),n>4?number(t[4]):0); return; }
+        /* 0x476 (leave the scene: CloseOverlaysGoMap(1)), then 0x46A (link, map). */
+        if(eq(t[1],"LINK")&&n>3) { map_close_overlays(1); game_enter_map(number(t[2]),number(t[3]),n>4?number(t[4]):0); return; }
         jump_to(t[1]);
         return;
     case OP_ACTOR: { /* id[.layer], "name", skin, pose, x, y [,colorTable][,pain][,mode] */
@@ -1129,6 +1139,7 @@ static void step(void)
         x=n>5?number(t[5]):50; y=n>6?number(t[6]):75;
         vm.selected=id; a=&vm.actors[id];
         sheet_free(&a->sheet); memset(a,0,sizeof *a);
+        battle_scene_actor();          /* ActorPlaceXY -> AllocCombatant(-2) */
         a->used=1; a->poses=1; a->pose[0]=number(t[4]);
         copy(a->name,sizeof a->name,t[2]);
         if(asset_path(path,sizeof path,"skins",t[3],".bmp")) sheet_load_skin(&a->sheet,t[3]);
@@ -1139,7 +1150,11 @@ static void step(void)
     case OP_POSE: { Actor *a=&vm.actors[vm.selected];
         a->poses=n-1; if(a->poses>3) a->poses=3;
         for(i=0;i<a->poses;i++) a->pose[i]=number(t[i+1]);
-        a->frame=0; a->started=clock_ms(); return; }
+        /* 0x485E75: a missing second or third pose repeats the first; the idle cycle
+         * starts in state 1 with no dwell. */
+        for(i=a->poses;i<3;i++) a->pose[i]=a->pose[0];
+        a->frame=0; a->started=clock_ms();
+        a->idle_state=1; a->idle_dwell=0; a->idle_stamp=a->started; return; }
     case OP_MOVE: { Actor *a; int mode=n>4?number(t[4]):0,x,y;
         if(n<4) return;
         a=eq(t[1],"H")?&vm.host:&vm.actors[number(t[1])&63];
@@ -1353,7 +1368,7 @@ static void actors_update(uint32_t now)
             int d;
             d=a->tx-a->x; if(d>speed)d=speed; if(d< -speed)d=-speed; a->x+=d;
             d=a->ty-a->y; if(d>speed)d=speed; if(d< -speed)d=-speed; a->y+=d;
-        } else if(a->poses>1 && now-a->started>=100u) {
+        } else if(!embedded && a->poses>1 && now-a->started>=100u) {
             /* FUN_0046C3E0-paced random dwell, cycling pose[0] <-> pose[1] */
             a->started=now;
             a->frame=(a->frame+1)%a->poses;
@@ -1374,10 +1389,6 @@ static void scene_update(const Input *in)
     if(missions_panel_active()) { missions_panel_update(in); return; }
     if(panel_active()) { panel_update(in); return; }
     actors_update(now);
-    if(vm.theme_period>0 && now-(uint32_t)vm.theme_left>= (uint32_t)vm.theme_period) {
-        vm.theme_left=(int)now;
-        plat_sound_play(vm.theme,vm.theme_size);
-    }
     /* The button bar (FUN_00478673 registers up to ten slots; slot 6 is GAME/MISSIONS). */
     if(hit(in,button_rect(0))) { panel_open(PANEL_STATS); return; }
     if(hit(in,button_rect(6))) {
@@ -1442,19 +1453,26 @@ static void scene_update(const Input *in)
     case ST_FIGHT_MAP: case ST_FIGHT: return;
     default: break;
     }
-    /* FUN_0046C44A: the interpreter blocks while `now - start < FUN_0046C3E0(text)`, and a
-     * click clears the bubble early. FUN_0049331E reveals (now-start)*30/1000 characters. */
+    /* The bubble stays up for FUN_0046C3E0(text) ms and a click clears it early.
+     * FUN_0049331E reveals (now-start)*30/1000 characters. */
     if(vm.dialog[0]) {
         int len=(int)strlen(vm.dialog);
         uint32_t shown=(now-vm.bubble_start)*30u/1000u;
-        if(advance||now-vm.bubble_start>=vm.bubble_ms) {
-            vm.dialog[0]=0; vm.speaker[0]=0; vm.state=ST_RUN;
-            return;
-        }
-        vm.reveal = (int)(shown>(uint32_t)len?(uint32_t)len:shown);
-        return;
+        if(advance||now-vm.bubble_start>=vm.bubble_ms) { vm.dialog[0]=0; vm.speaker[0]=0; }
+        else vm.reveal = (int)(shown>(uint32_t)len?(uint32_t)len:shown);
     }
-    step();
+    /* BattleStateMachine case 1: up to 50 lines in one tick, while each line asks for
+     * another. A line that did not advance (speech waiting on a bubble) would only run
+     * again, so it ends the run too, as does anything that leaves the script. */
+    {
+        int i,number=vm.number;
+        for(i=0;i<0x32;i++) {
+            int pc=vm.pc;
+            step();
+            if(op_stops(step_op)||vm.pc==pc||vm.state!=ST_RUN||vm.number!=number
+               ||(!embedded&&screen_current()!=&scene_screen)) break;
+        }
+    }
 }
 
 /* --- rendering ------------------------------------------------------------ */
@@ -1549,6 +1567,208 @@ static void scene_render(Framebuffer *fb)
     if(missions_panel_active()) missions_panel_render(fb);
     if(panel_active()) panel_render(fb);
 }
+/* --- the scene view's paint-time logic (ScenePaint, 0x49331E) ------------------------
+ * The original paints on WM_PAINT and the paint itself moves things: the actors' idle poses
+ * and breathing and the weather particles all advance (and draw rands) in the paint. The port
+ * runs that part as scene_paint() at the moments the original paints, and render only draws
+ * the state it left. Only the embedded (Well) scene does this so far. */
+#define VIEW_W 361      /* the scene view's DIB: the Well's pane client */
+#define VIEW_H 280
+#define FLAKES 1000
+#define WEATHER_DOTS 10000
+typedef struct { int alive,x,y,z,vx,vy,vz; } Flake;   /* 0xD21730, 7 ints each */
+static Flake flakes[FLAKES];
+/* What the last paint drew: a rain smear (kind 0), or a dot of 1, 4 or 6 pixels. */
+typedef struct { short x,y; unsigned char kind; } WeatherDot;
+static WeatherDot weather_dots[WEATHER_DOTS];
+static int weather_count, weather_colour;
+static uint32_t paint_stamp, tick_stamp;       /* view+0x70, view+0xF8 */
+static uint32_t paint_now;                     /* GetTickCount at the last paint */
+
+static void weather_dot(int x,int y,int kind)
+{
+    if(weather_count<WEATHER_DOTS) {
+        weather_dots[weather_count].x=(short)x; weather_dots[weather_count].y=(short)y;
+        weather_dots[weather_count].kind=(unsigned char)kind; weather_count++;
+    }
+}
+/* MSVC's `abs(r) & 3` with the sign put back; rand() is never negative, so this is r&3. */
+static int rand_mod4(void) { return (crt_rand()&3)-2; }
+/* SceneWeather (0x4960BB) on the W x H view. Rows count down from the top. */
+static void scene_weather(int type)
+{
+    const int w=VIEW_W,h=VIEW_H;
+    int colour=255,count,i;
+    weather_count=0;
+    if(type>9) { colour=type%1000; type/=1000; if(type<4||type>9) return; }
+    weather_colour=colour;
+    switch(type) {
+    case 1: case 2: case 3:   /* rain: smear a backdrop pixel down and to the left */
+        count=type==1?1000:type==2?3000:10000;
+        for(i=0;i<count;i++) { int r=crt_rand(),c=crt_rand(); weather_dot(c%(w-3)+2,r%(h-4),0); }
+        return;
+    case 4: case 5: case 6:   /* speckles: a 2x2 dot */
+        count=type==4?100:type==5?300:1000;
+        for(i=0;i<count;i++) { int r=crt_rand(),c=crt_rand(); weather_dot(c%(w-3)+2,r%(h-3),4); }
+        return;
+    case 7: case 8: case 9: { /* snow: 3-D particles projected onto the view */
+        const int w8=w*8;
+        count=type==7?100:type==8?300:1000;
+        for(i=0;i<count;i++) {
+            Flake *f=&flakes[i];
+            int z,sx,sy;
+            if(!f->alive) {
+                f->alive=1;
+                f->x=crt_rand()%w8-w8/2;
+                f->y=crt_rand()%w8;
+                f->z=crt_rand()%w8;
+                f->vx=rand_mod4();
+                f->vy=-10;
+                f->vz=rand_mod4();
+            }
+            f->x+=f->vx; f->y+=f->vy;
+            z=f->z; f->z=f->vz+z; if(f->vz+z<1) f->z=1;
+            sx=w/2+f->x*w/f->z;
+            sy=w*f->y/f->z+h/2;
+            if(sx<3||sx>=w-2||sy<3||sy>=h-2) { f->alive=0; continue; }
+            if(f->y<=-w) {        /* reached the ground: it stays on the backdrop */
+                settled[h-sy][sx]=1;
+                f->alive=0;
+                continue;
+            }
+            weather_dot(sx+2,h-sy,f->z<w*24/4?(f->z<w8/4?6:4):1);
+        }
+        return; }
+    default: return;
+    }
+}
+/* NpcIdlePoses (0x485F21), once per paint for a scripted actor: pose 1 for 5..19 ticks of
+ * 200 ms, then pose 2 (or pose 3, one time in five), then back. */
+static void actor_idle(Actor *a,uint32_t now)
+{
+    uint32_t ticks=(now-a->idle_stamp)/200u;
+    int next=0;
+    if(a->idle_state==1) {
+        if(ticks<=(uint32_t)a->idle_dwell+4u) return;
+        next=crt_rand()%5==3?3:2;
+    } else if(a->idle_state==2) {
+        if(ticks<=(uint32_t)a->idle_dwell+4u) return;
+        next=1;
+    } else if(a->idle_state==3) {
+        if(ticks<2u) return;
+        next=1;
+    } else return;
+    a->frame=next-1;
+    a->idle_state=next;
+    a->idle_dwell=crt_rand()%15;
+    a->idle_stamp=now;
+}
+/* ActorBreathe (0x49590D): one rand; 3 in 8 hold, else step between 2 and 32. */
+static void actor_breathe(Actor *a)
+{
+    unsigned r=((unsigned)crt_rand()&0xe0u)>>5;
+    if(r<3) return;
+    if(!a->osc_up) { if(--a->osc<2||r==3) a->osc_up=1; }
+    else { if(++a->osc>0x20||r==3) a->osc_up=0; }
+}
+/* The logic half of ScenePaint: the 100 ms breathing gate (view+0x70), each actor's
+ * breathing and idle pose, then the weather. */
+static void scene_paint(void)
+{
+    uint32_t now=clock_ms();
+    int breathe=0,i;
+    paint_now=now;
+    if(now-paint_stamp>100u) { paint_stamp=now; breathe=1; }
+    for(i=0;i<ACTORS;i++) if(vm.actors[i].used) {
+        if(breathe) actor_breathe(&vm.actors[i]);
+        actor_idle(&vm.actors[i],now);
+    }
+    if(vm.weather>0) scene_weather(vm.weather);
+    else weather_count=0;
+}
+static void weather_render(Framebuffer *fb,Rect pane)
+{
+    uint32_t c=weather_colour==255?0xffffff:(uint32_t)weather_colour*0x010101u;
+    int i,x,y;
+    for(y=0;y<VIEW_H;y++) for(x=0;x<VIEW_W;x++)
+        if(settled[y][x]) fb_pixel(fb,pane.x+x,pane.y+y,0xffffff);
+    for(i=0;i<weather_count;i++) {
+        const WeatherDot *d=&weather_dots[i];
+        x=pane.x+d->x; y=pane.y+d->y;
+        if(d->kind==0) {          /* rain: copy the pixel to (0,1) (-1,2) (-1,3) (-2,4) */
+            uint32_t p;
+            if(x<fb->clip.x||y<fb->clip.y||x>=fb->clip.x+fb->clip.w||y>=fb->clip.y+fb->clip.h) continue;
+            p=fb->pixels[y*fb->w+x];
+            fb_fill(fb,(Rect){x,y+1,1,1},p); fb_fill(fb,(Rect){x-1,y+2,1,2},p);
+            fb_fill(fb,(Rect){x-2,y+4,1,1},p);
+            continue;
+        }
+        fb_pixel(fb,x,y,c);
+        if(d->kind>=4) { fb_fill(fb,(Rect){x-1,y,1,1},c); fb_fill(fb,(Rect){x-1,y+1,2,1},c); }
+        if(d->kind>=6) { fb_fill(fb,(Rect){x+1,y,1,1},c); fb_fill(fb,(Rect){x,y+2,1,1},c); }
+    }
+}
+/* FUN_004874A0, the backdrop blit with the scene fx (view+0x68), row by row from the
+ * backdrop into the view: 1 a one-row sine shimmer, 2 the lake reflection below 70 % of the
+ * height. Both read GetTickCount in the paint. fx 3..5 are not ported yet. */
+static void backdrop_fx(Framebuffer *fb,Rect pane)
+{
+    static uint32_t rows[VIEW_H][VIEW_W];
+    const int h=pane.h<VIEW_H?pane.h:VIEW_H,w=pane.w<VIEW_W?pane.w:VIEW_W;
+    const int split=h*70/100;
+    int y,x;
+    if(vm.fx!=1&&vm.fx!=2) return;
+    if(pane.x<0||pane.y<0||pane.x+w>fb->w||pane.y+h>fb->h) return;
+    for(y=0;y<h;y++) memcpy(rows[y],&fb->pixels[(pane.y+y)*fb->w+pane.x],(size_t)w*sizeof(uint32_t));
+    for(y=0;y<h;y++) {
+        int src=y;
+        if(vm.fx==1)
+            src=y+(int)sin((y*6.28/h)*4.0+(double)paint_now*0.001);
+        else if(y>=split) {
+            double a=(double)h*0.07142857142857142;
+            double v=sin((double)paint_now*0.002+((double)(h-y)/((double)y+1.0))*a);
+            src=split*2-y-(int)(v/(h-split)*(y-split)*a);
+        }
+        if(src>=h-1) src=h-1;
+        if(src<1) src=0;
+        for(x=0;x<w;x++) fb->pixels[(pane.y+y)*fb->w+pane.x+x]=rows[src][x];
+    }
+}
+/* The embedded scene drawn into `pane` (the original's scene view, 1,2 - 362,282). Actor
+ * positions are the same 0..25600 scene units as the full-screen view, scaled to the pane;
+ * the bubble sits over its speaker (FUN_0049331E). */
+void scene_embed_render(Framebuffer *fb,Rect pane)
+{
+    int i;
+    Rect old=fb->clip;
+    if(!embedded) return;
+    fb_clip_intersect(fb,pane);
+    fb_fill(fb,pane,0x151d28);
+    scaled(fb,&vm.background,(Rect){0,0,vm.background.w,vm.background.h},pane,-1);
+    backdrop_fx(fb,pane);
+    for(i=0;i<ACTORS;i++) if(vm.actors[i].used) {
+        Actor *a=&vm.actors[i];
+        draw_actor(fb,&a->sheet,a->pose[a->frame],
+            pane.x+(int)((int64_t)a->x*pane.w/25600),pane.y+(int)((int64_t)a->y*pane.h/25600));
+    }
+    weather_render(fb,pane);
+    if(vm.dialog[0]) {
+        char buf[DIALOG];
+        size_t len=strlen(vm.dialog),shown=vm.reveal<0?0:(size_t)vm.reveal;
+        int bx=pane.x+8,by=pane.y+8;
+        if(vm.bubble_owner>=0&&vm.bubble_owner<ACTORS&&vm.actors[vm.bubble_owner].used) {
+            bx=pane.x+(int)((int64_t)vm.actors[vm.bubble_owner].x*pane.w/25600)-60;
+            if(bx<pane.x+2) bx=pane.x+2;
+            if(bx>pane.x+pane.w-202) bx=pane.x+pane.w-202;
+        }
+        if(shown>len) shown=len;
+        memcpy(buf,vm.dialog,shown); buf[shown]=0;
+        fb_fill(fb,(Rect){bx,by,200,64},0xffffff); fb_rect(fb,(Rect){bx,by,200,64},0x000000);
+        font_draw(fb,bx+6,by+4,vm.speaker,0x000000);
+        font_wrap(fb,(Rect){bx+6,by+16,188,46},buf,0x000000);
+    }
+    fb->clip=old;
+}
 static void scene_leave(void)
 {
     int i;
@@ -1558,7 +1778,6 @@ static void scene_leave(void)
     html_close();
     image_free(&vm.background);sheet_free(&vm.hero);
     for(i=0;i<ACTORS;i++) sheet_free(&vm.actors[i].sheet);
-    free(vm.theme);vm.theme=NULL;vm.theme_size=0;
 }
 static const Screen scene_screen={"scene",NULL,scene_update,scene_render,scene_leave};
 
@@ -1788,12 +2007,52 @@ void scene_boot_register(void)
 }
 
 /* --- entry ---------------------------------------------------------------- */
+/* An embedded scene runs inside another screen's pane without owning the screen: the Well
+ * (front state 5) is scene 0 in the scene pane, beside the Pick-a-Soul pane, exactly as
+ * SceneRunByNumber runs it in the original. */
+static void scene_start(int scene_no,const Link *link,int embed);
 void game_enter_scene(int scene_no,const Link *link)
+{
+    scene_start(scene_no,link,0);
+}
+void scene_embed_start(int scene_no)
+{
+    scene_start(scene_no,NULL,1);
+}
+int scene_embed_active(void) { return embedded; }
+void scene_embed_stop(void)
+{
+    if(!embedded) return;
+    embedded=0;
+    image_free(&vm.background);sheet_free(&vm.hero);
+    { int i; for(i=0;i<ACTORS;i++) sheet_free(&vm.actors[i].sheet); }
+    vm.state=ST_ENDED;
+}
+static void scene_update(const Input *in);
+/* One world step of the embedded scene: the interpreter and the actors, no input (the pane
+ * has no buttons; the Pick-a-Soul pane owns the clicks). */
+void scene_embed_tick(void)
+{
+    Input none;
+    uint32_t now=clock_ms();
+    if(!embedded) return;
+    /* SceneTick (0x48C8C4): at most once per 50 ms, the script and the actors, then
+     * SceneTickRand's rand, then InvalidateRect - the paint follows straight away. */
+    if(now-tick_stamp<=0x31u) return;
+    tick_stamp=now;
+    memset(&none,0,sizeof none);
+    scene_update(&none);
+    (void)crt_rand();                 /* SceneTickRand (0x447D29) */
+    scene_paint();
+}
+static void scene_start(int scene_no,const Link *link,int embed)
 {
     Link saved;
     memset(&saved,0,sizeof saved);
     if(link) saved=*link;
-    screen_set(NULL);
+    if(!embed) screen_set(NULL);
+    else scene_embed_stop();
+    embedded_starting=embed;
     /* FUN_0047A2A7 keeps the per-hero scene slots and only re-seeds the program counter, so
      * the cookie registry, the call stack and the timers survive a scene change. Only the
      * presentation state is rebuilt. */
@@ -1812,6 +2071,7 @@ void game_enter_scene(int scene_no,const Link *link)
     /* The original broadcasts FUN_004306F6(0x41, <event>, <slot>, <code>, ...) from the
      * fight; battle.c calls back so the VM can re-enter @eventActorClick/Attack/Spell<n>. */
     battle_set_scene_event(scene_event);
+    battle_scene_begin();                 /* FUN_0048E19A: the scene block's one rand */
     vm.number=scene_no; vm.link=saved; vm.state=ST_RUN;
     vm.outcome=BATTLE_NONE;
     vm.host.used=1; vm.host.x=vm.host.tx=20*256; vm.host.y=vm.host.ty=87*256;
@@ -1838,6 +2098,12 @@ void game_enter_scene(int scene_no,const Link *link)
     vm.pc=g_world.scenes[scene_no].first_line+1;
     vm.end=g_world.scenes[scene_no].end_line;
     if(g_hero.valid) sheet_load_skin(&vm.hero,g_hero.skin);
-    screen_set(&scene_screen);
-    wos_log_event("scene_enter","scene=%d",scene_no);
+    /* SceneRunByNumber: after EnterScene and the backdrop, the local hero's combatant. */
+    battle_scene_hero();
+    embedded=embed; embedded_starting=0;
+    if(!embed) screen_set(&scene_screen);
+    /* The Well's pane paints twice as SceneRunByNumber returns (both measured at the
+     * same tick in the oracle). */
+    if(embed) { scene_paint(); scene_paint(); }
+    wos_log_event("scene_enter","scene=%d embedded=%d",scene_no,embed);
 }

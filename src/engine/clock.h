@@ -51,6 +51,9 @@ uint32_t clock_real_ms(void);
 void clock_advance(uint32_t ms);        /* now += ms; also moves clock_time_s() */
 void clock_set_now(uint32_t now_ms);    /* absolute; ignored if it moves backwards */
 void clock_attach_realtime(void);       /* clock_ms() follows the host clock again */
+/* A blocking call inside a handler (the original's Sleep): the clock jumps `ms` ahead in
+ * either mode, so timers come due late and coalesce exactly as after a real stall. */
+void clock_stall(uint32_t ms);
 void clock_set_time_base(uint32_t epoch_s); /* time(0) at t0; 0 by default */
 void clock_reset(void);                 /* t0=0, epoch base 0, all timers killed */
 
@@ -88,6 +91,12 @@ int  clock_dispatch_timers(void);
 int  clock_idle_due(void);
 /* Virtual ms of the next 20 ms idle boundary (last stamp + 20). */
 uint32_t clock_20hz_next(void);
+/* The same boundary WITHOUT catching the stamp up: last stamp + 20, or now when the gate
+ * is already due. This is the oracle pump's t_idle; the stamp only moves when the gate
+ * fires, so `now - last > 19` sees the boundary exactly. */
+uint32_t clock_idle_next(void);
+/* Earliest deadline of a live timer with no message outstanding; UINT32_MAX when none. */
+uint32_t clock_next_timer_deadline(void);
 
 /* A private rate gate: the `if (GetTickCount() - last < N) skip;` idiom the
  * original uses everywhere. Returns 1 exactly once per N ms of virtual time
@@ -100,5 +109,9 @@ uint32_t clock_20hz_next(void);
  * the 20 ms idle tick and the whole game world, so the world step is 40 Hz, not
  * 60 Hz and not 20 Hz. See docs/re/timing.md section 2.1. */
 int  clock_gate(void *owner, int id, uint32_t interval_ms);
+/* The same gate with the original's own re-stamp, `last = GetTickCount()` (NetGraphTick
+ * 0x4289B7 stores the observed tick into _DAT_004e48cc). Polled from the 20 ms idle gate
+ * it passes every 40 ms, not every 25: the oracle's world stamps are 300, 340, 380, ... */
+int  clock_gate_restamp(void *owner, int id, uint32_t interval_ms);
 
 #endif

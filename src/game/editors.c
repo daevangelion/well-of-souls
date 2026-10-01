@@ -1,6 +1,7 @@
 /* Authoring editors: Link Editor, terrain brush, monster placement, world signing.
  * Every rule below is taken from the decompilation; the VA is cited at each site. */
 #include "editors.h"
+#include "sched.h"
 #include "game.h"
 #include "game_main.h"
 #include "../engine/fb.h"
@@ -174,6 +175,7 @@ int editors_open(const char *world)
         wos_log_event("editor_error", "reason=world_load world=%s", world);
         return -1;
     }
+    if (world && *world) env_world_loaded();
     ed.brush_size = EDIT_BRUSH_MEDIUM;
     ed.brush_terrain = 1;
     ed.brush_monster = -1;

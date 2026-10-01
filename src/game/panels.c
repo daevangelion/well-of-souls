@@ -8,6 +8,7 @@
 #include "world.h"
 #include "../engine/font.h"
 #include "../engine/log.h"
+#include "../game_main.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -103,6 +104,7 @@ static void rebuild(void)
 void panel_close(void)
 {
     int i;
+    if(panel.kind==PANEL_PET) g_pet_pen_up=0;     /* ToggleGameDialog close #5 -> FUN_00412797 */
     image_free(&panel.background);image_free(&panel.border);image_free(&panel.equip_icons);
     image_free(&panel.trophy_art);
     for(i=0;i<panel.icon_count;i++) sheet_free(&panel.icons[i].sheet);
@@ -114,6 +116,7 @@ void panel_open(PanelKind kind)
     panel_close();
     if(kind<=PANEL_NONE || kind>=PANEL_COUNT) return;
     panel.kind=kind;
+    if(kind==PANEL_PET) g_pet_pen_up=1;           /* ToggleGameDialog open #5 -> FUN_00412716 */
     art_load(&panel.background,kind==PANEL_EQUIP?"bkEquip.jpg":kind==PANEL_SPELLS?"bkSpell.jpg":
              (kind==PANEL_ITEMS || kind==PANEL_SHOP)?"itemTable.jpg":
              kind==PANEL_TROPHY?"petPen.jpg":"bkBook.jpg");

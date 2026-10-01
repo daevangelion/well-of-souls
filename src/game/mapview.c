@@ -19,8 +19,10 @@
  */
 #include "game.h"
 #include "chat.h"
+#include "front.h"
 #include "hero.h"
 #include "panels.h"
+#include "sched.h"
 #include "../engine/clock.h"
 #include "../engine/dump.h"
 #include "../engine/font.h"
@@ -51,14 +53,14 @@
 #define BOT_Y      416      /* the status window strip, 64 rows */
 
 #define FIGHT_MAX 143
-#define BUTTON_COUNT 7
+#define BUTTON_COUNT 8   /* ButtonBarConfig(1) slots 0..5 and 7, FUN_00478DBD's Hunt in 6 */
 #define PATH_NODES_MAX 2000 /* FUN_00461DCC: bounded 2000-node detour search. */
 #define PATH_NODES_MAX_0 0x7D0
 /* FUN_004620F3's step arithmetic uses DWORD ms throughout. */
 #define MAP_TICK_MS 25      /* FUN_0042895C's own sub-gate, `DVar1 - _DAT_004e48cc < 0x19` */
 #define WANDER_MS  2000     /* FUN_004610D9 / FUN_004620F3 */
 #define ENC_COOL_MS 5000    /* FUN_0046260E, both cooldowns */
-#define BATTLE_GRACE_MS 2000/* FUN_0046259A */
+#define HUNT_WINDOW_MS 2000 /* FUN_0046259A */
 #define SPEED_MAP0 0xC80    /* 3200, map id 0 (all.c:23356 / 71047) */
 #define SPEED_OTHER 0x12C0  /* 4800, any other map (all.c:23370 / 71052) */
 #define WANDER_LEG 0x2800   /* 40 map units: FUN_004620F3's short-leg test */
@@ -68,7 +70,7 @@ static int loaded;
 static Sheet skin;
 static Image buttons[BUTTON_COUNT];
 static const char *const button_names[BUTTON_COUNT] = {
-    "Items", "Spells", "Equip", "Stats", "Map", "Camp", "Well"
+    "Items", "Spells", "Equip", "Stats", "Map", "Camp", "Hunt", "Well"
 };
 
 /* --- the actor record fields FUN_004620F3/FUN_0046230E own ---------------- */
@@ -103,14 +105,14 @@ static uint32_t wander_legs;           /* _DAT_004f219C */
 /* --- encounter state (FUN_0046260E) -------------------------------------- */
 static uint32_t cool_a;                 /* _DAT_004f2220 */
 static uint32_t cool_b;                 /* _DAT_004f2224 */
-static uint32_t battle_end_tick;       /* DAT_004e70a8, set when a fight ends */
+static uint32_t hunt_tick;             /* DAT_004e70a8, stamped by the Hunt button (0x436BF4) */
 /* DAT_004f2228, DAT_004f222c, DAT_004f2230, _DAT_004f2220, _DAT_004f2224, DAT_004e70a8,
  * DAT_004e70ac, DAT_004f2190 and _DAT_004f219c all live in .data, and I read their initial
  * values out of the PE image rather than assuming zero: every one of them is 0 EXCEPT
  * DAT_004f2228, which is 1. So the original asserts "There are no monsters here" from before
  * the title screen until the first roll clears it, and the port must start there too. */
 static int no_monsters_here = 1;      /* DAT_004f2228, .data initial value 1 */
-static int hunt_recent;                /* DAT_004e70ac */
+static int hunt_recent;                /* DAT_004e70ac, Hunt presses since the last encounter */
 
 /* --- link state --------------------------------------------------------- */
 static int nearest_link_idx = -1;      /* DAT_004f2240 */
@@ -180,18 +182,6 @@ void map_set_waypoints(int on)
     waypoints_enabled = on ? 1 : 0;
 }
 
-/* The fight-end handler at 0x436BEE-0x436BF9, whose tail is exactly these two stores:
- *   436bee: call GetTickCount ; 436bf4: mov ds:0x4e70a8, eax
- *   436bf9: inc ds:0x4e70ac
- * So DAT_004e70ac counts COMPLETED FIGHTS, not quiet ticks -- the whole binary references it
- * only there, at the 0x4628D2 compare and the 0x462920 clear inside FUN_0046260E. The test
- * `10 < DAT_004e70ac` in the second roll therefore means "more than ten fights have ended",
- * a persistent state, not a per-tick ramp that forces an encounter. */
-void map_note_battle_end(void)
-{
-    battle_end_tick = clock_ms();
-    ++hunt_recent;
-}
 
 static const ObjRect *object_rect(const Link *link)
 {
@@ -606,56 +596,49 @@ static void activate_link(int index)
         game_enter_scene(link.target, &map.links[index]);
 }
 
-static void place_at_link(int link)
+/* The 0x46A handler (0x429547), the map change: MapLoader, then an unknown link becomes link
+ * 0 and the hero is reseeded exactly on the link's (x, y) with DAT_004F222C (the latch) set,
+ * so the link does not fire under him until he has stepped off it. */
+static void place_on_link(int link)
 {
-    int w, h, fx, fy, radius, found = 0;
-    if (link < 0 || link >= OBL_RECORDS || !map.links[link].used) {
-        fx = clamp(hero_x_units(&g_hero), 0, map.image.w - 1);
-        fy = clamp(hero_y_units(&g_hero), 0, map.image.h - 1);
-    } else {
-        g_hero.link = link;
-        link_extent(&map.links[link], &w, &h);
-        fx = map.links[link].x;
-        fy = map.links[link].y - (h + 1);
-    }
-    /* Above-link placement must not strand the hero in impassable terrain. */
-    if (!map_walkable(&map, fx, fy, g_hero.tokens))
-        for (radius = 1; radius <= 64 && !found; ++radius) {
-            int dx, dy;
-            for (dy = -radius; dy <= radius && !found; ++dy)
-                for (dx = -radius; dx <= radius; ++dx) {
-                    if (abs(dx) != radius && abs(dy) != radius) continue;
-                    if (map_walkable(&map, fx + dx, fy + dy, g_hero.tokens)) {
-                        fx += dx; fy += dy; found = 1; break;
-                    }
-                }
-        }
-    fx = clamp(fx, 0, map.image.w - 1);
-    fy = clamp(fy, 0, map.image.h - 1);
-    walk_stop((int32_t)fx << 8, (int32_t)fy << 8);
+    if (link < 0 || link >= OBL_RECORDS || !map.links[link].used) link = 0;
+    if (!map.links[link].used) return;
+    g_hero.link = link;
+    walk_stop((int32_t)map.links[link].x << 8, (int32_t)map.links[link].y << 8);
+    link_latched = 1;
 }
 
-static void map_reset_runtime(int link)
+static void map_reset_runtime(void)
 {
     g_hero.walk_speed = 0; g_hero.walk_start_tick = 0;
     path_reset();
     wander_x = wander_y = 0; wander_speed = 0;
     wander_tick = clock_ms();
-    /* DAT_004f222c is never cleared explicitly by the original; it falls out on its own
-     * when the hero is not standing in a link, so the map entry does not touch it either. */
+    /* The original's map change touches none of the encounter globals (DAT_004F2220/24/28
+     * and the hunt stamp DAT_004E70A8 are only written by FUN_0046260E, FUN_004959AA, the
+     * Hunt button and FrontEndSetState); nearest/hit are recomputed by the next map pass. */
     nearest_link_idx = hit_link_idx = -1;
-    no_monsters_here = 0;
-    cool_a = cool_b = 0;
     hero_facing_decode(g_hero.facing, &face_x, &face_y);
     if (!g_hero.facing) face_x = face_y = 1;
     g_hero.facing = hero_facing_encode(face_x, face_y);
     minimap = 0;
-    battle_end_tick = clock_ms();
     last_map_tick = clock_ms();
-    place_at_link(link);
     snprintf(message, sizeof(message), "%s", map.def->name);
 }
 
+/* CloseOverlaysGoMap(1) (0x420714), on Incarnate and on leaving a scene (ExitScene, the
+ * 0x480 handler): FUN_004959AA stamps DAT_004F2220 and, when the hero was in a scene
+ * (hero+0xC), sets the latch and DAT_004F2230; FrontEndSetState(6) clears the hunt stamp. */
+void map_close_overlays(int from_scene)
+{
+    cool_a = clock_ms();
+    if (from_scene) { link_latched = 1; link_active = 1; }
+    hunt_tick = 0;
+    front_enter_game();
+}
+
+/* `drop_in` is the link's "drop in" flag: Incarnate (and GOTO LINK with dropin) then clear
+ * the latch, so the next map pass fires the link the hero lands on. */
 void game_enter_map(int map_id, int link, int drop_in)
 {
     if (map_id < 0 || map_id >= WORLD_MAX_MAPS || !g_world.maps[map_id].used) {
@@ -677,22 +660,26 @@ void game_enter_map(int map_id, int link, int drop_in)
     map_flags = (int)map.def->flags;
     pending_count = pending_difficulty = 0;
     music_index = 0;              /* DAT_004e70b8 = 0 in the map loader */
-    map_reset_runtime(drop_in ? -1 : link);
+    map_reset_runtime();
+    place_on_link(link);
+    if (drop_in) { link_latched = 0; link_active = 0; }
     load_art();
     screen_set(&map_screen);
     wos_log_event("map_enter", "map=%d x=%d y=%d", map_id, hero_x_units(&g_hero), hero_y_units(&g_hero));
     map_music_start();
-    if (drop_in && link >= 0 && link < OBL_RECORDS && map.links[link].used)
-        activate_link(link);
+    env_theme(map.def->theme);    /* MapLoader 0x41E57B: the map's arg5 sound theme */
 }
 
+/* ExitScene (0x480): the hero is back on the map where he stood when the scene began. */
 void game_return_to_map(void)
 {
+    map_close_overlays(1);
     if (!loaded || map.id != g_hero.map) { game_enter_map(g_hero.map, g_hero.link, 0); return; }
-    map_reset_runtime(g_hero.link);
+    map_reset_runtime();
     screen_set(&map_screen);
     wos_log_event("map_enter", "map=%d x=%d y=%d", map.id, hero_x_units(&g_hero), hero_y_units(&g_hero));
     map_music_start();
+    env_theme(map.def->theme);    /* the script's return to the map, 0x47DAD9 */
 }
 
 /* FUN_00461138 (0x461138): viewW = (clientW + 3) / 4 map units, origin = hero - viewW/2. */
@@ -714,18 +701,18 @@ static int contains(Rect r, int x, int y)
     return x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 }
 
-/* FUN_0046259A (0x46259A): the post-battle grace window. 2 s after a fight ends it clears
- * the stamp and, if the last roll said "no monsters here", prints that line. Returns
- * (elapsed*100)/2000, i.e. non-zero once 20 ms have passed. */
-static int battle_grace(uint32_t now, uint32_t window)
+/* FUN_0046259A (0x46259A): the hunt window. For 2 s after a Hunt press it returns
+ * (elapsed*100)/2000 once `window` ms have passed; then it clears the stamp and, if the last
+ * roll said "no monsters here", prints that line. */
+static int hunt_window(uint32_t now, uint32_t window)
 {
     uint32_t elapsed;
-    if (battle_end_tick == 0) return 0;
-    elapsed = now - battle_end_tick;
-    if (elapsed < BATTLE_GRACE_MS) {
-        if (window <= elapsed) return (int)((uint32_t)elapsed * 100u / BATTLE_GRACE_MS);
+    if (hunt_tick == 0) return 0;
+    elapsed = now - hunt_tick;
+    if (elapsed < HUNT_WINDOW_MS) {
+        if (window <= elapsed) return (int)((uint32_t)elapsed * 100u / HUNT_WINDOW_MS);
     } else {
-        battle_end_tick = 0;
+        hunt_tick = 0;
         if (no_monsters_here)
             wos_log_event("message", "text=There are no monsters here, hunt somewhere else.");
     }
@@ -741,6 +728,30 @@ static int hunting_level(int raw)
     return bits < 0 ? 0 : bits;
 }
 
+/* OnHunt, the Hunt button's 0x4CB handler (0x436B2F): only for an incarnated hero
+ * (DAT_004E17FC) with no hunt already running (FUN_0046259A(0) == 0) and DAT_004E61E4 clear.
+ * Each press trains the hunting skill (hero+0xA04), announces a new hunting level, plays
+ * drum2.wav, stamps DAT_004E70A8 (the 2 s hunt window FUN_0046259A reads) and counts the
+ * press in DAT_004E70AC, which FUN_0046260E's second roll tests (`10 < presses`). */
+static void hunt(void)
+{
+    int before, after;
+    if (!g_hero.slot_in_use || hunt_window(clock_ms(), 0)) return;
+    before = hunting_level(g_hero.hunting);
+    g_hero.hunting++;
+    after = hunting_level(g_hero.hunting);
+    if (after != before && after > 0) {
+        char line[96];
+        play_sfx("petLevel.wav");
+        snprintf(line, sizeof(line), "*** %s now has level %d hunting skills.", g_hero.name, after);
+        wos_log_event("message", "text=%s", line);
+    }
+    play_sfx("drum2.wav");
+    hunt_tick = clock_ms();
+    ++hunt_recent;
+    wos_log_event("hunt", "skill=%d presses=%d", g_hero.hunting, hunt_recent);
+}
+
 /* FUN_0046260E (0x46260E), the hero tail of the actor loop. Returns the original's
  * *param_3 state (2 = "the hero's own random encounter fired") or 0. Consumes exactly one
  * crt_rand() for the first roll and, only when the first clause did not win, one more for
@@ -749,7 +760,7 @@ static int encounter_roll(int nearest, int moving, uint32_t now)
 {
     const Link *link;
     int base, level, r, hit;
-    if (!(moving || battle_grace(now, 1000))) return 0;
+    if (!(moving || hunt_window(now, 1000))) return 0;
     if (nearest < 0) return 0;
     link = &map.links[nearest];
     /* link[+104] < 2 and either no .mon table, or an empty one, or the hero is standing
@@ -767,7 +778,7 @@ static int encounter_roll(int nearest, int moving, uint32_t now)
     if (!hit) {
         r = crt_rand();
         hit = ((uint32_t)(r % 10000) < (uint32_t)g_hero.hunting || hunt_recent > 10) &&
-              ((uint32_t)(now - cool_b) > ENC_COOL_MS) && battle_grace(now, 0);
+              ((uint32_t)(now - cool_b) > ENC_COOL_MS) && hunt_window(now, 0);
     }
     if (!hit) return 0;
     cool_a = now; cool_b = now;
@@ -862,6 +873,9 @@ static char map_gate_owner[8];
 static void map_update(const Input *in)
 {
     int i, dx, dy;
+    Input none;
+    /* A modal Sage box over the map takes the input; the map pass behind it still runs. */
+    if (front_place_prompt_update(in)) { memset(&none, 0, sizeof(none)); none.mouse_x = none.mouse_y = -1; in = &none; }
     map_music_update();
     if (chat_update(in)) return;
     if (panel_active()) { panel_update(in); return; }
@@ -872,7 +886,8 @@ static void map_update(const Input *in)
     if ((in->mouse_pressed & (1u << 1)) && hover >= 0) {
         g_hero.walk_speed = 0; g_hero.walk_start_tick = 0;
         if (hover == 5) { game_enter_scene(1, NULL); return; }
-        if (hover == 6) { hero_save(&g_hero); game_go_well(); return; }
+        if (hover == 6) { hunt(); return; }
+        if (hover == 7) { hero_save(&g_hero); game_go_well(); return; }
         if (hover < 4) {
             static const PanelKind kinds[] = { PANEL_ITEMS, PANEL_SPELLS, PANEL_EQUIP, PANEL_STATS };
             minimap = 0;
@@ -1057,6 +1072,7 @@ static void map_render(Framebuffer *fb)
     if (minimap) draw_minimap(fb);
     chat_render(fb);
     if (panel_active()) panel_render(fb);
+    front_place_prompt_render(fb);
     /* FUN_00461138's last act: the wander pump runs on the paint path. */
     wander_pump();
 }
@@ -1064,7 +1080,10 @@ static void map_render(Framebuffer *fb)
 void map_dump(DumpEmit emit, void *user)
 {
     uint32_t now = clock_ms();
-    dump_emit_int(emit, "map.id", loaded ? map.id : -1, user);
+    /* Not loaded: hero+0x90 of an in-use record (1..4), which is 0 for the zeroed slot-0
+     * record every boot allocates, and -1 with no hero at all -- the oracle's reading. */
+    dump_emit_int(emit, "map.id", loaded ? map.id :
+                  (g_hero.slot_in_use >= 1 && g_hero.slot_in_use <= 4) ? g_hero.map : -1, user);
     dump_emit_int(emit, "map.x", hero_x_units(&g_hero), user);
     dump_emit_int(emit, "map.y", hero_y_units(&g_hero), user);
     dump_emit_int(emit, "map.fx", g_hero.x, user);
@@ -1081,7 +1100,8 @@ void map_dump(DumpEmit emit, void *user)
     dump_emit_int(emit, "map.latched", link_latched, user);
     dump_emit_int(emit, "map.enc_a", (long long)(now - cool_a), user);
     dump_emit_int(emit, "map.enc_b", (long long)(now - cool_b), user);
-    dump_emit_int(emit, "map.enc_grace", battle_end_tick ? (long long)(now - battle_end_tick) : -1, user);
+    /* Elapsed since DAT_004e70a8, which reads 0 until a fight ends (the hook's convention). */
+    dump_emit_int(emit, "map.enc_grace", (long long)(uint32_t)(now - hunt_tick), user);
     dump_emit_int(emit, "map.no_monsters", no_monsters_here, user);
     dump_emit_int(emit, "map.wander", wander_speed != 0, user);
     dump_emit_int(emit, "map.wander_legs", (long long)wander_legs, user);

@@ -42,6 +42,7 @@ void chat_render(Framebuffer *fb);
 int         chat_log_count(void);
 const char *chat_log_line(int index);
 void        chat_say(const char *text);
+void        chat_echo(const char *name, const char *text);  /* a scene or system line */
 
 /* Debug-menu and window toggles, all of which live in the original's globals. */
 int chat_overlay_terrain(void);   /* /terrain  -> DAT_004df8b4 */

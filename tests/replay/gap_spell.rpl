@@ -1,4 +1,4 @@
-# seed: 2
+# seed: 4
 # requires: hero_ready spell_learn spell_cast music_play
 # requires-match: spell_cast caster=hero
 # requires-match: spell_cast caster=monster
@@ -124,13 +124,24 @@ key DOWN
 wait 3
 text SpellStudent
 key RETURN
+# The New Soul chain (NewSoulOnOK 0x460A7E, dialog 149, dialog 180): PK review Yes,
+# ability points OK, apply the rest randomly Yes, Use This Skin.
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
+wait 2
+key RETURN
 expect hero_ready 300
 expect map_enter 600
+# Incarnate's "Place Yourself On Gaiea!" Sage box is modal over the map: answer No.
+key n
+wait 2
 keydown DOWN
 expect scene_enter 600
 keyup DOWN
-wait 40
-key RETURN
 wait 40
 key RETURN
 wait 40
@@ -212,8 +223,12 @@ key a
 wait 25
 expect battle_won 4000
 expect map_enter 4000
-click 183 184
+# The hero stays where the encounter stopped him, (188,284); (37,106) is (151,275), link 9.
+click 37 106
 expect map_enter 3000
+# The 0x46A handler lands the hero ON the Main Gate link (158,333): climb the 11 cells to row
+# 322 first, then the legs measured from there.
+hold UP 44
 hold LEFT 160
 hold UP 300
 expect scene_enter 2000

@@ -7,11 +7,12 @@
 #include <math.h>
 #include <string.h>
 
-#define SOUND_CHANNELS 8
+#define SOUND_CHANNELS 16
 #define AUDIO_RATE 44100
 #define MIX_FRAMES 256
 #define MIDI_MAX (16 * 1024 * 1024)
-static struct { Uint8 *data; Uint32 len, pos; } sounds[SOUND_CHANNELS];
+/* key < 0: an anonymous one-shot. key >= 0: the one voice of that key (plat_sound_key_*). */
+static struct { Uint8 *data; Uint32 len, pos; int key, loop; } sounds[SOUND_CHANNELS];
 static SDL_AudioDeviceID device;
 static unsigned next_channel;
 static tsf *synth;
@@ -160,13 +161,22 @@ static void mix_sounds(void *unused, Uint8 *stream, int len)
         int samples = frames * 2, i, ch;
         render_music(mix, frames);
         for (ch = 0; ch < SOUND_CHANNELS; ++ch) {
-            Uint32 count = (sounds[ch].len - sounds[ch].pos) / sizeof(Sint16);
-            const Sint16 *wav;
-            if (!count) continue;
-            wav = (const Sint16 *)(sounds[ch].data + sounds[ch].pos);
-            if (count > (Uint32)samples) count = (Uint32)samples;
-            for (i = 0; i < (int)count; ++i) mix[i] += wav[i] / 65536.0f;
-            sounds[ch].pos += count * sizeof(Sint16);
+            int done = 0;
+            while (done < samples) {
+                Uint32 count = (sounds[ch].len - sounds[ch].pos) / sizeof(Sint16);
+                const Sint16 *wav;
+                if (!count) {
+                    /* A looping voice wraps; anything else is finished. */
+                    if (!sounds[ch].loop || sounds[ch].len < sizeof(Sint16)) break;
+                    sounds[ch].pos = 0;
+                    continue;
+                }
+                wav = (const Sint16 *)(sounds[ch].data + sounds[ch].pos);
+                if (count > (Uint32)(samples - done)) count = (Uint32)(samples - done);
+                for (i = 0; i < (int)count; ++i) mix[done + i] += wav[i] / 65536.0f;
+                sounds[ch].pos += count * sizeof(Sint16);
+                done += (int)count;
+            }
         }
         /* One smooth limiter after summing: headroom without integer clipping/wrap. */
         for (i = 0; i < samples; ++i) output[i] = (Sint16)(mix[i] / (1.0f + fabsf(mix[i])) * 32767.0f);
@@ -235,35 +245,79 @@ void wos_audio_shutdown(void)
     next_channel = 0;
 }
 
-void plat_sound_play(const void *wav, size_t len)
+/* Decode a RIFF/WAVE image into the device format. Returns an SDL_malloc'd buffer. */
+static Uint8 *decode_wav(const void *wav, size_t len, Uint32 *out_len)
 {
     SDL_AudioSpec source;
     SDL_AudioCVT cvt;
-    Uint8 *decoded, *buffer, *old;
+    Uint8 *decoded, *buffer;
     Uint32 decoded_len;
-    unsigned i, channel;
-    if (!device || !wav || !len || len > INT_MAX) return;
-    if (!SDL_LoadWAV_RW(SDL_RWFromConstMem(wav, (int)len), 1, &source, &decoded, &decoded_len)) return;
+    if (!device || !wav || !len || len > INT_MAX) return NULL;
+    if (!SDL_LoadWAV_RW(SDL_RWFromConstMem(wav, (int)len), 1, &source, &decoded, &decoded_len)) return NULL;
     if (decoded_len > INT_MAX || SDL_BuildAudioCVT(&cvt, source.format, source.channels,
             source.freq, AUDIO_S16SYS, 2, AUDIO_RATE) < 0 || cvt.len_mult <= 0 ||
             decoded_len > (Uint32)(INT_MAX / cvt.len_mult)) {
-        SDL_FreeWAV(decoded); return;
+        SDL_FreeWAV(decoded); return NULL;
     }
     buffer = SDL_malloc((size_t)decoded_len * (size_t)cvt.len_mult);
-    if (!buffer) { SDL_FreeWAV(decoded); return; }
+    if (!buffer) { SDL_FreeWAV(decoded); return NULL; }
     memcpy(buffer, decoded, decoded_len); SDL_FreeWAV(decoded);
     cvt.buf = buffer; cvt.len = (int)decoded_len;
-    if (SDL_ConvertAudio(&cvt) < 0) { SDL_free(buffer); return; }
+    if (SDL_ConvertAudio(&cvt) < 0) { SDL_free(buffer); return NULL; }
+    *out_len = (Uint32)cvt.len_cvt;
+    return buffer;
+}
+
+/* Install a decoded buffer. A keyed voice reuses its key's channel, so replaying a key
+ * restarts it rather than layering a second copy. An anonymous one-shot takes a free
+ * channel, else the round-robin victim, never stealing a looping voice. */
+static void start_voice(Uint8 *buffer, Uint32 len, int key, int loop)
+{
+    Uint8 *old;
+    unsigned i, channel = SOUND_CHANNELS;
     SDL_LockAudioDevice(device);
-    channel = next_channel;
-    for (i = 0; i < SOUND_CHANNELS; ++i) {
-        if (sounds[i].pos == sounds[i].len) { channel = i; break; }
+    if (key >= 0)
+        for (i = 0; i < SOUND_CHANNELS; ++i)
+            if (sounds[i].key == key && sounds[i].data) { channel = i; break; }
+    for (i = 0; channel == SOUND_CHANNELS && i < SOUND_CHANNELS; ++i)
+        if (sounds[i].pos == sounds[i].len && !sounds[i].loop) channel = i;
+    for (i = 0; channel == SOUND_CHANNELS && i < SOUND_CHANNELS; ++i) {
+        unsigned c = (next_channel + i) % SOUND_CHANNELS;
+        if (!sounds[c].loop) channel = c;
     }
+    if (channel == SOUND_CHANNELS) channel = next_channel % SOUND_CHANNELS;
     old = sounds[channel].data;
-    sounds[channel].data = buffer; sounds[channel].len = (Uint32)cvt.len_cvt; sounds[channel].pos = 0;
+    sounds[channel].data = buffer; sounds[channel].len = len; sounds[channel].pos = 0;
+    sounds[channel].key = key; sounds[channel].loop = !!loop;
     next_channel = (channel + 1) % SOUND_CHANNELS;
     SDL_UnlockAudioDevice(device);
     SDL_free(old);
+}
+
+void plat_sound_play(const void *wav, size_t len)
+{
+    Uint32 n;
+    Uint8 *buffer = decode_wav(wav, len, &n);
+    if (buffer) start_voice(buffer, n, -1, 0);
+}
+
+void plat_sound_key_play(int key, const void *wav, size_t len, int loop)
+{
+    Uint32 n;
+    Uint8 *buffer;
+    if (key < 0) return;
+    buffer = decode_wav(wav, len, &n);
+    if (buffer) start_voice(buffer, n, key, loop);
+}
+
+void plat_sound_key_stop(int key)
+{
+    unsigned i;
+    if (!device || key < 0) return;
+    SDL_LockAudioDevice(device);
+    for (i = 0; i < SOUND_CHANNELS; ++i)
+        if (sounds[i].key == key && sounds[i].data) { sounds[i].pos = sounds[i].len; sounds[i].loop = 0; }
+    SDL_UnlockAudioDevice(device);
 }
 
 void plat_music_play(const char *midi_path, int loop)

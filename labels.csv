@@ -109,7 +109,7 @@ addr,name,comment
 004054A7,FUN_004054a7,"souls.exe function, 65 bytes"
 004054E8,HotspotAnimTick,"Advances a hotspot's animation by (idx, tick)"
 004055A2,HotspotFreeLayer,Frees all hotspots of one layer
-004055E1,FUN_004055e1,"souls.exe function, 228 bytes"
+004055E1,HotspotDrawLayer,"For each hotspot of a layer: HotspotAnimTick(i, tick) then HotspotDraw; tick is GetTickCount at paint"
 004056DF,FUN_004056df,"souls.exe function, 8 bytes"
 004056E7,HotspotAdd,"find-free-slot + register wrapper (layer,flags,tLenMs,text,font,colour,size,x/y from/to,hwnd,msg,lparam)"
 00405765,HotspotHitTest,"Hit-tests (x,y) against the hotspots and posts (hwnd,msg,slotIndex,lparam)"
@@ -267,8 +267,8 @@ addr,name,comment
 0040A532,FUN_0040a532,"souls.exe function, 11 bytes"
 0040A547,FUN_0040a547,"souls.exe function, 8 bytes"
 0040A568,FUN_0040a568,"souls.exe function, 607 bytes"
-0040A7C7,FUN_0040a7c7,"souls.exe function, 274 bytes"
-0040A8D9,FUN_0040a8d9,"souls.exe function, 368 bytes"
+0040A7C7,IdleGate20ms,"The 20 ms idle work: FUN_0042895C, heap probe, sound poke, lag meter, time() drift check"
+0040A8D9,AppRun,CWinApp::Run override: idle path (OnIdle + gate) spins while the main frame is foreground
 0040AA49,FUN_0040aa49,"souls.exe function, 21 bytes"
 0040AA5E,FUN_0040aa5e,"souls.exe function, 80 bytes"
 0040AAAE,FUN_0040aaae,"souls.exe function, 11 bytes"
@@ -450,8 +450,8 @@ addr,name,comment
 004126C8,FUN_004126c8,"souls.exe function, 23 bytes"
 004126DF,FUN_004126df,"souls.exe function, 19 bytes"
 004126F2,FUN_004126f2,"souls.exe function, 36 bytes"
-00412716,FUN_00412716,"souls.exe function, 129 bytes"
-00412797,FUN_00412797,"souls.exe function, 39 bytes"
+00412716,PetPenInit,"Loads petButtons.bmp/petPen.jpg and sets DAT_004DEA1C=1 (CSoulsView::OnCreate and ToggleGameDialog #5 open)"
+00412797,PetPenClose,"KillTimer and DAT_004DEA1C=0 (ToggleGameDialog #5 close)"
 004127BE,FUN_004127be,"souls.exe function, 130 bytes"
 00412840,FUN_00412840,"souls.exe function, 1158 bytes"
 00412CC6,FUN_00412cc6,"souls.exe function, 105 bytes"
@@ -562,10 +562,10 @@ addr,name,comment
 00418404,FUN_00418404,"souls.exe function, 8 bytes"
 00418416,FUN_00418416,"souls.exe function, 32 bytes"
 00418436,FUN_00418436,"souls.exe function, 114 bytes"
-004184B8,FUN_004184b8,"souls.exe function, 260 bytes"
+004184B8,SkinListFill,"Fills the skin list box from ListFileNames(the data skins folder, *.bmp), extensions cut"
 004185C6,FUN_004185c6,"souls.exe function, 8 bytes"
 004185CE,FUN_004185ce,"souls.exe function, 97 bytes"
-0041862F,FUN_0041862f,"souls.exe function, 154 bytes"
+0041862F,NewSoulRandomSkin,"After New Soul OK: HeroRecordReset, rand() % skin count picks the new soul skin, HUD refresh"
 004186C9,FUN_004186c9,"souls.exe function, 13 bytes"
 004186D6,FUN_004186d6,"souls.exe function, 185 bytes"
 004187F1,FUN_004187f1,"souls.exe function, 94 bytes"
@@ -779,13 +779,13 @@ addr,name,comment
 0041BDB4,FrontEndTick,"Per-frame tick driving the current front-end state (title dwell, hotspot animation)"
 0041C15C,FUN_0041c15c,"souls.exe function, 113 bytes"
 0041C1CD,FrontEndClick,Mouse-down handler dispatched by front-end state (advances title screen/menus)
-0041C2BC,FUN_0041c2bc,"souls.exe function, 140 bytes"
+0041C2BC,FrontViewOnLButtonUp,"state 1/3 hotspot hit test; state 4: 'Saw Mouseup during story state', DAT_004DF8A8=0"
 0041C348,FUN_0041c348,"souls.exe function, 68 bytes"
 0041C38C,FUN_0041c38c,"souls.exe function, 395 bytes"
 0041C543,FUN_0041c543,"souls.exe function, 169 bytes"
 0041C5EC,FUN_0041c5ec,"souls.exe function, 237 bytes"
 0041C6D9,FUN_0041c6d9,"souls.exe function, 62 bytes"
-0041C717,FUN_0041c717,"souls.exe function, 2240 bytes"
+0041C717,FrontViewOnDraw,"Front view paint: backdrop, then HotspotDrawLayer(0/1, GetTickCount()) at 0x41C7F2"
 0041CFD7,FUN_0041cfd7,"souls.exe function, 11 bytes"
 0041CFEC,FUN_0041cfec,"souls.exe function, 11 bytes"
 0041D01E,TitleStateInit,State 0: registers the Well/Souls/copyright sliding hotspots over art\title.jpg
@@ -794,6 +794,7 @@ addr,name,comment
 0041D31F,WorldSelectTitle,State 2: draws the Where Do You Want To Play Today? title text
 0041D374,DrawScanningText,Draws the --- Scanning --- text while enumerating worlds/players
 0041D3CC,WorldListDraw,Paints the visible world rows as clickable hotspots
+0041D635,WorldRowChosen,"0x474: world name, RefreshSoulList, 0x4C8, MapLoader(world,0,1), FrontEndSetState(4)"
 0041D717,WorldListInit,State 3: enumerates worlds\* and builds the full world list plus the create-world link
 0041D97A,FUN_0041d97a,"souls.exe function, 10 bytes"
 0041D984,FUN_0041d984,"souls.exe function, 14 bytes"
@@ -900,7 +901,7 @@ addr,name,comment
 00421523,FUN_00421523,"souls.exe function, 6 bytes"
 00421529,GiveItem,GIVE opcode: gives one object id
 00421563,ToggleGameDialog,Opens/closes one of the 8 modeless game dialogs (selector DAT_004e18a4)
-0042198F,FUN_0042198f,"souls.exe function, 256 bytes"
+0042198F,Dissolve,"Busy loop until GetTickCount-t0 >= ms: rand(),rand(),FillSolidRect random block; no pump (count is CPU speed)"
 00421B81,WebBrowserViewInit,State 11 setup: web browser view (dialog 0xE9 with IWebBrowser2)
 00421CA1,FUN_00421ca1,"souls.exe function, 24 bytes"
 00421CB9,FUN_00421cb9,"souls.exe function, 92 bytes"
@@ -1131,7 +1132,7 @@ addr,name,comment
 00427D37,FUN_00427d37,"souls.exe function, 8 bytes"
 00427D3F,FUN_00427d3f,"souls.exe function, 54 bytes"
 00427D75,FUN_00427d75,"souls.exe function, 20 bytes"
-00427D89,ClearHotspotLayer,Clears the hotspot layer/stepper between front-end states
+00427D89,HeroSlotAllocate,"Slot 0: in_use=1, serial=DAT_004DD20C (boot, before the serial is known, and PlayNowHandler); also resets world name and scene tables"
 00427E3F,FUN_00427e3f,"souls.exe function, 78 bytes"
 00427EAB,FUN_00427eab,"souls.exe function, 14 bytes"
 00427EF0,FUN_00427ef0,"souls.exe function, 10 bytes"
@@ -1144,9 +1145,9 @@ addr,name,comment
 00428360,FUN_00428360,"souls.exe function, 25 bytes"
 004288D1,FUN_004288d1,"souls.exe function, 104 bytes"
 00428939,FUN_00428939,"souls.exe function, 35 bytes"
-0042895C,FUN_0042895c,"souls.exe function, 797 bytes"
+0042895C,NetGraphTick,"One discarded rand(), then the 25 ms world sub-gate"
 00428C79,FUN_00428c79,"souls.exe function, 22 bytes"
-00428C8F,FUN_00428c8f,"souls.exe function, 55 bytes"
+00428C8F,FrameTimer16,Main frame WM_TIMER id 0x16 handler: enters FUN_0040A7C7 under a re-entrancy guard
 00428D43,AbortToTitle,Abort / back to title: DAT_004df8a4 = -1 then FUN_0041b891(3)
 00428DEA,FUN_00428dea,"souls.exe function, 99 bytes"
 00428E4D,FUN_00428e4d,"souls.exe function, 1069 bytes"
@@ -1157,16 +1158,18 @@ addr,name,comment
 004294D4,FUN_004294d4,"souls.exe function, 11 bytes"
 004294DF,FUN_004294df,"souls.exe function, 11 bytes"
 004294F4,FUN_004294f4,"souls.exe function, 8 bytes"
+00429547,OnChangeMap,"msg 0x46A(link, map): MapLoader, then the hero ON the link (x, y) with DAT_004F222C (latch) set"
 00429693,FUN_00429693,"souls.exe function, 28 bytes"
+004296AF,OnLeaveSceneMsg,"msg 0x476: CloseOverlaysGoMap(1) when a view exists"
 004296C5,FUN_004296c5,"souls.exe function, 88 bytes"
 004299EC,FUN_004299ec,"souls.exe function, 27 bytes"
-00429A07,FUN_00429a07,"souls.exe function, 42 bytes"
-00429A31,FUN_00429a31,"souls.exe function, 327 bytes"
+00429A07,ResetCustomSounds,"Clears the custom sound table 0x54D578 (boot, sound prefs change)"
+00429A31,PlaySoundId,"Sound id -> buffer: 0..65 built-in table 0x4E62E0, 1000..1255 custom 0x54D578; modes 0 stop/1 once/2 loop"
 00429B78,FUN_00429b78,"souls.exe function, 84 bytes"
-00429BCC,FUN_00429bcc,"souls.exe function, 208 bytes"
+00429BCC,SoundNameToId,"Lowercase + .wav, find or register in the 256-slot custom table; returns 1000+slot or -1"
 00429C9C,PlaySoundFile,"Looks up and plays a wav by name (e.g. MainMenu.wav, OpenDialog.wav)"
 00429CC5,FUN_00429cc5,"souls.exe function, 27 bytes"
-00429CE0,FUN_00429ce0,"souls.exe function, 90 bytes"
+00429CE0,StopAllSounds,Stops every loaded built-in and custom sound id
 00429DAE,FUN_00429dae,"souls.exe function, 26 bytes"
 00429DC8,FUN_00429dc8,"souls.exe function, 34 bytes"
 00429DEA,FUN_00429dea,"souls.exe function, 38 bytes"
@@ -1189,7 +1192,7 @@ addr,name,comment
 0042B3EA,FUN_0042b3ea,"souls.exe function, 99 bytes"
 0042B44D,FUN_0042b44d,"souls.exe function, 76 bytes"
 0042B499,FUN_0042b499,"souls.exe function, 71 bytes"
-0042B4E0,FUN_0042b4e0,"souls.exe function, 63 bytes"
+0042B4E0,SrnMixer,"Five rand() + GetTickCount per iteration, repeats while the fold & 0x3FFFFFFF is 0"
 0042B51F,FUN_0042b51f,"souls.exe function, 77 bytes"
 0042B56C,FUN_0042b56c,"souls.exe function, 70 bytes"
 0042B5BC,FUN_0042b5bc,"souls.exe function, 8 bytes"
@@ -1291,7 +1294,10 @@ addr,name,comment
 00436724,FUN_00436724,"souls.exe function, 8 bytes"
 00436B03,BitLength,floor(log2(n))+1
 00436B15,PartyLevelBitlen,bitlen(party[0].+0xA04) - 3 clamped at 0: the party level used by the encounter roll
+00436B2F,OnHunt,"Hunt button (msg 0x4CB): incarnated and no hunt running: hunting skill +1 (hero+0xA04), level message, drum2.wav, stamps DAT_004E70A8, ++DAT_004E70AC"
 00436C9D,FleeTest,Flee success test used by the Flee button
+00436DF5,OnLeaveScene,"msg 0x47F: FleeTest unless forced, else CloseOverlaysGoMap(1), FrontEndSetState(6)"
+00436E8D,ExitScene,"msg 0x480 (leaving a scene): CloseOverlaysGoMap(1), Done with ExitScene"
 00436F05,FUN_00436f05,"souls.exe function, 188 bytes"
 00436FC1,PlayMidi,Plays a MIDI file (MUSIC opcode; empty name or missing file = silence)
 00436FFC,SwitchMap,"Actual map switch: sets DAT_004e70b4, picks the music.ini midi<N>, calls FUN_00436fc1"
@@ -1621,7 +1627,7 @@ addr,name,comment
 004479B9,FUN_004479b9,"souls.exe function, 505 bytes"
 00447BB2,FUN_00447bb2,"souls.exe function, 102 bytes"
 00447C18,FUN_00447c18,"souls.exe function, 273 bytes"
-00447D29,FUN_00447d29,"souls.exe function, 251 bytes"
+00447D29,SceneTickRand,"Called by SceneTick: one unconditional rand, then work gated on FUN_0043E467 (no further rand offline)"
 00447E24,FUN_00447e24,"souls.exe function, 123 bytes"
 00447E9F,FUN_00447e9f,"souls.exe function, 828 bytes"
 004481EF,FUN_004481ef,"souls.exe function, 136 bytes"
@@ -1648,7 +1654,7 @@ addr,name,comment
 00449144,FUN_00449144,"souls.exe function, 492 bytes"
 004496E7,FUN_004496e7,"souls.exe function, 247 bytes"
 004497DE,FUN_004497de,"souls.exe function, 107 bytes"
-00449851,FUN_00449851,"souls.exe function, 44 bytes"
+00449851,AbilityPointsOnOK,"Dialog 149 OK: unapplied points -> Sage 'apply the rest randomly?' Yes -> FUN_00449BD6"
 0044987D,FUN_0044987d,"souls.exe function, 33 bytes"
 004499F0,FUN_004499f0,"souls.exe function, 13 bytes"
 004499FD,FUN_004499fd,"souls.exe function, 13 bytes"
@@ -1658,7 +1664,7 @@ addr,name,comment
 00449AA2,CheckAbilityIntegrity,"Integrity hash of the 5 base abilities, stored at hero+0xABC"
 00449B16,CheckElementPPIntegrity,Integrity hash of the 8 per-element max PP at hero+0x6CC
 00449B76,CheckHandPPIntegrity,Integrity hash of the 8 per-hand max PP at hero+0x6FC
-00449BD6,FUN_00449bd6,"souls.exe function, 340 bytes"
+00449BD6,AbilityPointsRandom,"Spends remaining ability points with rand()%5 picks, capped at 1000 tries"
 00449D2A,FUN_00449d2a,"souls.exe function, 200 bytes"
 00449DF2,FUN_00449df2,"souls.exe function, 29 bytes"
 00449E0F,FUN_00449e0f,"souls.exe function, 40 bytes"
@@ -1982,17 +1988,17 @@ addr,name,comment
 004569AA,FUN_004569aa,"souls.exe function, 126 bytes"
 00456A30,FUN_00456a30,"souls.exe function, 92 bytes"
 00456A8C,FUN_00456a8c,"souls.exe function, 21 bytes"
-00456AA1,FUN_00456aa1,"souls.exe function, 139 bytes"
-00456B2C,FUN_00456b2c,"souls.exe function, 26 bytes"
-00456B46,FUN_00456b46,"souls.exe function, 65 bytes"
-00456B87,FUN_00456b87,"souls.exe function, 90 bytes"
-00456BE1,FUN_00456be1,"souls.exe function, 112 bytes"
-00456C51,FUN_00456c51,"souls.exe function, 61 bytes"
-00456C8E,FUN_00456c8e,"souls.exe function, 100 bytes"
-00456CF2,FUN_00456cf2,"souls.exe function, 61 bytes"
-00456D2F,SetSceneTheme,"Sets the scene/map sound theme (THEME opcode; -1 stops, 0 = nearest link's theme)"
-00456EB6,FUN_00456eb6,"souls.exe function, 11 bytes"
-00456EC1,FUN_00456ec1,"souls.exe function, 98 bytes"
+00456AA1,EnvSoundTick,"Per world step (FUN_0041BDB4): fires due theme one-shots, re-arms delay=(period/4 + rand()%(period*2))*1000"
+00456B2C,EnvThemeStop,"If a theme is active: FUN_00429CE0 (stop all sounds), clear the flag"
+00456B46,EnvThemeInstall,"Stops the active theme, copies the 0x80C table to 0x5EB0E0, loops its sound (mode 2)"
+00456B87,EnvThemeAppend,"Appends one one-shot {id,stamp,period,delay=(rand()%(period*2))*1000}; cap 0x80; one rand()"
+00456BE1,EnvAppendChirps,"Theme one-shots: chirp1..8 (ids 5..12), period 30"
+00456C51,EnvAppendThunder,"Theme 2 one-shots: thunder1..4 (ids 14..17), period 30"
+00456C8E,EnvAppendWind,"Theme 3/4 one-shots: wind2..8 (ids 19..25), period 30"
+00456CF2,EnvAppendFire,"Theme 7 one-shots: fire1..4 (ids 28..31), period 10"
+00456D2F,SetSceneTheme,"Environmental sound theme (gated by enableSFX/enableEnvironmentalSounds/enableSoundCard): world +THEMES override, else built-ins 1..8; THEME opcode 0 = nearest link theme"
+00456EB6,EnvThemeTitle,SetSceneTheme(2); called by FrontEndSetState case 0
+00456EC1,WorldSoundTheme,World +THEMES override for ids 1..255: loop (if >0) and up to 20 one-shots
 00456F23,FUN_00456f23,"souls.exe function, 126 bytes"
 00456FE5,`scalar_deleting_destructor',"souls.exe function, 85 bytes"
 0045703A,FUN_0045703a,"souls.exe function, 14 bytes"
@@ -2015,7 +2021,7 @@ addr,name,comment
 004578D2,FUN_004578d2,"souls.exe function, 268 bytes"
 004579E8,FUN_004579e8,"souls.exe function, 11 bytes"
 004579F3,FUN_004579f3,"souls.exe function, 17 bytes"
-00457A0C,FUN_00457a0c,"souls.exe function, 289 bytes"
+00457A0C,SageBoxDialog,"Dialog 164: the Sage message box (Yes 1091 / No 1092, OK/Cancel hidden)"
 00457C21,FUN_00457c21,"souls.exe function, 148 bytes"
 00457CB5,FUN_00457cb5,"souls.exe function, 14 bytes"
 00457CC3,FUN_00457cc3,"souls.exe function, 14 bytes"
@@ -2295,7 +2301,7 @@ addr,name,comment
 004624C3,FUN_004624c3,"souls.exe function, 15 bytes"
 004624D2,NameHash,"Hash of the soul name string at hero+0x14, stored at hero+0x2AE"
 004624EF,MarkSelfAttacked,Marks I am the one being attacked / world-CRC bookkeeping
-0046259A,PostBattleGrace,2 s post-battle grace period and the There are no monsters here - hunt hint
+0046259A,HuntWindow,"The 2 s hunt window after a Hunt press (DAT_004E70A8): (elapsed*100)/2000, then clears it and prints There are no monsters here, hunt somewhere else."
 004625EE,NearestLinkIsSafe,True when the nearest link is kind 4 (a no-random-monsters-here link)
 0046260E,EncounterRoll,"Random-encounter roll plus nearby-player scan, once per frame from FUN_00462958"
 00462958,MapTick,"Map tick: camera, nearest link, link activation, encounter roll, monster zones"
@@ -2419,8 +2425,8 @@ addr,name,comment
 00468253,FUN_00468253,"souls.exe function, 30 bytes"
 00468271,FUN_00468271,"souls.exe function, 59 bytes"
 004682B6,FUN_004682b6,"souls.exe function, 8 bytes"
-004682CA,FUN_004682ca,"souls.exe function, 82 bytes"
-0046831C,FUN_0046831c,"souls.exe function, 198 bytes"
+004682CA,SoundCardInit,"DirectSound create; on success starts the music thread (FUN_00468EA1)"
+0046831C,MusicShutdown,"close song, set DAT_004F416C=1, wait up to 3000 ms in Sleep(100) for the music thread to clear it"
 004683E2,FUN_004683e2,"souls.exe function, 164 bytes"
 00468486,FUN_00468486,"souls.exe function, 90 bytes"
 004684E0,FUN_004684e0,"souls.exe function, 629 bytes"
@@ -2428,7 +2434,7 @@ addr,name,comment
 00468827,FUN_00468827,"souls.exe function, 8 bytes"
 00468839,FUN_00468839,"souls.exe function, 8 bytes"
 00468841,FUN_00468841,"souls.exe function, 99 bytes"
-0046890D,FUN_0046890d,"souls.exe function, 333 bytes"
+0046890D,SoundBufferPlay,"DirectSound buffer op: 0 Stop, 1 restart one-shot (needs enableSFX), 2 Play looping, 3 play and wait"
 00468A5A,FUN_00468a5a,"souls.exe function, 59 bytes"
 00468A9A,FUN_00468a9a,"souls.exe function, 25 bytes"
 00468AC8,FUN_00468ac8,"souls.exe function, 44 bytes"
@@ -2447,7 +2453,7 @@ addr,name,comment
 00468F17,FUN_00468f17,"souls.exe function, 56 bytes"
 00468F4F,FUN_00468f4f,"souls.exe function, 638 bytes"
 004691F6,FUN_004691f6,"souls.exe function, 51 bytes"
-00469229,FUN_00469229,"souls.exe function, 493 bytes"
+00469229,MusicThread,"MIDI thread: polls DAT_004F416C every 100 ms; open/play/loop via MCI"
 00469416,FUN_00469416,"souls.exe function, 230 bytes"
 004695B5,FUN_004695b5,"souls.exe function, 121 bytes"
 0046962E,FUN_0046962e,"souls.exe function, 14 bytes"
@@ -2881,7 +2887,7 @@ addr,name,comment
 00478C6F,ButtonBarFire,"Fires a button-bar slot: SendMessage(parentHwnd,msg,0,0)"
 00478D00,FUN_00478d00,"souls.exe function, 83 bytes"
 00478D53,FUN_00478d53,"souls.exe function, 106 bytes"
-00478DBD,FUN_00478dbd,"souls.exe function, 71 bytes"
+00478DBD,ButtonBarHunt,"Registers (or clears) button-bar slot 6 Hunt (buttonHunt.bmp, msg 0x4CB) in map mode for a live hero"
 00478E04,FUN_00478e04,"souls.exe function, 86 bytes"
 00478E5A,ButtonBarFightExtra,FIGHT button-bar extra: the Flee/Exit slot
 00478EAC,FUN_00478eac,"souls.exe function, 147 bytes"
@@ -2992,7 +2998,7 @@ addr,name,comment
 004824B4,EquipTypesParser,+EQUIP TYPES table parser
 004825BF,FUN_004825bf,"souls.exe function, 32 bytes"
 004825DF,HandsParser,+HANDS table parser
-0048282E,SoundThemesParser,+SOUND THEMES table parser
+0048282E,SoundThemesParser,"+THEMES parser: id, name, loopSound, seconds=sound one-shots (custom sound ids via FUN_00429BCC)"
 00482A58,FUN_00482a58,"souls.exe function, 31 bytes"
 00482A77,FUN_00482a77,"souls.exe function, 14 bytes"
 00482A9F,FUN_00482a9f,"souls.exe function, 72 bytes"
@@ -3022,10 +3028,10 @@ addr,name,comment
 00485847,FUN_00485847,"souls.exe function, 110 bytes"
 004858B5,FUN_004858b5,"souls.exe function, 237 bytes"
 004859A2,FUN_004859a2,"souls.exe function, 100 bytes"
-00485A06,FUN_00485a06,"souls.exe function, 1016 bytes"
+00485A06,StoryScroller,"Draws +STORY text scrolled 1 px / 35 ms; returns 0 once no line intersects the view"
 00485E31,FUN_00485e31,"souls.exe function, 8 bytes"
 00485E39,FUN_00485e39,"souls.exe function, 60 bytes"
-00485E75,MoveActor,"MOVE opcode: moves an actor (mode 1 = teleport, 2..5 = 2x..5x walk speed)"
+00485E75,ActorSetPoses,"POSE p [,p2,p3]: the three idle frames (missing ones repeat p), stamp, dwell 0, idle state 1"
 00485F21,NpcIdlePoses,Cycles idle poses 1/2/3 for NPCs on a 200 ms tick with a 0..14 frame dwell
 00485FF5,FUN_00485ff5,"souls.exe function, 206 bytes"
 004860C3,FUN_004860c3,"souls.exe function, 12 bytes"
@@ -3052,7 +3058,7 @@ addr,name,comment
 00486A60,FUN_00486a60,"souls.exe function, 699 bytes"
 00486D20,BlitSprite,Software sprite blitter with colour key (bottom-left pixel) and effect modes
 00487350,FUN_00487350,"souls.exe function, 324 bytes"
-004874A0,FUN_004874a0,"souls.exe function, 1553 bytes"
+004874A0,SceneBackdropFx,"Backdrop blit into the view with the scene fx: 0 plain, 1 sine shimmer, 2 lake reflection below param% of the height, 3..5 scanlines/jitter/quake"
 00487AD0,StretchBlit,Stretch-blits a picture into a destination rect
 00487D76,FUN_00487d76,"souls.exe function, 8 bytes"
 00487D80,FUN_00487d80,"souls.exe function, 396 bytes"
@@ -3119,7 +3125,7 @@ addr,name,comment
 0048A019,FUN_0048a019,"souls.exe function, 18 bytes"
 0048A02B,FUN_0048a02b,"souls.exe function, 22 bytes"
 0048A041,FUN_0048a041,"souls.exe function, 30 bytes"
-0048A05F,FUN_0048a05f,"souls.exe function, 328 bytes"
+0048A05F,JpegResizeExternal,"ShellExecuteEx cresizer.exe into temp\sceneCache, then Sleep(50), WaitForSingleObject(5000), Sleep(100) on the UI thread"
 0048A1A7,SceneBackgroundLoad,Loads the scene background jpg (world/scenes then scenes) with a temp/sceneCache cache
 0048A316,StateBackgroundLoad,Sets a front-end state's background image (view+0x34A8)
 0048A3A5,FUN_0048a3a5,"souls.exe function, 153 bytes"
@@ -3168,7 +3174,7 @@ addr,name,comment
 0048C396,FUN_0048c396,"souls.exe function, 549 bytes"
 0048C5FE,GameOpcode,GAME n opcode (mini-game); non-zero means the next line is the button label
 0048C8BC,FUN_0048c8bc,"souls.exe function, 8 bytes"
-0048C8C4,FUN_0048c8c4,"souls.exe function, 458 bytes"
+0048C8C4,SceneTick,"Scene view tick, 50 ms gate at view+0xF8: battle state machine, camera, SceneTickRand, InvalidateRect"
 0048CA8E,FUN_0048ca8e,"souls.exe function, 42 bytes"
 0048CAB8,Arg5DottedParse,Parses the dotted tail of arg5 (item/spell art reference)
 0048CB3C,FUN_0048cb3c,"souls.exe function, 138 bytes"
@@ -3230,7 +3236,7 @@ addr,name,comment
 00492368,FUN_00492368,"souls.exe function, 90 bytes"
 004923C2,ActorPlaceAuto,"ACTOR with x,y omitted: places the actor automatically"
 004923EC,ActorPlaceXY,"ACTOR with x,y: places the actor at that position"
-00492563,PoseOpcode,"POSE p [,p2,p3] opcode"
+00492563,ActorMoveTo,"MOVE opcode: target x,y in percent (mode 1 = teleport, 2..5 = 2x..5x walk speed)"
 00492655,FUN_00492655,"souls.exe function, 403 bytes"
 004927F2,FUN_004927f2,"souls.exe function, 8 bytes"
 004927FA,DrawBehindActors,Scene paint pass 1: backgrounds and behind-actor effects
@@ -3259,7 +3265,7 @@ addr,name,comment
 00494FCD,OnDeath,"Death handling: message, death counter, solo-mode full resurrect"
 004952CF,FUN_004952cf,"souls.exe function, 655 bytes"
 0049555E,FUN_0049555e,"souls.exe function, 943 bytes"
-0049590D,FUN_0049590d,"souls.exe function, 117 bytes"
+0049590D,ActorBreathe,"ScenePaint every 100 ms per actor: one rand, a 3-in-8 hold, else steps rec+0x29C between 2 and 32"
 00495982,FUN_00495982,"souls.exe function, 40 bytes"
 004959AA,FUN_004959aa,"souls.exe function, 226 bytes"
 00495A8C,FUN_00495a8c,"souls.exe function, 39 bytes"
@@ -3273,7 +3279,7 @@ addr,name,comment
 00495E6E,SetSceneCursor,Sets the cursor for the current scene interaction mode
 00495EBD,FUN_00495ebd,"souls.exe function, 476 bytes"
 004960B3,FUN_004960b3,"souls.exe function, 8 bytes"
-004960BB,FUN_004960bb,"souls.exe function, 1236 bytes"
+004960BB,SceneWeather,"ScenePaint weather (view+0x6C): 1-3 rain smear, 4-6 speckles, 7-9 snow particles at 0xD21730, n*1000+c recoloured"
 004965B3,FUN_004965b3,"souls.exe function, 45 bytes"
 004965E0,FUN_004965e0,"souls.exe function, 45 bytes"
 0049660D,FUN_0049660d,"souls.exe function, 28 bytes"
