@@ -617,7 +617,7 @@ int game_main(int argc, char **argv)
      * 1000/60 ms virtual step so the existing .rpl acceptance tests are
      * bit-identical. */
     while(!quitting) {
-        PlatEvent event; const Screen *screen; int delivered = 0;
+        PlatEvent event; const Screen *screen; int delivered = 0, dump_only = 0;
         input_begin(&input);
         while(plat_poll_event(&event)) if(!replay || event.type==PLAT_EV_QUIT) input_event(&input,&event);
         if(input.quit) break;
@@ -643,7 +643,7 @@ int game_main(int argc, char **argv)
                 int timer_first = tdl != UINT32_MAX && (int32_t)(tdl - clock_ms()) <= 0 &&
                                   (int32_t)(tdl - op_at) < 0;
                 const DscriptOp *op = timer_first ? NULL : dscript_take(script, clock_ms());
-                if(op) { apply_script_op(op,&input); delivered = 1; }
+                if(op) { apply_script_op(op,&input); delivered = 1; dump_only = op->kind == DS_DUMP; }
             }
             {
                 uint32_t next = dscript_next_time(script, clock_ms());
@@ -693,11 +693,16 @@ int game_main(int argc, char **argv)
             if (!world_tick_pending) continue;
             world_tick_pending = 0;
         }
+        /* A dump is the oracle hook reading memory: it takes a pump step like any op, but
+         * it is not a message to the game, so nothing updates or paints for it. */
+        if (dump_only) continue;
         /* An iteration that only delivers input is a message handler, not FUN_0041BDB4. */
         world_step_now = !(script && delivered);
         scene_tick_if_any();
-        env_tick();                 /* FUN_00456AA1, on both arms of the world step FUN_0041BDB4 */
         screen=screen_current(); if(screen && screen->update) screen->update(&input);
+        /* FUN_00456AA1, on both arms of the world step FUN_0041BDB4, after the state's own
+         * work (the Well's scene tick and paint come first in the oracle's rand trace). */
+        env_tick();
         fb_reset_clip(&fb); fb_clear(&fb,0);
         screen=screen_current(); if(screen && screen->render) screen->render(&fb);
         if(replay && replay->shot_path && save_shot(&fb,replay->shot_path)) {

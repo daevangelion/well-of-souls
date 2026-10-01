@@ -1622,7 +1622,7 @@ addr,name,comment
 004479B9,FUN_004479b9,"souls.exe function, 505 bytes"
 00447BB2,FUN_00447bb2,"souls.exe function, 102 bytes"
 00447C18,FUN_00447c18,"souls.exe function, 273 bytes"
-00447D29,FUN_00447d29,"souls.exe function, 251 bytes"
+00447D29,SceneTickRand,"Called by SceneTick: one unconditional rand, then work gated on FUN_0043E467 (no further rand offline)"
 00447E24,FUN_00447e24,"souls.exe function, 123 bytes"
 00447E9F,FUN_00447e9f,"souls.exe function, 828 bytes"
 004481EF,FUN_004481ef,"souls.exe function, 136 bytes"
@@ -3026,7 +3026,7 @@ addr,name,comment
 00485A06,StoryScroller,"Draws +STORY text scrolled 1 px / 35 ms; returns 0 once no line intersects the view"
 00485E31,FUN_00485e31,"souls.exe function, 8 bytes"
 00485E39,FUN_00485e39,"souls.exe function, 60 bytes"
-00485E75,MoveActor,"MOVE opcode: moves an actor (mode 1 = teleport, 2..5 = 2x..5x walk speed)"
+00485E75,ActorSetPoses,"POSE p [,p2,p3]: the three idle frames (missing ones repeat p), stamp, dwell 0, idle state 1"
 00485F21,NpcIdlePoses,Cycles idle poses 1/2/3 for NPCs on a 200 ms tick with a 0..14 frame dwell
 00485FF5,FUN_00485ff5,"souls.exe function, 206 bytes"
 004860C3,FUN_004860c3,"souls.exe function, 12 bytes"
@@ -3169,7 +3169,7 @@ addr,name,comment
 0048C396,FUN_0048c396,"souls.exe function, 549 bytes"
 0048C5FE,GameOpcode,GAME n opcode (mini-game); non-zero means the next line is the button label
 0048C8BC,FUN_0048c8bc,"souls.exe function, 8 bytes"
-0048C8C4,FUN_0048c8c4,"souls.exe function, 458 bytes"
+0048C8C4,SceneTick,"Scene view tick, 50 ms gate at view+0xF8: battle state machine, camera, SceneTickRand, InvalidateRect"
 0048CA8E,FUN_0048ca8e,"souls.exe function, 42 bytes"
 0048CAB8,Arg5DottedParse,Parses the dotted tail of arg5 (item/spell art reference)
 0048CB3C,FUN_0048cb3c,"souls.exe function, 138 bytes"
@@ -3231,7 +3231,7 @@ addr,name,comment
 00492368,FUN_00492368,"souls.exe function, 90 bytes"
 004923C2,ActorPlaceAuto,"ACTOR with x,y omitted: places the actor automatically"
 004923EC,ActorPlaceXY,"ACTOR with x,y: places the actor at that position"
-00492563,PoseOpcode,"POSE p [,p2,p3] opcode"
+00492563,ActorMoveTo,"MOVE opcode: target x,y in percent (mode 1 = teleport, 2..5 = 2x..5x walk speed)"
 00492655,FUN_00492655,"souls.exe function, 403 bytes"
 004927F2,FUN_004927f2,"souls.exe function, 8 bytes"
 004927FA,DrawBehindActors,Scene paint pass 1: backgrounds and behind-actor effects
@@ -3260,7 +3260,7 @@ addr,name,comment
 00494FCD,OnDeath,"Death handling: message, death counter, solo-mode full resurrect"
 004952CF,FUN_004952cf,"souls.exe function, 655 bytes"
 0049555E,FUN_0049555e,"souls.exe function, 943 bytes"
-0049590D,FUN_0049590d,"souls.exe function, 117 bytes"
+0049590D,ActorBreathe,"ScenePaint every 100 ms per actor: one rand, a 3-in-8 hold, else steps rec+0x29C between 2 and 32"
 00495982,FUN_00495982,"souls.exe function, 40 bytes"
 004959AA,FUN_004959aa,"souls.exe function, 226 bytes"
 00495A8C,FUN_00495a8c,"souls.exe function, 39 bytes"
@@ -3274,7 +3274,7 @@ addr,name,comment
 00495E6E,SetSceneCursor,Sets the cursor for the current scene interaction mode
 00495EBD,FUN_00495ebd,"souls.exe function, 476 bytes"
 004960B3,FUN_004960b3,"souls.exe function, 8 bytes"
-004960BB,FUN_004960bb,"souls.exe function, 1236 bytes"
+004960BB,SceneWeather,"ScenePaint weather (view+0x6C): 1-3 rain smear, 4-6 speckles, 7-9 snow particles at 0xD21730, n*1000+c recoloured"
 004965B3,FUN_004965b3,"souls.exe function, 45 bytes"
 004965E0,FUN_004965e0,"souls.exe function, 45 bytes"
 0049660D,FUN_0049660d,"souls.exe function, 28 bytes"

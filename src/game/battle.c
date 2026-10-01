@@ -535,6 +535,14 @@ void battle_scene_begin(void)
 {
     rand1(); /* FUN_0048e19A: rand()%0x3E0A0 & 0xFFFFFFF0 */
 }
+/* ActorPlaceXY (0x4923EC): a scene ACTOR is a combatant made by AllocCombatant(-2), so it
+ * costs the same four seals of 100 as any other slot (0x49243F in the oracle trace). */
+void battle_scene_actor(void)
+{
+    Combatant actor;
+    memset(&actor,0,sizeof actor);
+    combatant_create(&actor);
+}
 void battle_scene_hero(void)
 {
     Combatant *hero = &scene_hero;

@@ -39,6 +39,7 @@ void battle_begin(const int *ids, int count, int difficulty, int distance_pct);
  * scene start makes them, in that order; battle_begin_ex uses the hero made here. */
 void battle_scene_begin(void);
 void battle_scene_hero(void);
+void battle_scene_actor(void);
 /* '+n' from the FIGHT opcode: `pets` hero pets are present and the fight's monsters attack
  * them before the host (rec[+0x2B8] in FUN_0048b07f). 0 clears. */
 void battle_set_pets(int pets);

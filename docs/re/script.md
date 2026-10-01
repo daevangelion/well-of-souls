@@ -177,7 +177,13 @@ tokens of the current line, expanding `%X` substitutions in place, and returns t
 | `+0x3E060/64/6C` | scene fx / weather / colorTable |
 
 PC semantics: the interpreter runs **one line per call**; every opcode advances
-`*(int*)(DAT_004E4874+0x120)++` unless it jumps. `*param_2` is set to 1 to request another step.
+`*(int*)(DAT_004E4874+0x120)++` unless it jumps. `*param_2` is set to 1 to request another step,
+and BattleStateMachine (0x490E7C) case 1 calls it again, up to 50 lines in one tick, while it is.
+The lines that leave it 0 are WAIT, FIGHT, ASK, END, TOKEN, FIGHT2, HTML, the two server-variable
+opcodes (0x35/0x36), TIMER, an unknown keyword and a line that tokenizes to nothing. Speech (`'`,
+`N:`, `H:`) goes through WaitBubbleClear (0x46C44A): while a bubble is still up it returns 0 and the
+PC stays, otherwise it sets the new bubble and the PC advances, so the lines after a speech line
+run at once (the Well script's own comments rely on this: the Sage walks with his bubble up).
 `DAT_004FB00C` is a re-entrancy guard; `DAT_004FA84C` is the total line count.
 
 ### 2.2 Opcode → keyword table
@@ -190,8 +196,8 @@ PC semantics: the interpreter runs **one line per call**; every opcode advances
 | 0x03 | `GOTO <label>` | label may be `47@label` | `FUN_0047a77b`; sets `+0x11C` if a scene number was given [V] |
 | 0x04 | `GOTO EXIT` / `GOTO SCENE n` / `GOTO LINK map,link[,dropin]` / bare label | | `_stricmp(tok0,"EXIT")` → PostMessage 0x480 then PC = −1; `"SCENE"` → PostMessage(0x475, n) then PC = −1; `"LINK"` → SendMessage(0x476) + (0x46a, link, map), and if dropin≠0 clears the fade flags; anything else → label jump [V] |
 | 0x05 | `ACTOR` | `id[.layer], "name", skin, pose, x, y [,colorTable][,pain.wav][,mode]` | 6 numeric args, name/skin strings; stores `id & 0x3F` into `+0x3E028`; if x,y omitted calls `FUN_004923c2`, else `FUN_004923ec` [V] |
-| 0x06 | `POSE` | `POSE p [,p2,p3]` | 3 args → `FUN_00492563` [V] |
-| 0x07 | `MOVE` | `MOVE id, x, y [,mode]` | 3 args → `FUN_00485e75`; mode 1 = teleport, 2..5 = 2×..5× walk speed; `MOVE H,..` moves the host [V] |
+| 0x06 | `MOVE` | `MOVE id, x, y [,mode]` | 3 args → `FUN_00492563` (ActorMoveTo); mode 1 = teleport, 2..5 = 2×..5× walk speed; `MOVE H,..` moves the host [V] |
+| 0x07 | `POSE` | `POSE p [,p2,p3]` | → `FUN_00485e75` (ActorSetPoses): missing poses repeat p, idle state 1 [V] |
 | 0x08 | `SEL` | `SEL <actorId>` | `*(DAT_004E4874+0x3E028) = atoi(arg)` [V] |
 | 0x09 | `'` or `N:` | raw text after the token | `FUN_0047cfde` bubble; waits (`FUN_0046c44a`) until the previous bubble clears before advancing [V] |
 | 0x0A | `WAIT` | `WAIT <seconds float>` | stores `GetTickCount()` at `+0x3E038`, `ftol(atof)` at `+0x3E03C`, returns state 2 (blocked, no PC advance) [V] |
@@ -781,8 +787,10 @@ shipped data): `FACE`, `COLOR`, `HTML`, `CALL`/`RETURN`, `PUSH`/`POP`, `SET_LEN`
    are all aliases** for one opcode.
 8. **`%` substitution happens in every argument**, not just dialogue, so a literal `%` in any
    argument must be doubled.
-9. **The interpreter runs one line per call** and several opcodes *return without advancing the
-   PC* (WAIT/ASK/FIGHT/HTML/GAME) — a port must model that as a suspended state, not a loop.
+9. **The interpreter runs one line per call**, but BattleStateMachine calls it up to 50 times a
+   tick while each line asks for another (see 2.1), and several opcodes *return without advancing
+   the PC* (WAIT/ASK/FIGHT/HTML/GAME, and speech while a bubble is up) — a port must model those as
+   suspended states.
 10. `FIGHT` resolves the party/mercenaries by scanning the scene's 144 hero slots, so a
     single-player port can shortcut straight to building the monster list.
 
