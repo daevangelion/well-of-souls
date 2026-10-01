@@ -232,11 +232,26 @@ static int save_shot(const Framebuffer *fb, const char *path)
     wos_log_event("shot","path=%s",path); return 0;
 }
 
+/* --dump-shots DIR: at every `dump <label>` also save DIR/<label>.bmp, as the oracle hook
+ * does (do_dump writes the text, then repaints and captures the client). The repaint is
+ * the screen's own render, so a shot shows what the player would see at that label. */
+static const char *g_dump_shot_dir;
+static Framebuffer *g_dump_shot_fb;
+static void dump_shot(const char *label)
+{
+    char path[4096]; const Screen *screen = screen_current(); int n;
+    if (!g_dump_shot_dir || !g_dump_shot_fb) return;
+    fb_reset_clip(g_dump_shot_fb); fb_clear(g_dump_shot_fb, 0);
+    if (screen && screen->render) screen->render(g_dump_shot_fb);
+    n = snprintf(path, sizeof(path), "%s/%s.bmp", g_dump_shot_dir, label);
+    if (n > 0 && (size_t)n < sizeof(path)) (void)save_shot(g_dump_shot_fb, path);
+}
+
 static void usage(void)
 {
     fputs("Usage: wos --data DIR [--save DIR] [--headless] [--replay FILE] [--script FILE]\n"
           "          [--log FILE] [--dump FILE] [--time EPOCH_S] [--max-frames N]\n"
-          "          [--seed N] [--shot-every N DIR]\n", stderr);
+          "          [--seed N] [--shot-every N DIR] [--dump-shots DIR]\n", stderr);
 }
 
 /* --- seeding ----------------------------------------------------------------
@@ -453,7 +468,7 @@ static void apply_script_op(const DscriptOp *op, Input *input)
     case DS_DIALOG:
         apply_dialog_op(op);
         break;
-    case DS_DUMP: dump_one(op->text); break;
+    case DS_DUMP: dump_one(op->text); dump_shot(op->text); break;
     case DS_END: game_request_quit(); break;
     default: break;
     }
@@ -515,6 +530,10 @@ int game_main(int argc, char **argv)
         else if(!strcmp(arg,"--time")) { if(unsigned_arg(argv[++i],&epoch)) { usage(); return 1; } have_epoch=1; }
         else if(!strcmp(arg,"--seed")) { if(unsigned_arg(argv[++i],&seed)) { usage(); return 1; } have_seed=1; }
         else if(!strcmp(arg,"--max-frames")) { capped=1; if(unsigned_arg(argv[++i],&max_frames)) { usage(); return 1; } }
+        else if(!strcmp(arg,"--dump-shots")) {
+            if(i+1>=argc || !*argv[i+1]) { usage(); return 1; }
+            g_dump_shot_dir=argv[++i];
+        }
         else if(!strcmp(arg,"--shot-every")) {
             if(i+2>=argc || unsigned_arg(argv[++i],&shot_every) || !shot_every) { usage(); return 1; }
             shot_dir=argv[++i]; if(!*shot_dir) { usage(); return 1; }
@@ -549,6 +568,8 @@ int game_main(int argc, char **argv)
     if(!pixels) { result=1; goto cleanup; }
     if(shot_dir && plat_mkdir(shot_dir)) { fputs("Cannot create screenshot directory\n",stderr); result=1; goto cleanup; }
     fb_init(&fb,pixels,PLAT_SCREEN_W,PLAT_SCREEN_H);
+    g_dump_shot_fb=&fb;
+    if(g_dump_shot_dir && plat_mkdir(g_dump_shot_dir)) { fputs("Cannot create the dump-shot directory\n",stderr); result=1; goto cleanup; }
     clock_reset();
     if(have_epoch) clock_set_time_base(epoch);
     /* The seed step is a BOOT STEP now, at CRT index 41, because the 1408 EncInt
