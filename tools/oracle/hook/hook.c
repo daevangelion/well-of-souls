@@ -150,6 +150,7 @@ static volatile LONG g_rand_calls;
 static volatile LONG g_srand_calls;
 static void tr(const char *fmt, ...);
 static volatile LONG g_rand_trace;
+static int g_rand_deep;
 /* One handle, opened once.  Two reasons, both learned the hard way: an fopen per
  * call costs more than the call, and a RELATIVE name lands wherever the CWD
  * happens to be -- the game does SetCurrentDirectory(install root) in
@@ -353,14 +354,28 @@ static int __cdecl hook_rand(void)
          * unseen caller gives both, once per site, which is the whole boot-rand table. */
         unsigned *sp;
         void *ra = __builtin_return_address(0);
-        char chain[80];
+        char chain[160];
         int i, got = 0, cn = 0;
+        /* WOS_RANDTRACE_DEEP: every code address on the stack (12, no first-seen filter),
+         * for telling apart the paths into a routine that is reached more than one way. */
+        int deep = g_rand_deep, lim = deep ? 12 : 4, scan = deep ? 400 : 64;
         __asm__ __volatile__("movl %%esp, %0" : "=r"(sp));
         chain[0] = 0;
-        for (i = 0; i < 64 && got < 4; i++) {
+        if (deep) {
+            /* The EBP chain, not a stack scan: the caller's frame (saved by this detour's
+             * own prologue) and up, so a routine like RandomGrowl names its real caller. */
+            void **fp = (void **)__builtin_frame_address(0);
+            for (i = 0; i < lim && fp && !IsBadReadPtr(fp, 8); i++) {
+                fp = (void **)fp[0];
+                if (!fp || IsBadReadPtr(fp, 8)) break;
+                cn += snprintf(chain + cn, sizeof chain - cn, " %08X", (unsigned)(uintptr_t)fp[1]);
+            }
+            scan = 0;
+        }
+        for (i = 0; i < scan && got < lim; i++) {
             unsigned v = sp[i];
             if (v >= 0x00401000u && v < 0x00500000u && v != (unsigned)(uintptr_t)ra &&
-                !site_seen(v)) {
+                (deep || !site_seen(v))) {
                 site_seen(v);
                 cn += snprintf(chain + cn, sizeof chain - cn, " %08X", v);
                 if (++got == 8) break;
@@ -3297,6 +3312,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r)
          * at script_init misses every one of them.  Tracing costs an fopen per
          * call, so it stays off unless the variable is set. */
         g_rand_trace = GetEnvironmentVariableA("WOS_RANDTRACE", g_scratch, sizeof g_scratch) != 0;
+        g_rand_deep = GetEnvironmentVariableA("WOS_RANDTRACE_DEEP", g_scratch, sizeof g_scratch) != 0;
         if (g_rand_trace) trace_open();
         if (GetEnvironmentVariableA("WOS_ENC_TRACE", g_scratch, sizeof g_scratch)) {
             g_enc_trace = 1;              /* install_enc_trace also sets it; the write here

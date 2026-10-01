@@ -15,6 +15,7 @@
 #include "game.h"
 #include "hero.h"
 #include "battle.h"
+#include "scenecache.h"
 #include "panels.h"
 #include "items.h"
 #include "minigame.h"
@@ -777,12 +778,20 @@ static int asset_path(char *path,size_t cap,const char *folder,const char *name,
     if(f) { fclose(f);return 1; }
     return 0;
 }
+/* An embedded scene runs inside another screen's pane (see scene_embed_start). */
+static int embedded, embedded_starting;
 static void background(const char *name)
 {
     char path[640];
     if(!*name) return;
     image_free(&vm.background);
-    if(asset_path(path,sizeof path,"scenes",name,".jpg")) image_load(&vm.background,path);
+    if(asset_path(path,sizeof path,"scenes",name,".jpg")) {
+        image_load(&vm.background,path);
+        /* StateBackgroundLoad from the Well view (0x41ED11): the scene pane's client,
+         * 361x280, on a cold temp\sceneCache entry (scenecache.h). In-game scene
+         * backdrops (0x41EF95) use another size and are not modelled yet. */
+        if(embedded_starting) scene_cache_load(361,280,path);
+    }
 }
 static void sound(const char *name)
 {
@@ -800,6 +809,8 @@ static void theme(int id)
 }
 static void finish(void)
 {
+    /* The Well's scene 0 simply stops when its script ends; it does not leave the Well. */
+    if(embedded) { vm.state=ST_ENDED; return; }
     hero_save(&g_hero);
     html_close();
     if(vm.number==0) game_go_well(); else game_return_to_map();
@@ -1507,6 +1518,39 @@ static void scene_render(Framebuffer *fb)
     if(missions_panel_active()) missions_panel_render(fb);
     if(panel_active()) panel_render(fb);
 }
+/* The embedded scene drawn into `pane` (the original's scene view, 1,2 - 362,282). Actor
+ * positions are the same 0..25600 scene units as the full-screen view, scaled to the pane;
+ * the bubble sits over its speaker (FUN_0049331E). */
+void scene_embed_render(Framebuffer *fb,Rect pane)
+{
+    int i;
+    Rect old=fb->clip;
+    if(!embedded) return;
+    fb_clip_intersect(fb,pane);
+    fb_fill(fb,pane,0x151d28);
+    scaled(fb,&vm.background,(Rect){0,0,vm.background.w,vm.background.h},pane,-1);
+    for(i=0;i<ACTORS;i++) if(vm.actors[i].used) {
+        Actor *a=&vm.actors[i];
+        draw_actor(fb,&a->sheet,a->pose[a->frame],
+            pane.x+(int)((int64_t)a->x*pane.w/25600),pane.y+(int)((int64_t)a->y*pane.h/25600));
+    }
+    if(vm.dialog[0]) {
+        char buf[DIALOG];
+        size_t len=strlen(vm.dialog),shown=vm.reveal<0?0:(size_t)vm.reveal;
+        int bx=pane.x+8,by=pane.y+8;
+        if(vm.bubble_owner>=0&&vm.bubble_owner<ACTORS&&vm.actors[vm.bubble_owner].used) {
+            bx=pane.x+(int)((int64_t)vm.actors[vm.bubble_owner].x*pane.w/25600)-60;
+            if(bx<pane.x+2) bx=pane.x+2;
+            if(bx>pane.x+pane.w-202) bx=pane.x+pane.w-202;
+        }
+        if(shown>len) shown=len;
+        memcpy(buf,vm.dialog,shown); buf[shown]=0;
+        fb_fill(fb,(Rect){bx,by,200,64},0xffffff); fb_rect(fb,(Rect){bx,by,200,64},0x000000);
+        font_draw(fb,bx+6,by+4,vm.speaker,0x000000);
+        font_wrap(fb,(Rect){bx+6,by+16,188,46},buf,0x000000);
+    }
+    fb->clip=old;
+}
 static void scene_leave(void)
 {
     int i;
@@ -1745,12 +1789,45 @@ void scene_boot_register(void)
 }
 
 /* --- entry ---------------------------------------------------------------- */
+/* An embedded scene runs inside another screen's pane without owning the screen: the Well
+ * (front state 5) is scene 0 in the scene pane, beside the Pick-a-Soul pane, exactly as
+ * SceneRunByNumber runs it in the original. */
+static void scene_start(int scene_no,const Link *link,int embed);
 void game_enter_scene(int scene_no,const Link *link)
+{
+    scene_start(scene_no,link,0);
+}
+void scene_embed_start(int scene_no)
+{
+    scene_start(scene_no,NULL,1);
+}
+int scene_embed_active(void) { return embedded; }
+void scene_embed_stop(void)
+{
+    if(!embedded) return;
+    embedded=0;
+    image_free(&vm.background);sheet_free(&vm.hero);
+    { int i; for(i=0;i<ACTORS;i++) sheet_free(&vm.actors[i].sheet); }
+    vm.state=ST_ENDED;
+}
+static void scene_update(const Input *in);
+/* One world step of the embedded scene: the interpreter and the actors, no input (the pane
+ * has no buttons; the Pick-a-Soul pane owns the clicks). */
+void scene_embed_tick(void)
+{
+    Input none;
+    if(!embedded) return;
+    memset(&none,0,sizeof none);
+    scene_update(&none);
+}
+static void scene_start(int scene_no,const Link *link,int embed)
 {
     Link saved;
     memset(&saved,0,sizeof saved);
     if(link) saved=*link;
-    screen_set(NULL);
+    if(!embed) screen_set(NULL);
+    else scene_embed_stop();
+    embedded_starting=embed;
     /* FUN_0047A2A7 keeps the per-hero scene slots and only re-seeds the program counter, so
      * the cookie registry, the call stack and the timers survive a scene change. Only the
      * presentation state is rebuilt. */
@@ -1769,6 +1846,7 @@ void game_enter_scene(int scene_no,const Link *link)
     /* The original broadcasts FUN_004306F6(0x41, <event>, <slot>, <code>, ...) from the
      * fight; battle.c calls back so the VM can re-enter @eventActorClick/Attack/Spell<n>. */
     battle_set_scene_event(scene_event);
+    battle_scene_begin();                 /* FUN_0048E19A: the scene block's one rand */
     vm.number=scene_no; vm.link=saved; vm.state=ST_RUN;
     vm.outcome=BATTLE_NONE;
     vm.host.used=1; vm.host.x=vm.host.tx=20*256; vm.host.y=vm.host.ty=87*256;
@@ -1795,6 +1873,9 @@ void game_enter_scene(int scene_no,const Link *link)
     vm.pc=g_world.scenes[scene_no].first_line+1;
     vm.end=g_world.scenes[scene_no].end_line;
     if(g_hero.valid) sheet_load_skin(&vm.hero,g_hero.skin);
-    screen_set(&scene_screen);
-    wos_log_event("scene_enter","scene=%d",scene_no);
+    /* SceneRunByNumber: after EnterScene and the backdrop, the local hero's combatant. */
+    battle_scene_hero();
+    embedded=embed; embedded_starting=0;
+    if(!embed) screen_set(&scene_screen);
+    wos_log_event("scene_enter","scene=%d embedded=%d",scene_no,embed);
 }

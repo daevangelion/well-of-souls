@@ -29,6 +29,8 @@
 #include "editors.h"
 #include "sched.h"
 #include "scenecache.h"
+#include "scene.h"
+#include "battle.h"
 #include "options.h"
 #include "../game_main.h"
 #include "../engine/screen.h"
@@ -133,8 +135,12 @@ static void spot_advance(void)
         s->cur_fs = lerp(s->fs0, s->fs1, s->t_start, s->t_len, tick);
         if ((uint32_t)s->t_len < (uint32_t)tick-(uint32_t)s->t_start) {
             s->state = (s->flags & 4) ? 3 : 2;
-            /* FUN_004054E8's flag-8 branch: a one-shot sound, then the bit clears. */
-            s->flags &= ~8;
+            /* HotspotAnimTick's arrival sound: the BYTE at +9 bit 3, i.e. flag 0x800, plays
+             * PlaySoundId(rand()%7 + 5) once and clears the bit (oracle draws at 0x405582). */
+            if (s->flags & 0x800) {
+                env_sound_play(crt_rand() % 7 + 5, 1);
+                s->flags &= ~0x800;
+            }
         }
     }
 }
@@ -536,7 +542,6 @@ static void well_background(void)
     snprintf(rel,sizeof(rel),"scenes/%.220s%s",scene,strchr(scene,'.')?"":".jpg");
     world_path(path,sizeof(path),rel);
     if(load_background(path,364,416)) { world_data_path(path,sizeof(path),rel); load_background(path,364,416); }
-    scene_cache_load(361,280,path);   /* the scene pane's client, 361x280: 361_..._scenes_temple.jpg */
 }
 static void pick_a_soul(void)
 {
@@ -545,6 +550,10 @@ static void pick_a_soul(void)
     soul_count=hero_list_saves(souls,MAX_CHOICES);
     selected_soul=soul_count?0:-1;
     if(g_hero.valid) for(i=0;i<soul_count;++i) if(!text_casecmp(souls[i],g_hero.name)) selected_soul=i;
+    /* The Well is scene 0, run by SceneRunByNumber in the scene pane: the scene block's
+     * rand, the backdrop (with its cold-cache stall), the hero's combatant, then the script
+     * (the Blind Sage, theme 1, the weather). */
+    scene_embed_start(0);
     well_background();
     for(i=0;i<5;++i) {
         snprintf(rel,sizeof(rel),"art/button%s.bmp",button_names[i]);
@@ -623,6 +632,7 @@ static void srnet_play(void)
 
 static void front_goto(int next)
 {
+    if (next != FRONT_WELL) scene_embed_stop();   /* leaving the Well ends its scene 0 */
     state = next;
     state_tick = clock_ms();
     message[0]=0;
@@ -689,6 +699,7 @@ static void incarnate(void)
     wos_log_event("hero_ready","name=%s class=%d",g_hero.name,g_hero.klass);
     wos_log_event("incarnate","link=%d map=%d",c->start_location_set?c->start_link:0,
                   c->start_location_set?c->start_map:0);
+    scene_embed_stop();               /* the Well's scene 0 ends with the incarnation */
     game_enter_map(c->start_location_set?c->start_map:0,
                    c->start_location_set?c->start_link:0,
                    c->start_location_set?c->start_drop_in:0);
@@ -1076,7 +1087,12 @@ static void front_update(const Input *in)
         if (hit>=0) {
             int msg=spot_msg(hit);
             switch (msg) {
-            case MSG_PLAY_NOW:   front_goto(FRONT_WHERE); return;
+            case MSG_PLAY_NOW:
+                /* PlayNowHandler (0x41F699) first re-runs HeroSlotAllocate (0x41F6BD): slot 0
+                 * in use with the local serial, and SceneInitTables' one rand (0x48E1CF). */
+                hero_allocate_slot(g_hero.serial);
+                battle_scene_begin();
+                front_goto(FRONT_WHERE); return;
             case MSG_DEPART:     game_request_quit(); return;
             case MSG_HELP:       wos_log_event("front_external_open","target=WELLOFSOULS.HLP");
                                  plat_open_external("WELLOFSOULS.HLP"); return;
@@ -1509,6 +1525,7 @@ static void front_render(Framebuffer *fb)
         font_draw(fb,16,440,"Story Over in a moment",0xffffff);
     } else if (state==FRONT_WELL || state==FRONT_DEATH) {
         if (state==FRONT_WELL) {
+            scene_embed_render(fb,(Rect){1,2,361,280});   /* the scene pane, 1,2 - 362,282 */
             fb_fill(fb,(Rect){364,0,276,416},0x272331);
             for(i=0;i<5;++i) {
                 Rect r=bar_rect(i); int cell=inside(&last_input,r)?3:1;
@@ -1570,6 +1587,8 @@ static void front_render(Framebuffer *fb)
  * state machine's own handler. */
 static void front_screen_update(const Input *in)
 {
+    /* FrontEndTick state 5 runs the scene pane (FUN_00456A30) on its world steps. */
+    if (state == FRONT_WELL && game_world_step()) scene_embed_tick();
     if (ns_step) { ns_update(in); return; }
     if (name_focus) { front_update_newsoul(in); return; }
     front_update(in);
