@@ -9,7 +9,9 @@
 #     story state"). The next FrontEndTick dissolves for 1000 ms (FUN_0042198F, 999 blocks
 #     at the harness's fixed rate) and posts 0x478: state 5, the Well, "Press NEW SOUL button".
 # The world-list part is walk_path.dsc's route.
-end 16500
+# The rng dumps at 15300 and 20000 cover scene 0 in the scene pane: SceneTick, the paint's
+# breathing, idle poses and snow, the ACTOR seals and EnvSoundTick's order.
+end 20500
 at 100 click 320 240
 at 1400 click 393 382
 at 2800 click 150 124
@@ -20,5 +22,7 @@ at 12500 click 211 160
 at 13500 dump front@story
 at 14000 click 320 240
 at 14500 dump front@dissolve
+at 15300 dump rng@well_entry
 at 16000 dump front@well
 at 16000 dump map@well
+at 20000 dump rng@well20
