@@ -1,4 +1,4 @@
-# seed: 1
+# seed: 4
 # requires: hero_ready spell_learn spell_cast music_play
 # requires-match: spell_cast caster=hero
 # requires-match: spell_cast caster=monster
