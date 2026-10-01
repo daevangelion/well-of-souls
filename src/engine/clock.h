@@ -88,6 +88,12 @@ int  clock_dispatch_timers(void);
 int  clock_idle_due(void);
 /* Virtual ms of the next 20 ms idle boundary (last stamp + 20). */
 uint32_t clock_20hz_next(void);
+/* The same boundary WITHOUT catching the stamp up: last stamp + 20, or now when the gate
+ * is already due. This is the oracle pump's t_idle; the stamp only moves when the gate
+ * fires, so `now - last > 19` sees the boundary exactly. */
+uint32_t clock_idle_next(void);
+/* Earliest deadline of a live timer with no message outstanding; UINT32_MAX when none. */
+uint32_t clock_next_timer_deadline(void);
 
 /* A private rate gate: the `if (GetTickCount() - last < N) skip;` idiom the
  * original uses everywhere. Returns 1 exactly once per N ms of virtual time

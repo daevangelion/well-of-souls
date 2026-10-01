@@ -200,6 +200,24 @@ uint32_t clock_20hz_next(void)
     return g.idle_last + 20u;
 }
 
+uint32_t clock_idle_next(void)
+{
+    uint32_t now = clock_ms(), next = g.idle_last + 20u;
+    return (int32_t)(next - now) > 0 ? next : now;
+}
+
+uint32_t clock_next_timer_deadline(void)
+{
+    uint32_t best = UINT32_MAX;
+    int i, found = 0;
+    for (i = 0; i < TIMER_SLOTS; ++i) {
+        if (!g.slot[i].active || g.slot[i].pending) continue;
+        if (!found || (int32_t)(g.slot[i].deadline - best) < 0) best = g.slot[i].deadline;
+        found = 1;
+    }
+    return best;
+}
+
 /* --- private rate gates (the `GetTickCount() - last < N` idiom) --------------- */
 #define GATE_SLOTS 32
 static struct { void *owner; int id; uint32_t interval, last; int used; } g_gate[GATE_SLOTS];

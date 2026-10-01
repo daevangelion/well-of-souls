@@ -296,11 +296,24 @@ static int world_tick_due(void);
 /* FUN_00428C8F: the 100 ms WM_TIMER is what enters the gate, so the handler is where
  * the world's rand and 25 ms step live. It only DECIDES -- the loop performs the step,
  * so update/render/present stay in one place. */
+/* FUN_0040A7C7's 20 ms gate and what it calls first, FUN_0042895C: one discarded rand(),
+ * then the 25 ms world sub-gate. AppRun (0x0040A8D9) enters it on every idle pass while the
+ * game is focused, and FUN_00428C8F enters it from the 100 ms timer; the gate's own stamp
+ * makes both the same 20 ms cadence. Measured on the oracle once its pump stopped
+ * stepping the clock mid-drain: one 0x428996 draw on every 20 ms boundary from t=150. */
+static int idle_loop_live;   /* AppRun's loop is running: from the first frame-timer delivery */
+static void idle_gate(void)
+{
+    if (!clock_idle_due()) return;
+    (void)crt_rand();                       /* FUN_0042895C's discarded draw */
+    (void)world_tick_due();
+}
+
 static void main_frame_timer(void *owner, void *user)
 {
     (void)owner; (void)user;
-    (void)crt_rand();                       /* FUN_0042895C's discarded draw */
-    (void)world_tick_due();
+    idle_loop_live = 1;
+    idle_gate();                            /* FUN_00428C8F -> FUN_0040A7C7 */
 }
 
 static int world_tick_due(void)
@@ -568,20 +581,32 @@ int game_main(int argc, char **argv)
              * iteration's input_begin() would clear the pressed/released edges, and
              * every scripted event would be dropped -- a --script run with no input
              * at all, which is exactly what the diff suite was measuring. */
-            for(;;) {
+            /* ONE op per iteration: the oracle's pump fires one .dsc event per step and
+             * lets the app run (timers, the idle gate) before the next, even at an equal
+             * timestamp (docs/re/oracle.md 3.1). The clock does not move while ops are due. */
+            {
                 const DscriptOp *op = dscript_take(script, clock_ms());
-                if(!op) break;
-                apply_script_op(op,&input);
-                delivered = 1;
+                if(op) { apply_script_op(op,&input); delivered = 1; }
             }
             {
                 uint32_t next = dscript_next_time(script, clock_ms());
                 if(next == UINT32_MAX) break;             /* nothing scheduled remains */
                 if(script->has_end && clock_ms() >= script->end_ms) break;
                 {
-                    uint32_t idle = clock_20hz_next();
-                    uint32_t target = idle < next ? idle : next;
-                    if(target > clock_ms()) clock_advance(target - clock_ms());
+                    /* The oracle pump's step: the earliest of the next op, the next timer
+                     * deadline and (once AppRun's loop runs) the idle boundary. */
+                    uint32_t target = next, t = clock_next_timer_deadline();
+                    if (t != UINT32_MAX && (int32_t)(t - target) < 0) target = t;
+                    if (!frame_timer_armed && (int32_t)(50u - target) < 0) target = 50u; /* the arm point */
+                    if (idle_loop_live) {
+                        t = clock_idle_next();
+                        if ((int32_t)(t - target) < 0) target = t;
+                    }
+                    /* After a step, start over: an op due at the new time goes before a
+                     * timer or the idle gate due at the same millisecond (input wins ties).
+                     * Never step in an iteration that delivered an op: the update below must
+                     * see its input edges first, and the next iteration steps instead. */
+                    if(!delivered && target > clock_ms()) { clock_advance(target - clock_ms()); continue; }
                 }
             }
         } else if(replay) {
@@ -610,6 +635,7 @@ int game_main(int argc, char **argv)
                             main_frame_timer, NULL);
             frame_timer_armed = 1;
         }
+        if (idle_loop_live) idle_gate();     /* AppRun's idle path -> FUN_0040A7C7 */
         dialog_retry_pending();
         if (capped && frame >= max_frames) { result = 3; break; }
         if (script && !delivered) {

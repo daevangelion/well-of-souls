@@ -1897,8 +1897,15 @@ static int pump_step_inner(void)
     gate = *(volatile DWORD *)(g_base + (VA_GATE_STAMP - IMAGE_BASE));
     if (gate > now) gate = now;                  /* stale, uninitialised, or moved */
     t_idle = gate + GATE_PERIOD;
-    if (t_idle <= now) t_idle = now + IDLE_QUANTUM;   /* must be strictly forward,
-                                                           or the clock livelocks */
+    if (t_idle <= now) {
+        /* The 20 Hz work is DUE at now. Give the app one pass at this clock value so its
+         * idle path (AppRun 0x40A8D9 -> FUN_0040A7C7) runs on the boundary, as it does on
+         * Windows where draining a timer's messages takes no time. Only one: if the gate
+         * did not stamp (a modal loop, a closed gate), move on so the clock cannot livelock. */
+        static uint32_t held_at = 0xFFFFFFFFu;
+        if (held_at != now) { held_at = now; t_idle = now; }
+        else t_idle = now + IDLE_QUANTUM;
+    }
 
     for (idx = 0; idx < g_nev; idx++) if (!g_ev[idx].done) break;
     t_in = (idx < g_nev) ? g_ev[idx].t : 0xFFFFFFFFu;
@@ -2090,7 +2097,13 @@ static BOOL WINAPI hook_PeekMessageA(LPMSG m, HWND h, UINT a, UINT b, UINT rm)
     BOOL r;
     if (InterlockedIncrement(&g_peeks) < 8)
         tr("hook_PeekMessageA: call %ld rm=%08X", (long)g_peeks, rm);
-    pump_step();
+    /* Step only when the caller's queue is empty. AppRun's message loop peeks after every
+     * message it dispatches; stepping there advanced the clock past 20 ms boundaries while
+     * the app was still draining a timer handler's paints, so its idle path never saw them. */
+    {
+        MSG probe;
+        if (!real_PeekMessageA(&probe, h, a, b, PM_NOREMOVE)) pump_step();
+    }
     r = real_PeekMessageA(m, h, a, b, rm);
     if (r && m->message == WM_TIMER) timer_taken(m->hwnd, m->wParam);
     if (!r) InterlockedIncrement(&g_idle_pass);
