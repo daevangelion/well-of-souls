@@ -32,6 +32,7 @@
 #include "scene.h"
 #include "battle.h"
 #include "options.h"
+#include "chat.h"
 #include "../game_main.h"
 #include "../engine/screen.h"
 #include "../engine/clock.h"
@@ -628,6 +629,8 @@ static void srnet_play(void)
     /* DrawScanningText (0x41D374), behind 0x46F's return: .data 0x4E202C. */
     spot_add(0,0x280,3000,"..Scanning................",0x00ffff,500,1062,875,500,62,875,0,0);
     wos_log_event("srnet_dialog","ctrl=1 scanning=1");
+    /* 0x42AF0D, the end of the play handler 0x42AA10: ChatSystemLine of .data 0x4E8070. */
+    chat_echo("","Welcome to the Well of Souls!  For the latest information about the game, type /news or /forums.");
 }
 
 static void front_goto(int next)
@@ -1491,6 +1494,32 @@ static void draw_list_row(Framebuffer *fb,Rect r,int row,const char *label,int s
     fb_clip_intersect(fb,line); font_draw(fb,line.x+4,line.y+5,label,selected?0xffdf80:0xffffff); fb->clip=old;
 }
 
+/* The chat pane under the Well's scene pane (the original's splitter pane, 0,284 - 362,416):
+ * the channel tab bar, the log filling top-down and scrolling once full, then the input box
+ * (positions from the oracle's screenshot). */
+static void well_chat_render(Framebuffer *fb)
+{
+    const Rect pane={1,284,361,132}, text={3,315,357,75};
+    Rect old=fb->clip;
+    int i,first,used=0,y;
+    fb_fill(fb,pane,0x000000);
+    fb_fill(fb,(Rect){pane.x,295,pane.w,18},0xc0c0c0);
+    font_draw(fb,150,300,"Solo Channel",0x000000);
+    fb_fill(fb,(Rect){pane.x,392,pane.w,20},0x404040);
+    /* Keep the newest lines that fit; font_wrap with an empty clip only measures. */
+    for(first=chat_log_count();first>0;--first) {
+        int h;
+        fb->clip=(Rect){0,0,0,0};
+        h=font_wrap(fb,(Rect){text.x,0,text.w,1000},chat_log_line(first-1),0);
+        fb->clip=old;
+        if(used+h>text.h) break;
+        used+=h;
+    }
+    fb_clip_intersect(fb,text);
+    for(i=first,y=text.y;i<chat_log_count();++i)
+        y+=font_wrap(fb,(Rect){text.x,y,text.w,text.y+text.h-y},chat_log_line(i),0xffffff);
+    fb->clip=old;
+}
 static void front_render(Framebuffer *fb)
 {
     int i,first; char label[128];
@@ -1526,6 +1555,7 @@ static void front_render(Framebuffer *fb)
     } else if (state==FRONT_WELL || state==FRONT_DEATH) {
         if (state==FRONT_WELL) {
             scene_embed_render(fb,(Rect){1,2,361,280});   /* the scene pane, 1,2 - 362,282 */
+            well_chat_render(fb);
             fb_fill(fb,(Rect){364,0,276,416},0x272331);
             for(i=0;i<5;++i) {
                 Rect r=bar_rect(i); int cell=inside(&last_input,r)?3:1;

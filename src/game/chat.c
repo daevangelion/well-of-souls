@@ -106,11 +106,9 @@ static int took(const char *name, const char *arg, const char *state)
     return 1;
 }
 
-void chat_say(const char *text)
+static void log_append(const char *text)
 {
-    int slot;
-    if (!text || !*text) return;
-    slot = (log_first + log_count) % CHAT_LOG_LINES;
+    int slot = (log_first + log_count) % CHAT_LOG_LINES;
     if (log_count == CHAT_LOG_LINES) {
         memmove(log_lines[0], log_lines[1], (CHAT_LOG_LINES - 1) * CHAT_LINE_MAX);
         slot = CHAT_LOG_LINES - 1;
@@ -118,7 +116,25 @@ void chat_say(const char *text)
         ++log_count;
     }
     snprintf(log_lines[slot], CHAT_LINE_MAX, "%s", text);
+}
+
+void chat_say(const char *text)
+{
+    if (!text || !*text) return;
+    log_append(text);
     wos_log_event("chat_say", "text=%s", text);
+}
+
+/* FUN_0049CB86's plain arm: "<name>:" in the name colour, then the text (both through
+ * FUN_0049D3AF). An empty name is ChatSystemLine (0x46CE24): the text alone. */
+void chat_echo(const char *name, const char *text)
+{
+    char line[CHAT_LINE_MAX];
+    if (!text || !*text) return;
+    if (name && *name) snprintf(line, sizeof(line), "%s: %s", name, text);
+    else snprintf(line, sizeof(line), "%s", text);
+    log_append(line);
+    wos_log_event("chat_line", "name=%s text=%s", name ? name : "", text);
 }
 
 int chat_log_count(void) { return log_count; }

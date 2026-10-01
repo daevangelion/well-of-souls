@@ -22,6 +22,7 @@
 #include "html.h"
 #include "missions.h"
 #include "sched.h"
+#include "chat.h"
 #include "../game_main.h"
 #include "../engine/clock.h"
 #include "../engine/screen.h"
@@ -834,8 +835,12 @@ static uint32_t bubble_ms(const char *text)
 static void say(const char *text,int owner)
 {
     expand(text,vm.dialog,sizeof vm.dialog);
+    if(strlen(vm.dialog)>0x103) vm.dialog[0x103]=0;   /* NextArg's cap */
     vm.bubble_owner=owner;
     copy(vm.speaker,sizeof vm.speaker,owner>=0&&owner<ACTORS?vm.actors[owner].name:"");
+    /* WaitBubbleClear then echoes the line to the chat pane (FUN_0049CB86) under the
+     * speaker's name; the host (-1) speaks as slot 0, the hero. */
+    chat_echo(owner==-1?g_hero.name:vm.speaker,vm.dialog);
     vm.reveal=0;
     vm.bubble_start=clock_ms();
     vm.bubble_ms=bubble_ms(vm.dialog);
@@ -846,6 +851,7 @@ static void say(const char *text,int owner)
 static void narration(const char *text)
 {
     expand(text,vm.dialog,sizeof vm.dialog);
+    if(strlen(vm.dialog)>0x103) vm.dialog[0x103]=0;   /* NextArg's cap */
     copy(vm.speaker,sizeof vm.speaker,"");
     vm.bubble_owner=-2;
     vm.reveal=0;
@@ -1092,6 +1098,7 @@ static void step(void)
             p+=2;
             while(*p==' ') p++;
         } else p++;
+        while(*p==' ') p++;          /* NextArg (0x484B3E) skips leading spaces */
         len=strlen(p);
         if(len>=sizeof text) len=sizeof text-1;
         memcpy(text,p,len); text[len]=0;
