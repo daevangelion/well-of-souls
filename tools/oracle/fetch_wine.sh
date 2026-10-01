@@ -68,6 +68,7 @@ CABDIR="$DL/vcrun6/cab"
 if [ -f "$PREFIX/drive_c/windows/syswow64/mfc42.dll" ] && [ -f "$PREFIX/drive_c/windows/system32/mfc42.dll" ]; then
     say "cached mfc42.dll in the prefix"
 else
+    mkdir -p "$DL/vcrun6"
     fetch "$MFC_URL" "$DL/vcrun6/VC6RedistSetup_deu.exe" "$MFC_SHA"
     if [ ! -f "$DL/vcrun6/ex/vcredist.exe" ]; then
         mkdir -p "$DL/vcrun6/ex"
