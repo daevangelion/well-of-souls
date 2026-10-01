@@ -109,8 +109,6 @@ key RETURN
 wait 40
 key RETURN
 wait 40
-key RETURN
-wait 40
 key y
 wait 20
 key RETURN
