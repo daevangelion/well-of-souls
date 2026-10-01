@@ -1582,6 +1582,7 @@ typedef struct { short x,y; unsigned char kind; } WeatherDot;
 static WeatherDot weather_dots[WEATHER_DOTS];
 static int weather_count, weather_colour;
 static uint32_t paint_stamp, tick_stamp;       /* view+0x70, view+0xF8 */
+static uint32_t paint_now;                     /* GetTickCount at the last paint */
 
 static void weather_dot(int x,int y,int kind)
 {
@@ -1675,6 +1676,7 @@ static void scene_paint(void)
 {
     uint32_t now=clock_ms();
     int breathe=0,i;
+    paint_now=now;
     if(now-paint_stamp>100u) { paint_stamp=now; breathe=1; }
     for(i=0;i<ACTORS;i++) if(vm.actors[i].used) {
         if(breathe) actor_breathe(&vm.actors[i]);
@@ -1705,6 +1707,32 @@ static void weather_render(Framebuffer *fb,Rect pane)
         if(d->kind>=6) { fb_fill(fb,(Rect){x+1,y,1,1},c); fb_fill(fb,(Rect){x,y+2,1,1},c); }
     }
 }
+/* FUN_004874A0, the backdrop blit with the scene fx (view+0x68), row by row from the
+ * backdrop into the view: 1 a one-row sine shimmer, 2 the lake reflection below 70 % of the
+ * height. Both read GetTickCount in the paint. fx 3..5 are not ported yet. */
+static void backdrop_fx(Framebuffer *fb,Rect pane)
+{
+    static uint32_t rows[VIEW_H][VIEW_W];
+    const int h=pane.h<VIEW_H?pane.h:VIEW_H,w=pane.w<VIEW_W?pane.w:VIEW_W;
+    const int split=h*70/100;
+    int y,x;
+    if(vm.fx!=1&&vm.fx!=2) return;
+    if(pane.x<0||pane.y<0||pane.x+w>fb->w||pane.y+h>fb->h) return;
+    for(y=0;y<h;y++) memcpy(rows[y],&fb->pixels[(pane.y+y)*fb->w+pane.x],(size_t)w*sizeof(uint32_t));
+    for(y=0;y<h;y++) {
+        int src=y;
+        if(vm.fx==1)
+            src=y+(int)sin((y*6.28/h)*4.0+(double)paint_now*0.001);
+        else if(y>=split) {
+            double a=(double)h*0.07142857142857142;
+            double v=sin((double)paint_now*0.002+((double)(h-y)/((double)y+1.0))*a);
+            src=split*2-y-(int)(v/(h-split)*(y-split)*a);
+        }
+        if(src>=h-1) src=h-1;
+        if(src<1) src=0;
+        for(x=0;x<w;x++) fb->pixels[(pane.y+y)*fb->w+pane.x+x]=rows[src][x];
+    }
+}
 /* The embedded scene drawn into `pane` (the original's scene view, 1,2 - 362,282). Actor
  * positions are the same 0..25600 scene units as the full-screen view, scaled to the pane;
  * the bubble sits over its speaker (FUN_0049331E). */
@@ -1716,6 +1744,7 @@ void scene_embed_render(Framebuffer *fb,Rect pane)
     fb_clip_intersect(fb,pane);
     fb_fill(fb,pane,0x151d28);
     scaled(fb,&vm.background,(Rect){0,0,vm.background.w,vm.background.h},pane,-1);
+    backdrop_fx(fb,pane);
     for(i=0;i<ACTORS;i++) if(vm.actors[i].used) {
         Actor *a=&vm.actors[i];
         draw_actor(fb,&a->sheet,a->pose[a->frame],

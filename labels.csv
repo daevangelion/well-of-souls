@@ -3053,7 +3053,7 @@ addr,name,comment
 00486A60,FUN_00486a60,"souls.exe function, 699 bytes"
 00486D20,BlitSprite,Software sprite blitter with colour key (bottom-left pixel) and effect modes
 00487350,FUN_00487350,"souls.exe function, 324 bytes"
-004874A0,FUN_004874a0,"souls.exe function, 1553 bytes"
+004874A0,SceneBackdropFx,"Backdrop blit into the view with the scene fx: 0 plain, 1 sine shimmer, 2 lake reflection below param% of the height, 3..5 scanlines/jitter/quake"
 00487AD0,StretchBlit,Stretch-blits a picture into a destination rect
 00487D76,FUN_00487d76,"souls.exe function, 8 bytes"
 00487D80,FUN_00487d80,"souls.exe function, 396 bytes"
