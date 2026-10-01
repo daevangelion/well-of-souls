@@ -21,6 +21,7 @@
 #include "chat.h"
 #include "hero.h"
 #include "panels.h"
+#include "sched.h"
 #include "../engine/clock.h"
 #include "../engine/dump.h"
 #include "../engine/font.h"
@@ -682,6 +683,7 @@ void game_enter_map(int map_id, int link, int drop_in)
     screen_set(&map_screen);
     wos_log_event("map_enter", "map=%d x=%d y=%d", map_id, hero_x_units(&g_hero), hero_y_units(&g_hero));
     map_music_start();
+    env_theme(map.def->theme);    /* MapLoader 0x41E57B: the map's arg5 sound theme */
     if (drop_in && link >= 0 && link < OBL_RECORDS && map.links[link].used)
         activate_link(link);
 }
@@ -693,6 +695,7 @@ void game_return_to_map(void)
     screen_set(&map_screen);
     wos_log_event("map_enter", "map=%d x=%d y=%d", map.id, hero_x_units(&g_hero), hero_y_units(&g_hero));
     map_music_start();
+    env_theme(map.def->theme);    /* the script's return to the map, 0x47DAD9 */
 }
 
 /* FUN_00461138 (0x461138): viewW = (clientW + 3) / 4 map units, origin = hero - viewW/2. */

@@ -343,7 +343,9 @@ static int __cdecl hook_rand(void)
                 if (++got == 8) break;
             }
         }
-        trace_line("%d %08X%s", (int)g_rand_calls, (unsigned)(uintptr_t)ra, chain);
+        /* The virtual ms goes LAST so readers keyed on "<index> <site>" still parse. */
+        trace_line("%d %08X%s t=%u", (int)g_rand_calls, (unsigned)(uintptr_t)ra, chain,
+                   (unsigned)vnow());
     }
     return (int)((g_holdrand >> 16) & 0x7FFFu);
 }
@@ -2754,7 +2756,7 @@ static void start_watchdog(void)
  * run does 500k relay-worthy calls in the first two seconds) and must be asked
  * for by name:
  *
- *   core  (default) pump, timer, key, tick, wall, clock, rng, help, modal
+ *   core  (default) pump, timer, key, tick, wall, clock, rng, help, modal, focus
  *   probe           one-shot dump of the live options table (the "values=" line)
  *   trace           every failing _access/fopen/CreateFileA, with its path
  *   watch           log every modal dialog, with its resource id, caption and
@@ -2775,12 +2777,30 @@ static int in_list(char *list, const char *name)
 }
 static int grp(const char *name)
 {
-    char core[] = "pump,timer,key,tick,wall,clock,rng,help,modal,watch";
+    char core[] = "pump,timer,key,tick,wall,clock,rng,help,modal,watch,focus";
     char buf[256];
     DWORD n = GetEnvironmentVariableA("WOS_DETOURS", buf, sizeof buf);
     if (!n) return in_list(core, name);
     if (!buf[0]) return 0;
     return in_list(buf, name) || in_list(buf, "all");
+}
+
+/* GetForegroundWindow: report the game's main frame. The Run loop (0x0040A8D9) spins its
+ * idle path, and with it FUN_0040A7C7's 20 ms gate, only while the foreground window's
+ * top-level parent is the main frame (*0x004E4844); otherwise it blocks in GetMessage
+ * and only the 100 ms WM_TIMER (FUN_00428C8F) enters the gate. Under Xvfb with no window
+ * manager the foreground window drifts with whatever the title's timers show, so the idle
+ * cadence depended on the Wine build. A player has the game focused, and so does the
+ * oracle. m_hWnd is at +0x20 (SetTimer(*(this+0x20), ...) throughout); else fall through. */
+static HWND (WINAPI *real_GetForegroundWindow)(void);
+static HWND WINAPI hook_GetForegroundWindow(void)
+{
+    static int logged;
+    uintptr_t frame = *(uintptr_t *)(g_base + (0x004E4844u - IMAGE_BASE));
+    HWND w = frame ? *(HWND *)(frame + 0x20) : NULL;
+    if (!w || !IsWindow(w)) w = real_GetForegroundWindow();
+    if (!logged && frame) { logged = 1; tr("focus: main frame %p hwnd %p", (void *)frame, (void *)w); }
+    return w;
 }
 
 static BOOL (WINAPI *real_SetCursorPos)(int, int);
@@ -3040,6 +3060,13 @@ static void install_detours(void)
     if (grp("timer")) {
     DETOUR("user32.dll", "SetTimer",         hook_SetTimer);
         DETOUR("user32.dll", "KillTimer",        hook_KillTimer);
+    }
+
+    if (grp("focus")) {
+        real_GetForegroundWindow = (HWND (WINAPI *)(void))(void *)GetProcAddress(
+            GetModuleHandleA("user32.dll"), "GetForegroundWindow");
+        if (real_GetForegroundWindow)
+            DETOUR("user32.dll", "GetForegroundWindow", hook_GetForegroundWindow);
     }
 
     if (grp("key")) {

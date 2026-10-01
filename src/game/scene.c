@@ -20,6 +20,7 @@
 #include "minigame.h"
 #include "html.h"
 #include "missions.h"
+#include "sched.h"
 #include "../game_main.h"
 #include "../engine/clock.h"
 #include "../engine/screen.h"
@@ -141,9 +142,6 @@ static struct {
     char title[128];
     uint32_t flags;                        /* DAT_004FB030 */
     int weather, fx, color_table;          /* scene+0x3E064 / +0x3E060 / +0x3E06C */
-    int theme_id, theme_period, theme_left;
-    void *theme;
-    size_t theme_size;
     int last_give, last_attack, last_spell; /* DAT_00502B00 / +0x02B08 / +0x02B04 */
     /* Anti-tamper / PK state the original keeps in the hero record at +0x296 (the M<n>
      * cheat bitmask), +0x1A6 (the PK flag) and +0x28B (PK kills). FrontHero does not expose
@@ -793,48 +791,12 @@ static void sound(const char *name)
     bytes=text_read_file(path,&len);
     if(bytes) { plat_sound_play(bytes,len);free(bytes); }
 }
-static unsigned le32(const unsigned char *p)
-{
-    return (unsigned)p[0]|((unsigned)p[1]<<8)|((unsigned)p[2]<<16)|((unsigned)p[3]<<24);
-}
-/* THEME (opcode 0). -1 stops, 0 uses the nearest link's theme; the WAV loops until
- * a different theme or theme -1. */
+/* THEME (opcode 0): `atoi(arg)`, and 0 means the nearest link's theme (link +0x6C) when
+ * there is one (0x47D6BF). Everything else, including -1, goes to FUN_00456D2F. */
 static void theme(int id)
 {
-    int i,inside=0,n;
-    char (*t)[256]=vlabel_toks;
-    char path[640];
-    free(vm.theme);vm.theme=NULL;vm.theme_size=0;vm.theme_period=0;vm.theme_left=0;
-    if(id<0) return;
-    if(!id) id=vm.link.theme;
-    vm.theme_id=id;
-    for(i=0;i<g_world.line_count;i++) {
-        n=world_tokenize(g_world.lines[i],t,ARGS);
-        if(n<=0) continue;
-        if(eq(t[0],"+THEMES")) { inside=1;continue; }
-        if(eq(t[0],"-THEMES")) break;
-        if(inside && n>=3 && number(t[0])==id) {
-            const char *ext=strrchr(t[2],'.');
-            if(ext&&(eq(ext,".mid")||eq(ext,".midi"))) { game_music(t[2]);return; }
-            if(asset_path(path,sizeof path,"sfx",t[2],".wav")) {
-                size_t off=12,data=0;unsigned rate=0;
-                vm.theme=text_read_file(path,&vm.theme_size);
-                if(!vm.theme) return;
-                while(off+8<=vm.theme_size) {
-                    const unsigned char *p=(const unsigned char *)vm.theme+off;
-                    unsigned len=le32(p+4);
-                    if(len>vm.theme_size-off-8) break;
-                    if(!memcmp(p,"fmt ",4)&&len>=16) rate=le32(p+16);
-                    if(!memcmp(p,"data",4)) data=len;
-                    off+=8+(size_t)len+(len&1u);
-                }
-                if(rate && data && data<=INT_MAX/1000) vm.theme_period=(int)(data*1000/rate);
-                vm.theme_left=vm.theme_period;
-                plat_sound_play(vm.theme,vm.theme_size);
-            }
-            return;
-        }
-    }
+    if(!id && vm.link.used) id=vm.link.theme;
+    env_theme(id);
 }
 static void finish(void)
 {
@@ -1374,10 +1336,6 @@ static void scene_update(const Input *in)
     if(missions_panel_active()) { missions_panel_update(in); return; }
     if(panel_active()) { panel_update(in); return; }
     actors_update(now);
-    if(vm.theme_period>0 && now-(uint32_t)vm.theme_left>= (uint32_t)vm.theme_period) {
-        vm.theme_left=(int)now;
-        plat_sound_play(vm.theme,vm.theme_size);
-    }
     /* The button bar (FUN_00478673 registers up to ten slots; slot 6 is GAME/MISSIONS). */
     if(hit(in,button_rect(0))) { panel_open(PANEL_STATS); return; }
     if(hit(in,button_rect(6))) {
@@ -1558,7 +1516,6 @@ static void scene_leave(void)
     html_close();
     image_free(&vm.background);sheet_free(&vm.hero);
     for(i=0;i<ACTORS;i++) sheet_free(&vm.actors[i].sheet);
-    free(vm.theme);vm.theme=NULL;vm.theme_size=0;
 }
 static const Screen scene_screen={"scene",NULL,scene_update,scene_render,scene_leave};
 

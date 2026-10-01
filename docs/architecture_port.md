@@ -54,6 +54,7 @@ See docs/re/timing.md and docs/re/rng_calls.md.
 | spell casting, monster AI (FUN_004809a3, FUN_00490645), weapon spell binding | battle.c |
 | detour pathfinder FUN_00461b11/FUN_00461b93/FUN_00461dcc | mapview.c |
 | music.ini playlists, fight/victory music | world.c world_music, audio.c game_music |
+| environmental sound themes SetSceneTheme FUN_00456d2f, tick FUN_00456aa1, +THEMES parser FUN_0048282e, sound ids FUN_00429a31/FUN_00429bcc | sched.c env_theme/env_tick/env_world_loaded, platform keyed voices |
 | map hero blit FUN_00416426 (sub-cell InflateRect -1) | world.c sheet_draw_map_dir |
 
 ## Deliberate deviations
@@ -74,6 +75,11 @@ placement prompts, the TIMER clock, WEATHER/FX/PARTY) was replaced by the origin
 | A missing music file (Evergreen `lost.mid`, named in music.ini but never shipped) logs `music_error` | the retail data is incomplete |
 | The Terms of Service acceptance (FUN_00402A73) is remembered by a size+hash of tos.rtf in `<save>/legal.ini` [LEGAL] TOS_DATE, where the original stores a ctime() string parsed out of the RTF (FUN_0044BA39) in WIN.INI | the re-prompt rule (ask again when the document changes) and the accept/decline outcomes are the original's; the stored key differs |
 | SRNet's modal "Where would you like to play today? (tm)" (raised by 0x46F, handler 0x42AA10) is an in-framebuffer panel at the oracle's measured control rects. Its Bio button (control 1042) opens the BIO editor, and its rect is port placement. Solo Game (1005), then Play Game (1), then the stepper, then state 3; Cancel (2) returns to the main menu. The scripted `dialog 1005=click` form is accepted | SRNet.dll is not ported; its dialog proc is outside Souls.exe |
+
+| Environmental sounds play at one volume. FUN_0046890D sets a per-call volume from the table at 0x684FF0 (the theme passes level 1); the platform mixer has no per-voice volume | presentation only; ids, timing and rand() order are exact |
+| A +THEMES one-shot with `0=sound` divides by zero in the original's FUN_00456B87 (`rand() % (period*2)`), which crashes. The port takes the same rand() and uses a 0 s delay. The parser also stops at 20 one-shots per theme, where the original writes on into the next theme's record | a crash and a buffer overrun are not behaviour to keep |
+| Toggling enableSFX/enableEnvironmentalSounds/enableSoundCard at run time does not re-apply the current theme (FUN_00437164/FUN_00437461 do) | the port's options screen does not change these mid-game |
+| The oracle hook reports the main frame as the foreground window (`focus` detour group) | AppRun 0x40A8D9 spins its idle path only while focused; under Xvfb the foreground drifted with the Wine build. A player has the game focused |
 
 ### Known open parity items (not deviations; unfinished)
 - Front-end state 2 → world list is implemented from the oracle's measurement (docs/re/oracle.md §7.1; REVERSE.md "front state 2"). The solo stepper FUN_00438E8E is modelled as 30 polls over 30×73 ms, which fits the measured window from 6140 to 8340 ms. It is not derived from FUN_00438E8E's own exit condition. Only tests/diff/walk_path.dsc carries the SRNet pair. The other ten differential scripts stop at state 2 in the original: they also need the world-row click, (211,160) for "Evergreen" in the original, and the Pick-a-Soul steps (CListCtrl ids 0x531/0x464), none of which is measured yet.

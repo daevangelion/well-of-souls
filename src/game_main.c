@@ -620,6 +620,7 @@ int game_main(int argc, char **argv)
             world_tick_pending = 0;
         }
         scene_tick_if_any();
+        env_tick();                 /* FUN_00456AA1, on both arms of the world step FUN_0041BDB4 */
         screen=screen_current(); if(screen && screen->update) screen->update(&input);
         fb_reset_clip(&fb); fb_clear(&fb,0);
         screen=screen_current(); if(screen && screen->render) screen->render(&fb);

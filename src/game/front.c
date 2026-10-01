@@ -27,6 +27,7 @@
 #include "hero.h"
 #include "front.h"
 #include "editors.h"
+#include "sched.h"
 #include "../game_main.h"
 #include "../engine/screen.h"
 #include "../engine/clock.h"
@@ -543,6 +544,7 @@ int front_enter_title(void)
     state=FRONT_TITLE; message[0]=0; pending_death=0; place_prompt=0;
     stepper_active=0; srnet_channel_open=0; srnet_open=0; srnet_solo=0;
     spot_free_all(); art_title();
+    env_theme(2);                 /* FUN_0041B891 case 0: FUN_00456EB6, theme 2 (0x41B9F7) */
     state_tick=clock_ms();
     screen_set(&front_screen);
     wos_log_event("front_state","state=%d",state);
@@ -559,7 +561,7 @@ static void front_goto(int next)
     message[0]=0;
     spot_free_all();
     switch(next) {
-    case FRONT_TITLE:  art_title(); break;
+    case FRONT_TITLE:  art_title(); env_theme(2); break;   /* FUN_00456EB6 */
     case FRONT_MENU:   art_menu(); game_music("MainMenu.wav");
                        wos_log_event("boot_menu","");
                        if (tos_gate()==2) tos_open=1;    /* FUN_00402A73's modal */
@@ -1023,6 +1025,7 @@ static void front_update(const Input *in)
             if(world_load(game_data_path(),chosen))
                 snprintf(message,sizeof(message),"Could not load that world.");
             else {
+                env_world_loaded();     /* SoundThemesParser, part of the quest table load */
                 memset(&g_hero,0,sizeof(g_hero));
                 wos_log_event("world_chosen","name=%s",chosen);
                 front_goto(FRONT_WELL);
@@ -1045,6 +1048,7 @@ static void front_update(const Input *in)
                 if(world_load(game_data_path(),chosen))
                     snprintf(message,sizeof(message),"Could not load that world.");
                 else {
+                    env_world_loaded();     /* SoundThemesParser, part of the quest table load */
                     memset(&g_hero,0,sizeof(g_hero));
                     wos_log_event("world_chosen","name=%s",chosen);
                     front_goto(FRONT_WELL);

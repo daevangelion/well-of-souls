@@ -234,12 +234,12 @@ static void test_clock(void)
     clock_kill_timer((void *)0x1, 2);
     assert(clock_dispatch_timers() == 0);
 
-    /* time() tracks the virtual clock and the epoch base. */
+    /* A pinned time() runs from the epoch on the virtual clock, as the oracle hook's does. */
     clock_reset();
     clock_set_time_base(1234567890);
     assert(clock_time_s() == 1234567890);
-    clock_advance(2500);        /* the virtual clock must NOT drag time() with it */
-    assert(clock_time_s() == 1234567890);
+    clock_advance(2500);        /* whole virtual seconds carry into time() */
+    assert(clock_time_s() == 1234567892);
     assert(clock_ms() == 2500);
     clock_set_now(1);           /* never rewinds */
     assert(clock_ms() == 2500);
