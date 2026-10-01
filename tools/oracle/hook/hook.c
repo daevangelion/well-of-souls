@@ -1350,9 +1350,13 @@ static void dump_bmp(const char *label)
     int y;
     ensure_main();
     if (!g_main) return;
-    /* Xvfb has no window manager, so nothing forces a repaint: ask for one.
-     * RDW_UPDATENOW sends WM_PAINT synchronously; no message loop is re-entered. */
-    RedrawWindow(g_main, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    /* NO forced repaint by default. A paint is game state, not a neutral read: the scene
+     * view's paint runs the weather (FUN_004960BB), which respawns particles with rand(),
+     * so RedrawWindow here moved the original's rand stream at every dump (an extra
+     * ScenePaint at each dump time in the Well). The capture is what the screen already
+     * shows; WOS_DUMP_REPAINT=1 restores the old forced repaint for screenshot-only runs. */
+    if (GetEnvironmentVariableA("WOS_DUMP_REPAINT", NULL, 0))
+        RedrawWindow(g_main, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     dc = GetDC(g_main);
     mem = CreateCompatibleDC(dc);
     bmp = CreateCompatibleBitmap(dc, bw, bh);
@@ -1899,6 +1903,21 @@ hero_done: ;
     fprintf(f, "oracle.seq=%d\n", g_dump_seq++);
     fprintf(f, "oracle.gate_stamp=%lu\n",
             (unsigned long)*(volatile DWORD *)(b + (VA_GATE_STAMP - IMAGE_BASE)));
+    {   /* the scene view (DAT_005006BC) and its work DIB at +0x12C (ScenePaint's ebx):
+         * the snow (FUN_004960BB) projects onto that bitmap's width and height */
+        unsigned char *view = *(unsigned char **)(b + (0x005006BCu - IMAGE_BASE));
+        fprintf(f, "oracle.scene_view=%p\n", (void *)view);
+        if (view && !IsBadReadPtr(view + 0x12C, 12)) {
+            BITMAPINFOHEADER *h = *(BITMAPINFOHEADER **)(view + 0x130);
+            if (h && !IsBadReadPtr(h, sizeof *h))
+                fprintf(f, "oracle.scene_dib=%ld,%ld\n", (long)h->biWidth, (long)h->biHeight);
+        }
+        {
+            int *pt = (int *)(b + (0x00D21730u - IMAGE_BASE));
+            if (!IsBadReadPtr(pt, 28))
+                fprintf(f, "oracle.snow0=%d,%d,%d,%d,%d,%d,%d\n", pt[0], pt[1], pt[2], pt[3], pt[4], pt[5], pt[6]);
+        }
+    }
     fprintf(f, "oracle.world_stamp=%lu\n",       /* NetGraphTick's 25 ms world-step stamp */
             (unsigned long)*(volatile DWORD *)(b + (0x004E48CCu - IMAGE_BASE)));
     fprintf(f, "oracle.steps=%ld\n", (long)g_steps);
@@ -3100,6 +3119,9 @@ static void install_front_trace(void)
         { 0x0041D3CCu, "worldlist_rows",   7 },  /* push ebp / mov eax,[esp+0Ch] / mov ebp,esp */
         { 0x0041D717u, "worldlist_init",   6 },  /* push ebp / mov eax,11C0h */
         { 0x00438E8Eu, "solo_stepper",     6 },  /* push ebp / mov eax,1FBCh */
+        { 0x004960BBu, "scene_weather",    6 },  /* push ebp / mov ebp,esp / sub esp,2Ch */
+        { 0x00456A30u, "scene_tick",       6 },  /* push esi / mov esi,ecx / push [ecx+64h] */
+        { 0x00447D29u, "scene_fx_tick",    6 },  /* push ebp / mov ebp,esp / sub esp,0Ch */
         /* 0x0042AA10 is deliberately NOT traced here.  Its first ten bytes are
          * `mov eax,1F50h / call chkstk`, and `call rel32` is POSITION DEPENDENT: the
          * trampoline replays those bytes at a VirtualAlloc address, so the copy's
