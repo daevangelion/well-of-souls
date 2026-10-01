@@ -131,7 +131,6 @@ key RIGHT
 key RIGHT
 key RIGHT
 wait 3
-shot /tmp/rr/helm.bmp
 key b
 expect shop_buy 120
 key ESCAPE
